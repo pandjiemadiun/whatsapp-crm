@@ -1,0 +1,158 @@
+import dotenv from 'dotenv';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import express from 'express';
+import cors from 'cors';
+import { prisma } from './infrastructure/prisma.js';
+
+// Global BigInt serialization (Prisma returns BigInt for numeric fields)
+(BigInt.prototype as any).toJSON = function () {
+  return Number(this);
+};
+import messagesRouter from './routes/messages.js';
+import faqRouter from './routes/faq.js';
+import knowledgeRouter from './routes/knowledge.js';
+import webhooksRouter from './routes/webhooks.js';
+import authRouter from './routes/auth.js';
+import metricsRouter from './routes/metrics.js';
+import whatsappRouter from './routes/whatsapp.js';
+import conversationsRouter from './routes/conversations.js';
+import ordersRouter from './routes/orders.js';
+import settingsRouter from './routes/settings.js';
+import profileRouter from './routes/profile.js';
+import adminAuthRoutes from './routes/admin/auth.js';
+import adminStoresRoutes from './routes/admin/stores.js';
+import adminConfigRoutes from './routes/admin/config.js';
+import adminAuditRoutes from './routes/admin/audit-logs.js';
+import adminBackupRoutes from './routes/admin/backups.js';
+import { adminAuthMiddleware } from './middleware/adminAuth.js';
+import { initializeDefaultConfigs } from './bootstrap/initializeConfig.js';
+import { maintenanceModeMiddleware } from './middleware/maintenanceMode.js';
+import healthRouter from './routes/health.js';
+import { startHealthCheckInterval } from './business/health.service.js';
+import { scheduleBackups } from './bootstrap/scheduleBackups.js';
+import { requestIdMiddleware } from './middleware/requestId.js';
+import { errorHandler } from './middleware/errorHandler.js';
+import logger from './utils/logger.js';
+
+// Menyesuaikan __dirname untuk TypeScript ESM
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Arahkan ke .env di root project (naik 3 level dari dist/ ke root, atau 2 level dari src/)
+dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+// Middleware JSON & CORS
+app.use(express.json());
+app.use(cors({
+  origin: ['http://localhost:5173', 'http://localhost:4173'],
+  credentials: true,
+}));
+
+// Request correlation ID (must be after CORS, before everything else)
+app.use(requestIdMiddleware);
+
+// Maintenance mode check (skip health check and root)
+app.use(maintenanceModeMiddleware);
+
+// Health check routes (mounted BEFORE other routes, AFTER CORS)
+app.use(healthRouter);
+
+// Mount Routes
+app.use('/api/messages', messagesRouter);
+app.use('/api/faq', faqRouter);
+app.use('/api/knowledge', knowledgeRouter);
+app.use('/api/webhooks', webhooksRouter);
+app.use('/api/auth', authRouter);
+app.use('/api/dashboard', metricsRouter);
+app.use('/api/whatsapp', whatsappRouter);
+app.use('/api/conversations', conversationsRouter);
+app.use('/api/orders', ordersRouter);
+app.use('/api/settings', settingsRouter);
+app.use('/api/profile', profileRouter);
+app.use('/api/admin/auth', adminAuthRoutes);
+app.use('/api/admin/stores', adminAuthMiddleware, adminStoresRoutes);
+app.use('/api/admin/config', adminAuthMiddleware, adminConfigRoutes);
+app.use('/api/admin/audit-logs', adminAuthMiddleware, adminAuditRoutes);
+app.use('/api/admin/backups', adminAuthMiddleware, adminBackupRoutes);
+
+// Health Check Endpoint — under /api so dashboard's axios baseURL works
+app.get('/api/health', async (req, res) => {
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    res.json({ 
+      status: 'ok', 
+      database: 'connected',
+      timestamp: new Date()
+    });
+  } catch (error) {
+    res.status(503).json({ 
+      status: 'error', 
+      database: 'disconnected',
+      error: (error as Error).message
+    });
+  }
+});
+
+// Root Endpoint
+app.get('/', (req, res) => {
+  res.json({ message: 'PROJECT GARUDA v1.0' });
+});
+
+// 404 handler — must be after all routes
+app.use((_req, res) => {
+  res.status(404).json({ error: 'Route not found', code: 'ERR_NOT_FOUND', requestId: (_req as any).requestId || 'unknown', timestamp: new Date().toISOString() });
+});
+
+// Global error handler (must be last middleware)
+app.use(errorHandler);
+
+app.listen(PORT, async () => {
+  logger.info(`🚀 GARUDA API running on port ${PORT}`);
+
+  // Initialize default system configs (idempotent)
+  try {
+    await initializeDefaultConfigs();
+    logger.info('Default system configs initialized');
+  } catch (err) {
+    logger.warn('Config initialization skipped', { error: (err as Error).message });
+  }
+
+  // Start background health check (every 30 seconds)
+  startHealthCheckInterval();
+
+  // Start backup scheduler (daily 2AM, weekly Sun 3AM)
+  scheduleBackups();
+
+  // Seed default store on first startup
+  try {
+    await prisma.store.upsert({
+      where: { id: 'store-1' },
+      update: {},
+      create: {
+        id: 'store-1',
+        name: 'Toko Uji Coba',
+        phoneNumber: '+6281234567890',
+      },
+    });
+    // Also attempt to seed from env DEFAULT_STORE_ID if set
+    const envStoreId = process.env.DEFAULT_STORE_ID;
+    if (envStoreId && envStoreId !== 'store-1') {
+      await prisma.store.upsert({
+        where: { id: envStoreId },
+        update: {},
+        create: {
+          id: envStoreId,
+          name: process.env.DEFAULT_STORE_NAME || 'Default Store',
+          phoneNumber: process.env.DEFAULT_STORE_PHONE || '+6280000000000',
+        },
+      });
+    }
+    logger.info('Default store seeded');
+  } catch (err) {
+    logger.warn('Store seeding skipped', { error: (err as Error).message });
+  }
+});

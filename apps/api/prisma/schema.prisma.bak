@@ -1,0 +1,185 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Store
+model Store {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name      String
+  phone     String   @unique
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  conversations Conversation[]
+  faqs          FAQ[]
+  knowledge     Knowledge[]
+
+  @@map("Store")
+}
+
+// Conversation Session
+model Conversation {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId        String   //@db.Varchar(255)
+  storeId       String   @db.Uuid
+  status        String   @default("active")
+  topic         String?
+  lastActivityAt DateTime @default(now())
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  messages ConversationHistory[]
+  context  ConversationContext?
+  store    Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, storeId, status])
+  @@index([storeId])
+  @@index([lastActivityAt])
+  @@map("Conversation")
+}
+
+// Message History
+model ConversationHistory {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  conversationId  String   @db.Uuid
+  role            String   // "user" | "assistant"
+  content         String   @db.Text
+  source          String?  // "faq" | "knowledge" | "ai" | "human" | "order"
+  tokens          Int      @default(0)
+  cost            Float    @default(0)
+  metadata        Json?
+  createdAt       DateTime @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId])
+  @@index([source])
+  @@index([createdAt])
+  @@map("ConversationHistory")
+}
+
+// Context Window Tracking
+model ConversationContext {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  conversationId  String   @db.Uuid @unique
+  tokenCount      Int      @default(0)
+  contextWindow   Int      @default(8000) // Posisi token saat ini
+  messageCount    Int      @default(0)
+  lastTokenCheck  DateTime @default(now())
+  reliability     Float    @default(1.0) // 1.0 = perfect, 0.0 = unreliable
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId])
+  @@map("ConversationContext")
+}
+
+// FAQ
+model FAQ {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  storeId   String   @db.Uuid
+  question  String
+  answer    String   @db.Text
+  active    Boolean  @default(true)
+  hitCount  Int      @default(0) // Tracking usage
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([storeId])
+  @@index([active])
+  @@map("FAQ")
+}
+
+// Knowledge Base
+model Knowledge {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  storeId   String   @db.Uuid
+  title     String
+  content   String   @db.Text
+  category  String?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([storeId])
+  @@index([category])
+  @@map("Knowledge")
+}
+
+// Order
+model Order {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  storeId       String   @db.Uuid
+  conversationId String  @db.Uuid
+  items         Json     // [{product, qty, price}]
+  totalPrice    Float
+  status        String   @default("pending") // "pending" | "confirmed" | "rejected"
+  extractedAt   DateTime @default(now())
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([storeId])
+  @@index([conversationId])
+  @@index([status])
+  @@map("Order")
+}
+
+model Knowledge {
+  id        String   @id @default(cuid())
+  storeId   String
+  title     String
+  question  String   @db.Text
+  answer    String   @db.Text
+  content   String   @db.Text
+  category  String?
+  keywords  String?  @db.Text
+  priority  Int      @default(0)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([storeId])
+  @@index([active])
+}
+
+model Conversation {
+  id          String   @id @default(cuid())
+  storeId     String
+  customerId  String
+  totalCost   Float    @default(0)
+  status      String   @default("active")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  messages ConversationMessage[]
+
+  @@index([storeId])
+  @@index([customerId])
+}
+
+model ConversationMessage {
+  id             String   @id @default(cuid())
+  conversationId String
+  role           String
+  content        String   @db.Text
+  confidence     Float?
+  category       String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId])
+}

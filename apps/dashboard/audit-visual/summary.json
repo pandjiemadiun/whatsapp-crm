@@ -1,0 +1,93 @@
+{
+  "totalRouteViewports": 44,
+  "totalFindings": 12,
+  "red": 6,
+  "yellow": 6,
+  "green": 0,
+  "findings": [
+    {
+      "route": "/dashboard/conversations",
+      "viewport": "375px",
+      "issue": "Horizontal overflow: BUTTON.flex-1 whitespace-nowrap py-2 px-3 rounded-md text-sm transi",
+      "severity": "red",
+      "location": "elements extending beyond viewport"
+    },
+    {
+      "route": "/dashboard/conversations",
+      "viewport": "375px",
+      "issue": "Truncated buttons: Button \"Selesai (0)\" overflows (92px)",
+      "severity": "yellow",
+      "location": "buttons overflowing viewport"
+    },
+    {
+      "route": "/dashboard/orders",
+      "viewport": "375px",
+      "issue": "Horizontal overflow: BUTTON.flex-1 whitespace-nowrap py-2 px-3 rounded-md text-sm transi, BUTTON.flex-1 whitespace-nowrap py-2 px-3 rounded-md text-sm transi",
+      "severity": "red",
+      "location": "elements extending beyond viewport"
+    },
+    {
+      "route": "/dashboard/orders",
+      "viewport": "375px",
+      "issue": "Truncated buttons: Button \"Batal (0)\" overflows (54px); Button \"Semua (0)\" overflows (151px)",
+      "severity": "yellow",
+      "location": "buttons overflowing viewport"
+    },
+    {
+      "route": "/dashboard/profile",
+      "viewport": "375px",
+      "issue": "Horizontal overflow: BUTTON.flex items-center gap-1.5 px-4 py-2 text-xs font-medium whit",
+      "severity": "red",
+      "location": "elements extending beyond viewport"
+    },
+    {
+      "route": "/dashboard/profile",
+      "viewport": "375px",
+      "issue": "Truncated buttons: Button \"Keamanan\" overflows (81px)",
+      "severity": "yellow",
+      "location": "buttons overflowing viewport"
+    },
+    {
+      "route": "/admin/stores",
+      "viewport": "375px",
+      "issue": "Horizontal overflow: TABLE.w-full text-sm, THEAD., TR.border-b border-dline, TH.text-right px-4 py-3 text-xs font-medium text-slate-400, TBODY.divide-y divide-dline, TR.hover:bg-dline/10 transition cursor-pointer, TD.px-4 py-3 text-right, BUTTON.text-cyan hover:text-cyan/80 text-xs font-mono disabled:opac, TR.hover:bg-dline/10 transition cursor-pointer, TD.px-4 py-3 text-right",
+      "severity": "red",
+      "location": "elements extending beyond viewport"
+    },
+    {
+      "route": "/admin/stores",
+      "viewport": "375px",
+      "issue": "Truncated buttons: Button \"Detail\" overflows (34px); Button \"Detail\" overflows (34px); Button \"Detail\" overflows (34px); Button \"Detail\" overflows (34px); Button \"Detail\" overflows (34px); Button \"Detail\" overflows (34px); Button \"Detail\" overflows (34px); Button \"Detail\" overflows (34px); Button \"Detail\" overflows (34px); Button \"Detail\" overflows (34px); Button \"Detail\" overflows (34px); Button \"Detail\" overflows (34px)",
+      "severity": "yellow",
+      "location": "buttons overflowing viewport"
+    },
+    {
+      "route": "/admin/analytics",
+      "viewport": "375px",
+      "issue": "Horizontal overflow: DIV.flex items-center gap-3, BUTTON.p-2 text-slate-400 hover:text-surface hover:bg-dline/20 roun, svg., path., path., path.",
+      "severity": "red",
+      "location": "elements extending beyond viewport"
+    },
+    {
+      "route": "/admin/analytics",
+      "viewport": "375px",
+      "issue": "Truncated buttons: Button \"...\" overflows (15px)",
+      "severity": "yellow",
+      "location": "buttons overflowing viewport"
+    },
+    {
+      "route": "/admin/backups",
+      "viewport": "375px",
+      "issue": "Horizontal overflow: TABLE.w-full text-sm, THEAD., TR.border-b border-dline, TH.text-right px-4 py-3 text-xs font-medium text-slate-400, TBODY.divide-y divide-dline, TR.hover:bg-dline/10, TD.px-4 py-3 text-right, DIV.flex items-center justify-end gap-1, BUTTON.p-1.5 text-slate-400 hover:text-cyan hover:bg-cyan/10 rounde, svg.",
+      "severity": "red",
+      "location": "elements extending beyond viewport"
+    },
+    {
+      "route": "/admin/backups",
+      "viewport": "375px",
+      "issue": "Truncated buttons: Button \"...\" overflows (39px); Button \"...\" overflows (71px); Button \"...\" overflows (103px); Button \"...\" overflows (39px); Button \"...\" overflows (71px); Button \"...\" overflows (103px); Button \"...\" overflows (39px); Button \"...\" overflows (71px); Button \"...\" overflows (103px); Button \"...\" overflows (39px); Button \"...\" overflows (71px); Button \"...\" overflows (103px); Button \"...\" overflows (39px); Button \"...\" overflows (71px); Button \"...\" overflows (103px); Button \"...\" overflows (39px); Button \"...\" overflows (71px); Button \"...\" overflows (103px)",
+      "severity": "yellow",
+      "location": "buttons overflowing viewport"
+    }
+  ]
+}

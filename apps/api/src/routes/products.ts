@@ -1,0 +1,126 @@
+import { Router, Request, Response } from 'express';
+import { productService } from '../business/product.service.js';
+import { prisma } from '../infrastructure/prisma.js';
+import { adapters } from '../adapters/container.js';
+import { validateRequest, getValidated } from '../middleware/validate-request.js';
+import {
+  listProductsQuerySchema,
+  searchProductsQuerySchema,
+  ListProductsQueryInput,
+  SearchProductsQueryInput,
+} from '../schemas/index.js';
+import { ApiError } from '../errors/ApiError.js';
+import { ErrorCodes } from '../constants/errorCodes.js';
+
+const router = Router();
+
+/**
+ * GET /api/stores/:storeId/products
+ * List produk per toko (publik), dengan pagination + sort.
+ */
+router.get(
+  '/stores/:storeId/products',
+  validateRequest(listProductsQuerySchema, 'query'),
+  async (req: Request, res: Response) => {
+    try {
+      const { storeId } = req.params;
+      const query = getValidated<ListProductsQueryInput>(req);
+
+      const store = await prisma.store.findFirst({ where: { id: storeId, deletedAt: null } });
+      if (!store) {
+        return res.status(404).json({ error: 'Store not found' });
+      }
+
+      const { products, total } = await productService.getProductsByStore(storeId, {
+        limit: query.limit,
+        offset: query.offset,
+        sortBy: query.sortBy,
+        order: query.order,
+      });
+
+      const hasMore = query.offset + products.length < total;
+
+      adapters.logger.info('Products listed', { storeId, count: products.length });
+      res.json({
+        success: true,
+        data: {
+          products,
+          pagination: {
+            limit: query.limit,
+            offset: query.offset,
+            total,
+            hasMore,
+          },
+        },
+      });
+    } catch (error: any) {
+      if (error instanceof ApiError && error.code === ErrorCodes.ERR_NOT_FOUND) {
+        return res.status(404).json({ error: error.message });
+      }
+      adapters.logger.error('Failed to list products', error as Error);
+      res.status(500).json({ error: error?.message || 'Failed to list products' });
+    }
+  }
+);
+
+/**
+ * GET /api/stores/:storeId/products/search
+ * Cari produk by nama/deskripsi/sku (case-insensitive).
+ */
+router.get(
+  '/stores/:storeId/products/search',
+  validateRequest(searchProductsQuerySchema, 'query'),
+  async (req: Request, res: Response) => {
+    try {
+      const { storeId } = req.params;
+      const query = getValidated<SearchProductsQueryInput>(req);
+
+      const store = await prisma.store.findFirst({ where: { id: storeId, deletedAt: null } });
+      if (!store) {
+        return res.status(404).json({ error: 'Store not found' });
+      }
+
+      const results = await productService.searchProducts(storeId, query.q);
+      const offset = query.offset;
+      const paginated = results.slice(offset, offset + query.limit);
+
+      adapters.logger.info('Products searched', { storeId, q: query.q, count: paginated.length });
+      res.json({
+        success: true,
+        data: {
+          query: query.q,
+          results: paginated,
+          pagination: {
+            total: results.length,
+            returned: paginated.length,
+            offset,
+            limit: query.limit,
+          },
+        },
+      });
+    } catch (error: any) {
+      adapters.logger.error('Failed to search products', error as Error);
+      res.status(500).json({ error: error?.message || 'Failed to search products' });
+    }
+  }
+);
+
+/**
+ * GET /api/products/:productId
+ * Detail produk tunggal (termasuk kategori).
+ */
+router.get('/products/:productId', async (req: Request, res: Response) => {
+  try {
+    const product = await productService.getProductById(req.params.productId);
+    adapters.logger.info('Product detail fetched', { productId: req.params.productId });
+    res.json({ success: true, data: product });
+  } catch (error: any) {
+    if (error instanceof ApiError && error.code === ErrorCodes.ERR_NOT_FOUND) {
+      return res.status(404).json({ error: error.message });
+    }
+    adapters.logger.error('Failed to fetch product detail', error as Error);
+    res.status(500).json({ error: error?.message || 'Failed to fetch product detail' });
+  }
+});
+
+export default router;

@@ -1,0 +1,1 @@
+{"version":3,"file":"DatabaseError.d.ts","sourceRoot":"","sources":["../../src/errors/DatabaseError.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,QAAQ,EAAE,MAAM,eAAe,CAAC;AAGzC,qBAAa,aAAc,SAAQ,QAAQ;gBAC7B,OAAO,EAAE,MAAM,EAAE,OAAO,CAAC,EAAE,MAAM,CAAC,MAAM,EAAE,OAAO,CAAC;CAI/D"}
