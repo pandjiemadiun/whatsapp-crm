@@ -1,0 +1,17 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "oxc", "unicorn"],
+  "ignorePatterns": ["dist/**", "node_modules/**", "logs/**", "coverage/**", "prisma/migrations/**"],
+  "rules": {
+    "typescript/no-unused-vars": "warn",
+    "no-unused-vars": "off"
+  },
+  "overrides": [
+    {
+      "files": ["src/tests/**"],
+      "rules": {
+        "typescript/no-explicit-any": "off"
+      }
+    }
+  ]
+}

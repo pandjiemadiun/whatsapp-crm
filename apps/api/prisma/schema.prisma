@@ -1,0 +1,445 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Store {
+  id                    String   @id @default(uuid())
+  name                  String
+  phoneNumber           String?
+  profilePhotoUrl       String?
+  description           String?
+  businessCategory      String?
+  address                String?
+  email                 String?  @unique
+  timezone              String   @default("Asia/Jakarta")
+  operatingHours        Json?
+  responseTemplate      String?
+  whatsappPhoneId       String?
+  fonnteToken           String?
+  fonnteNumber          String?
+  acceptsTransfer       Boolean  @default(false)
+  acceptsQris           Boolean  @default(false)
+  acceptsCod            Boolean  @default(false)
+  qrisImageUrl          String?
+  shippingMode          String   @default("pickup")  // "pickup" | "flat"
+  shippingFlatInCity    Float?
+  shippingFlatOutCity   Float?
+  webhookSecret         String?  @unique
+  config                Json?
+  isActive              Boolean  @default(true)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  deletedAt             DateTime?
+
+  conversations         Conversation[]
+  faqs                  FAQ[]
+  knowledge             Knowledge[]
+  orders                Order[]
+  settings              StoreSetting[]
+  productCategories     ProductCategory[]
+  products              Product[]
+magicPasteRuns        MagicPasteRun[]
+  bankAccounts          BankAccount[]
+  sops                  Sop[]
+  customers             Customer[]
+
+  @@map("stores")
+}
+
+model BankAccount {
+  id            String    @id @default(uuid())
+  storeId       String
+  bankName      String
+  accountNumber String
+  accountName   String
+  isActive      Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  deletedAt     DateTime?
+
+  store         Store     @relation(fields: [storeId], references: [id])
+
+  @@index([storeId])
+  @@map("bank_accounts")
+}
+
+model Sop {
+  id        String   @id @default(uuid())
+  storeId   String
+  category  String   // fixed values: 'order' | 'komplain' | 'retur' | 'garansi' | 'stok_habis'
+  content   String   // free text, owner writes their own procedure
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  store     Store    @relation(fields: [storeId], references: [id])
+
+  @@unique([storeId, category])
+  @@index([storeId])
+  @@map("sops")
+}
+
+model StoreSetting {
+  id                    String   @id @default(uuid())
+  storeId               String
+  key                   String
+  value                 String
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  store                 Store    @relation(fields: [storeId], references: [id])
+  @@unique([storeId, key])
+  @@map("store_settings")
+}
+
+model FAQ {
+  id                    String   @id @default(uuid())
+  storeId               String
+  question              String
+  answer                String
+  keywords              String[]
+  category              String?
+  priority              Int      @default(1)
+  embedding             String?
+  matchCount            Int      @default(0)
+  isActive              Boolean  @default(true)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  deletedAt             DateTime?
+
+  store                 Store    @relation(fields: [storeId], references: [id])
+  @@index([storeId])
+  @@map("faqs")
+}
+
+model Knowledge {
+  id                    String   @id @default(uuid())
+  storeId               String
+  title                 String
+  content               String
+  category              String?
+  tags                  String[]
+  source                String?
+  embedding             String?
+  relevanceScore        Float    @default(0)
+  isActive              Boolean  @default(true)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  deletedAt             DateTime?
+
+  store                 Store    @relation(fields: [storeId], references: [id])
+  @@index([storeId])
+  @@map("knowledge_base")
+}
+
+model Conversation {
+  id                    String   @id @default(uuid())
+  storeId               String
+  customerId            String
+  customerName          String?
+  customerPhone         String
+  status                String   @default("open")
+  channel               String   @default("whatsapp")
+  lastMessageAt         DateTime?
+  aiResponseCount       Int      @default(0)
+  faqResponseCount      Int      @default(0)
+  humanTakeoverAt       DateTime?
+  humanAgentId          String?
+  resolvedAt            DateTime?
+  notes                 String?
+  metadata              Json?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  deletedAt             DateTime?
+
+  store                 Store    @relation(fields: [storeId], references: [id])
+  history               ConversationHistory[]
+  context               ConversationContext?
+  orders                Order[]
+
+  @@index([storeId])
+  @@index([customerId])
+  @@index([status])
+  @@map("conversations")
+}
+
+model ConversationHistory {
+  id                    String   @id @default(uuid())
+  conversationId        String
+  role                  String
+  content               String
+  messageType           String?
+  source                String?
+  aiModel               String?
+  costUSD               Float    @default(0)
+  responseTime          Int?
+  metadata              Json?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  conversation          Conversation @relation(fields: [conversationId], references: [id])
+  @@index([conversationId])
+  @@index([role])
+  @@index([createdAt])
+  @@index([createdAt, source])
+  @@map("conversation_history")
+}
+
+model ConversationContext {
+  id                    String   @id @default(uuid())
+  conversationId        String   @unique
+  lastMessages          Json
+  extractedEntities     Json?
+  userIntent            String?
+  sessionKey            String   @unique
+  sessionExpireAt       DateTime
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  conversation          Conversation @relation(fields: [conversationId], references: [id])
+  @@map("conversation_context")
+}
+
+model Order {
+  id                    String   @id @default(uuid())
+  storeId               String
+  conversationId        String
+  customerId            String
+  items                 Json
+  totalPrice            Float?
+  currency              String   @default("IDR")
+  orderStatus           String   @default("pending") // draft | waiting_address | waiting_payment | paid | packing | shipped | pending | cancelled | completed | refunded
+  shippingAddress       String?
+  notes                 String?
+  extractedAt           DateTime @default(now())
+  confirmedAt           DateTime?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  deletedAt             DateTime?
+
+  store                 Store    @relation(fields: [storeId], references: [id])
+  conversation          Conversation @relation(fields: [conversationId], references: [id])
+  orderItems            OrderItem[]
+
+  @@index([storeId])
+  @@index([conversationId])
+  @@index([customerId])
+  @@index([createdAt])
+  @@index([orderStatus, createdAt])
+  @@map("orders")
+}
+
+model OrderItem {
+  id                    String   @id @default(uuid())
+  orderId               String
+  productId             String?
+  productName           String   // snapshot nama produk saat order dibuat
+  quantity              Int      @default(1)
+  unitPrice             Float
+  subtotal              Float
+  customizations        Json?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  order                 Order    @relation(fields: [orderId], references: [id])
+  product               Product? @relation(fields: [productId], references: [id])
+
+  @@index([orderId])
+  @@index([productId])
+  @@map("order_items")
+}
+
+model ProductCategory {
+  id                    String   @id @default(uuid())
+  storeId               String
+  name                  String
+  description           String?
+  icon                  String?
+  displayOrder          Int      @default(0)
+  isActive              Boolean  @default(true)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  deletedAt             DateTime?
+
+  store                 Store    @relation(fields: [storeId], references: [id])
+  products              Product[]
+
+  @@index([storeId])
+  @@map("product_categories")
+}
+
+model Product {
+  id                    String   @id @default(uuid())
+  storeId               String
+  categoryId            String?
+  name                  String
+  description           String?
+  price                 Float
+  currency              String   @default("IDR")
+  sku                   String?
+  stock                 Int?
+  images                Json?
+  primaryImageUrl       String?
+  isActive              Boolean  @default(true)
+  source                String   @default("api") // 'api' | 'magic_paste' | 'import'
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  deletedAt             DateTime?
+
+  store                 Store    @relation(fields: [storeId], references: [id])
+  category              ProductCategory? @relation(fields: [categoryId], references: [id])
+  orderItems            OrderItem[]
+
+  @@unique([storeId, sku])
+  @@index([storeId])
+  @@index([categoryId])
+  @@map("products")
+}
+
+// Riwayat eksekusi Magic Paste — dasar analytics confidence (Phase 1.9.6).
+// Dicatat setiap kali extraction dijalankan (preview & create, sukses & gagal).
+model MagicPasteRun {
+  id                  String   @id @default(uuid())
+  storeId             String
+  productId           String?
+  textLength          Int      @default(0)
+  confidence          Float    @default(0)
+  status              String   @default("success") // 'success' | 'failed' | 'preview'
+  warnings            Json?
+  extractedEntities   Json?
+  source              String   @default("store") // 'store' | 'admin'
+  errorMessage        String?
+  createdAt           DateTime @default(now())
+
+  store               Store    @relation(fields: [storeId], references: [id])
+
+  @@index([storeId, createdAt])
+  @@index([confidence])
+  @@map("magic_paste_runs")
+}
+
+model AuditLog {
+  id                    String   @id @default(uuid())
+  storeId               String
+  action                String
+  entity                String
+  entityId              String
+  userId                String?
+  changes               Json?
+  ipAddress             String?
+  createdAt             DateTime @default(now())
+
+  @@index([storeId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+model Analytics {
+  id                    String   @id @default(uuid())
+  storeId               String
+  date                  DateTime
+  totalMessages         Int      @default(0)
+  faqMatches            Int      @default(0)
+  aiResponses           Int      @default(0)
+  humanTakeovers        Int      @default(0)
+  ordersCreated         Int      @default(0)
+  costUSD               Float    @default(0)
+  avgResponseTime       Float    @default(0)
+  createdAt             DateTime @default(now())
+
+  @@unique([storeId, date])
+  @@index([storeId])
+  @@map("analytics")
+}
+
+model AdminUser {
+  id            String        @id @default(uuid())
+  email         String        @unique
+  passwordHash  String
+  role          String        @default("support_admin")
+  isActive      Boolean       @default(true)
+  lastLoginAt   DateTime?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  deletedAt     DateTime?
+
+  tokens        AdminAuthToken[]
+
+  @@index([email])
+  @@index([createdAt])
+  @@map("admin_users")
+}
+
+model AdminAuthToken {
+  id            String        @id @default(uuid())
+  adminUserId   String
+  token         String        @unique
+  expiresAt     DateTime
+  revokedAt     DateTime?
+  createdAt     DateTime      @default(now())
+
+  adminUser     AdminUser     @relation(fields: [adminUserId], references: [id])
+
+  @@index([adminUserId])
+  @@index([expiresAt])
+  @@map("admin_auth_tokens")
+}
+
+model Customer {
+  id            String   @id @default(uuid())
+  storeId       String
+  phone         String
+  name          String?
+  originCity    String?
+  nameSource    String?  // 'self_stated' | 'pushname'
+  visitCount    Int      @default(0)
+  firstSeenAt   DateTime @default(now())
+  lastSeenAt    DateTime @default(now())
+  notes         String?
+  deletedAt     DateTime?
+
+  store         Store    @relation(fields: [storeId], references: [id])
+
+  @@unique([storeId, phone])
+  @@index([storeId])
+  @@map("customers")
+}
+
+model SystemSetting {
+  id            String    @id @default(uuid())
+  key           String    @unique
+  value         String
+  description   String?
+  category      String    @default("general")
+  isSecret      Boolean   @default(false)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([category])
+  @@map("system_settings")
+}
+
+model BackupManifest {
+  id            String    @id @default(uuid())
+  filename      String    @unique
+  type          String    // "daily" | "weekly" | "manual" | "file"
+  size          BigInt
+  checksum      String
+  algorithm     String    @default("sha256")
+  encrypted     Boolean   @default(true)
+  status        String    @default("completed") // "completed" | "failed" | "verifying"
+  errorMessage  String?
+  verifiedAt    DateTime?
+  restoredAt    DateTime?
+  restoredBy    String?
+  createdAt     DateTime  @default(now())
+  deletedAt     DateTime?
+
+  @@index([createdAt])
+  @@index([type])
+  @@map("backup_manifest")
+}

@@ -1,0 +1,551 @@
+[
+  {
+    "name": "order_change_with_active_order",
+    "description": "Saya ingin ganti pesanan boleh?",
+    "input": "Saya ingin ganti pesanan boleh?",
+    "context": {
+      "activeOrder": {
+        "id": "order-g1",
+        "orderStatus": "pending",
+        "items": [
+          {
+            "product": "Wortel",
+            "quantity": 1,
+            "price": 15000
+          }
+        ]
+      },
+      "cart": []
+    },
+    "expect": {
+      "routeKind": "order_change",
+      "source": "sop",
+      "mustContain": [
+        "dicatat"
+      ],
+      "mustNotContain": [
+        "ongkir"
+      ]
+    }
+  },
+  {
+    "name": "cart_remove_item",
+    "description": "Wortel nya ga jadi, brambang aja",
+    "input": "Wortel nya ga jadi, brambang aja",
+    "context": {
+      "activeOrder": null,
+      "cart": [
+        {
+          "product": "Wortel",
+          "qty": 2,
+          "price": 15000,
+          "unit": "bikul"
+        },
+        {
+          "product": "Brambang",
+          "qty": 1,
+          "price": 20000,
+          "unit": "bikul"
+        }
+      ],
+      "storeId": "store-1"
+    },
+    "expect": {
+      "routeKind": "cart_modify",
+      "source": "product"
+    }
+  },
+  {
+    "name": "total_grand_total",
+    "description": "Totalnya berapa",
+    "input": "Totalnya berapa",
+    "context": {
+      "activeOrder": null,
+      "cart": [
+        {
+          "product": "Wortel",
+          "qty": 2,
+          "price": 15000,
+          "unit": "bikul"
+        },
+        {
+          "product": "Brambang",
+          "qty": 1,
+          "price": 20000,
+          "unit": "bikul"
+        }
+      ],
+      "storeId": "store-f7140b5c",
+      "customerCity": "Jakarta"
+    },
+    "expect": {
+      "routeKind": "total",
+      "source": "total",
+      "mustContain": [
+        "50.000"
+      ]
+    }
+  },
+  {
+    "name": "order_status_already_shipped",
+    "description": "Pesanan saya sudah dikirim?",
+    "input": "Pesanan saya sudah dikirim?",
+    "context": {
+      "activeOrder": {
+        "id": "order-g4",
+        "orderStatus": "shipped",
+        "items": [
+          {
+            "product": "Wortel"
+          }
+        ]
+      },
+      "cart": [],
+      "storeId": "store-1"
+    },
+    "expect": {
+      "routeKind": "order_status",
+      "source": "order_status",
+      "mustNotContain": [
+        "ongkir"
+      ]
+    }
+  },
+  {
+    "name": "payment_qris_no_identity",
+    "description": "Pakai qris",
+    "input": "Pakai qris",
+    "context": {
+      "activeOrder": null,
+      "cart": [
+        {
+          "product": "Wortel",
+          "qty": 1,
+          "price": 15000,
+          "unit": "bikul"
+        }
+      ],
+      "storeId": "store-1"
+    },
+    "expect": {
+      "routeKind": "waterfall",
+      "source": "payment",
+      "mustNotContain": [
+        "siapa nama",
+        "nama Kakak"
+      ]
+    }
+  },
+  {
+    "name": "shipping_cost_inquiry",
+    "description": "Ongkir berapa",
+    "input": "Ongkir berapa",
+    "context": {
+      "activeOrder": null,
+      "cart": [],
+      "storeId": "store-f7140b5c",
+      "customerCity": "Jakarta"
+    },
+    "expect": {
+      "routeKind": "waterfall",
+      "source": "shipping",
+      "mustContain": [
+        "Rp"
+      ]
+    }
+  },
+  {
+    "name": "identity_extraction_then_no_repeat",
+    "description": "Nama saya Budi — setelah ekstraksi, pesan berikutnya tidak tanya nama",
+    "input": "Nama saya Budi",
+    "context": {
+      "activeOrder": null,
+      "cart": [],
+      "storeId": "store-1"
+    },
+    "expect": {
+      "routeKind": "waterfall",
+      "source": "ai",
+      "skipResponse": true
+    }
+  },
+  {
+    "name": "multi_turn_transcript_12_4x",
+    "description": "Transcript 12.4x — multi-turn interaksi depot sayur",
+    "storeId": "store-f7140b5c",
+    "turns": [
+      {
+        "msg": "Halo, ada sayur kol?",
+        "setCart": [
+          {
+            "product": "Kol",
+            "qty": 1,
+            "price": 10000
+          }
+        ],
+        "expect": {
+          "routeKind": "waterfall",
+          "source": "ai"
+        }
+      },
+      {
+        "msg": "Tambah 2 kg wortel",
+        "setCart": [
+          {
+            "product": "Kol",
+            "qty": 1,
+            "price": 10000
+          },
+          {
+            "product": "Wortel",
+            "qty": 2,
+            "price": 19000,
+            "unit": "kg"
+          }
+        ],
+        "expect": {
+          "routeKind": "waterfall",
+          "source": "product",
+          "mustContain": [
+            "Wortel"
+          ]
+        }
+      },
+      {
+        "msg": "Wortelnya ga jadi, ganti pakai brambang",
+        "expect": {
+          "routeKind": "cart_modify"
+        }
+      },
+      {
+        "msg": "Totalnya berapa",
+        "expect": {
+          "routeKind": "total",
+          "mustContain": [
+            "Rp"
+          ],
+          "mustNotContain": [
+            "Rp 0"
+          ]
+        }
+      },
+      {
+        "msg": "Ongkir berapa",
+        "expect": {
+          "routeKind": "waterfall",
+          "mustContain": [
+            "Rp"
+          ]
+        }
+      },
+      {
+        "msg": "Pakai qris ya",
+        "expect": {
+          "routeKind": "waterfall",
+          "mustNotContain": [
+            "siapa nama"
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "name": "multi_turn_transcript_13_2x",
+    "description": "Transcript 13.2x — multi-turn interaksi kelontong",
+    "storeId": "store-f7140b5c",
+    "turns": [
+      {
+        "msg": "Mau beli beras 5kg",
+        "setCart": [
+          {
+            "product": "Beras 5kg",
+            "qty": 1,
+            "price": 60000
+          }
+        ],
+        "expect": {
+          "routeKind": "waterfall",
+          "source": "ai"
+        }
+      },
+      {
+        "msg": "Nama saya Sari",
+        "expect": {
+          "routeKind": "waterfall",
+          "source": "ai",
+          "mustNotContain": [
+            "siapa nama"
+          ]
+        }
+      },
+      {
+        "msg": "Berasnya kurangi jadi 2 kg aja",
+        "expect": {
+          "routeKind": "cart_modify"
+        }
+      },
+      {
+        "msg": "Ga minta, batalin semua",
+        "expect": {
+          "routeKind": "cart_clarify"
+        }
+      },
+      {
+        "msg": "Total",
+        "expect": {
+          "routeKind": "total",
+          "mustNotContain": [
+            "Rp 0"
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "name": "multi_turn_transcript_14_3x",
+    "description": "Transcript 14.3x — multi-turn interaksi online shop",
+    "storeId": "store-f7140b5c",
+    "turns": [
+      {
+        "msg": "Ada laptop gaming?",
+        "setCart": [
+          {
+            "product": "Laptop",
+            "qty": 1,
+            "price": 15000000
+          }
+        ],
+        "expect": {
+          "routeKind": "waterfall",
+          "source": "ai"
+        }
+      },
+      {
+        "msg": "Deket kok",
+        "expect": {
+          "routeKind": "waterfall"
+        }
+      },
+      {
+        "msg": "Sudah ya, checkout pakai qris",
+        "expect": {
+          "routeKind": "waterfall",
+          "source": "payment"
+        }
+      },
+      {
+        "msg": "Nama saya Rudi",
+        "expect": {
+          "routeKind": "waterfall"
+        }
+      },
+      {
+        "msg": "Total bayar berapa",
+        "expect": {
+          "routeKind": "total",
+          "mustNotContain": [
+            "Rp 0"
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "name": "multi_turn_transcript_hallucination_15_5x",
+    "description": "Transcript 15.5x - hallucinasi produk dari deskripsi toko",
+    "storeId": "store-f7140b5c",
+    "turns": [
+      {
+        "msg": "Jual apa aja",
+        "expect": {
+          "routeKind": "waterfall",
+          "source": "catalog",
+          "mustNotContain": [
+            "rendang",
+            "gulai",
+            "sambal lado"
+          ]
+        }
+      },
+      {
+        "msg": "Ada rendang?",
+        "expect": {
+          "routeKind": "waterfall",
+          "mustNotContain": [
+            "rendang"
+          ]
+        }
+      },
+      {
+        "msg": "Ada sambal lado?",
+        "expect": {
+          "routeKind": "waterfall",
+          "mustNotContain": [
+            "sambal lado",
+            "sambal"
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "name": "clarification_duadua_escalation",
+    "description": "CASE 1: Loop 'dua duanya' 4 turn — afirmatif ambigu → retry → escalate",
+    "storeId": "store-f7140b5c",
+    "turns": [
+      {
+        "msg": "Mau beli beras 5kg dan minyak 1 liter",
+        "setCart": [
+          {
+            "product": "Beras 5kg",
+            "qty": 1,
+            "price": 60000,
+            "unit": "kg"
+          }
+        ],
+        "expect": {
+          "routeKind": "waterfall",
+          "source": "ai"
+        }
+      },
+      {
+        "msg": "Nama saya Sari",
+        "expect": {
+          "routeKind": "waterfall",
+          "source": "ai",
+          "mustNotContain": [
+            "siapa nama"
+          ]
+        }
+      },
+      {
+        "msg": "Berasnya kurangi jadi 2 kg aja",
+        "expect": {
+          "routeKind": "cart_modify"
+        }
+      },
+      {
+        "msg": "Ga minta, batalin semua",
+        "expect": {
+          "routeKind": "cart_clarify"
+        }
+      },
+      {
+        "msg": "Total",
+        "expect": {
+          "routeKind": "total",
+          "mustNotContain": [
+            "Rp 0"
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "name": "typo_toralin_to_total",
+    "description": "CASE 2: 'toralin brp' → normalizer → 'total berapa' → hitung dari DB",
+    "storeId": "store-f7140b5c",
+    "input": "toralin brp",
+    "context": {
+      "cart": [
+        {
+          "product": "Beras 5kg",
+          "qty": 1,
+          "price": 60000,
+          "unit": "kg"
+        }
+      ]
+    },
+    "expect": {
+      "routeKind": "total",
+      "mustNotContain": [
+        "toralin"
+      ]
+    }
+  },
+  {
+    "name": "semua_closes_clarification",
+    "description": "CASE 3: 'semua' menutup klarifikasi dengan 0 LLM",
+    "storeId": "store-f7140b5c",
+    "input": "semua",
+    "context": {
+      "cart": []
+    },
+    "expect": {
+      "routeKind": "waterfall"
+    }
+  },
+  {
+    "name": "negasi_rollback_cart",
+    "description": "CASE 4: Negasi 'nggak jadi' → rollback snapshot, clear pending",
+    "storeId": "store-f7140b5c",
+    "turns": [
+      {
+        "msg": "beli beras 5 kg",
+        "setCart": [
+          {
+            "product": "Beras 5kg",
+            "qty": 1,
+            "price": 60000
+          }
+        ],
+        "expect": {
+          "routeKind": "waterfall",
+          "source": "ai"
+        }
+      },
+      {
+        "msg": "nggak jadi",
+        "expect": {
+          "routeKind": "cart_clarify"
+        }
+      }
+    ]
+  },
+  {
+    "name": "clarification_no_duplicate",
+    "description": "CASE 5: Clarification tidak muncul 2x berurutan — retry_count maks 1",
+    "storeId": "store-f7140b5c",
+    "turns": [
+      {
+        "msg": "mau beli",
+        "expect": {
+          "routeKind": "waterfall"
+        }
+      },
+      {
+        "msg": "yang murah",
+        "expect": {
+          "routeKind": "waterfall"
+        }
+      },
+      {
+        "msg": "yang enak",
+        "expect": {
+          "routeKind": "waterfall"
+        }
+      }
+    ]
+  },
+  {
+    "name": "product_name_protected_total",
+    "description": "CASE 6: Produk bernama 'Total' — 'total berapa' tidak diubah normalizer",
+    "storeId": "store-f7140b5c",
+    "input": "total berapa",
+    "context": {
+      "cart": [
+        {
+          "product": "Beras 5kg",
+          "qty": 1,
+          "price": 60000
+        }
+      ]
+    },
+    "expect": {
+      "routeKind": "total",
+      "mustNotContain": [
+        "toralin"
+      ]
+    }
+  }
+]

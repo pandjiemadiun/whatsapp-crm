@@ -1,0 +1,71 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: "Plus Jakarta Sans", system-ui, sans-serif;
+  --font-display: "Space Grotesk", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+
+  --color-brand: #1B53F0;
+  --color-brand-deep: #1340C7;
+  --color-brand-soft: #EAF1FF;
+  --color-navy: #081229;
+  --color-navy-2: #0C1C44;
+  --color-cyan: #22D3EE;
+  --color-ink: #0A1733;
+  --color-muted: #64748B;
+  --color-surface: #FBFCFF;
+  --color-line: #E6EBF5;
+  --color-dsurface: #0B1226;
+  --color-dcard: #101A33;
+  --color-dline: #1E2A4A;
+}
+
+@layer base {
+  body {
+    @apply font-sans text-ink bg-surface antialiased;
+  }
+  .dark {
+    color-scheme: dark;
+  }
+  .dark body {
+    background: var(--color-dsurface);
+    color: #E2E8F0;
+  }
+}
+
+@keyframes slide-in {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(0); }
+}
+
+.animate-slide-in {
+  animation: slide-in 0.2s ease-out;
+}
+
+.dark .bg-white { background: var(--color-dcard) }
+.dark .bg-gray-50 { background: var(--color-dsurface) }
+.dark .bg-gray-100 { background: #16223F }
+.dark .bg-gray-200 { background: var(--color-dline) }
+.dark .hover\:bg-gray-100:hover { background: #16223F }
+.dark .text-gray-900, .dark .text-gray-800 { color: #F1F5F9 }
+.dark .text-gray-700, .dark .text-gray-600 { color: #CBD5E1 }
+.dark .text-gray-500 { color: #94A3B8 }
+.dark .text-gray-400 { color: #7C8DB0 }
+.dark .border-gray-200, .dark .border-gray-100 { border-color: var(--color-dline) }
+.dark .bg-indigo-50 { background: rgba(27, 83, 240, .16) }
+.dark .text-indigo-700 { color: #93B4FF }
+.dark .bg-red-50 { background: rgba(239, 68, 68, .14) }
+.dark .text-red-700 { color: #FCA5A5 }
+
+.dark textarea,
+.dark select,
+.dark input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]) {
+  color: #F1F5F9;
+}
+.dark ::placeholder {
+  color: #7C8DB0;
+  opacity: 1;
+}
