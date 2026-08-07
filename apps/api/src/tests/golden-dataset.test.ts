@@ -1,0 +1,664 @@
+/**
+ * Golden Dataset Integration Test
+ *
+ * Runner: npx tsx --env-file=../../.env --test --test-force-exit src/tests/golden-dataset.test.ts
+ *
+ * 10 permanent test cases covering the 5-stage chat-flow pipeline:
+ *   Stage 1 — Resolver (pending-clarification, 0 LLM)
+ *   Stage 2 — Normalizer (typo + I12 product-preservation guard, 0 LLM)
+ *   Stage 3 — Tier (rule-based fast-path, 0 LLM)
+ *   Stage 4 — Interpreter (≤1 LLM via groqAdapter.generate)
+ *   Stage 5 — Dead-end (HUMAN fallback)
+ *
+ * Mocks:
+ *   - groqAdapter.generate → canned JSON (I8: max 1 LLM per turn)
+ *   - orderService.extractAndSaveOrder → no-op (prevents real LLM in order extraction)
+ *   - orderService.detectDoneOrdering → false (prevents finalizeDraftOrder side-effects)
+ *   - adapters.logger.info → captures 'Pipeline audit' entries
+ */
+
+import { test, before, after, beforeEach } from 'node:test';
+import assert from 'node:assert/strict';
+import { prisma } from '../infrastructure/prisma.js';
+import { conversationService } from '../business/conversation.service.js';
+import { orderService } from '../business/order.service.js';
+import { conversationContextService } from '../business/conversation-context.service.js';
+import { groqAdapter } from '../adapters/ai/groq.adapter.js';
+import { adapters } from '../adapters/container.js';
+import { normalize } from '../services/chat/normalizer.js';
+import { ResponseSource } from '../domain/types.js';
+import type { AIResponse, AIGenerateOptions } from '../adapters/ai/types.js';
+import type { InterpreterResult, ResponseResult } from '../domain/types.js';
+
+// ──────────────────────────────────────────────────────────
+// Constants
+// ──────────────────────────────────────────────────────────
+
+const STORE_ID = 'store-golden-test';
+
+// Base products — always present in the DB.
+// Note: "berasss" is added only for Case 6 and removed afterwards
+// to avoid substring-match ambiguity with "beras" in tryProduct.
+const BASE_PRODUCTS = [
+  { id: 'prod-beras', name: 'beras', price: 12000, stock: 50 },
+] as const;
+
+const BERASSS_PRODUCT = { id: 'prod-berasss', name: 'berasss', price: 15000, stock: 50 };
+
+// ──────────────────────────────────────────────────────────
+// Mock state
+// ──────────────────────────────────────────────────────────
+
+let llmCalls = 0;
+let cannedContent = '';
+let auditLogs: Array<Record<string, unknown>> = [];
+
+// Save originals so we can restore in after()
+const originalGenerate = groqAdapter.generate.bind(groqAdapter);
+const originalLoggerInfo = adapters.logger.info;
+const OrderProto = Object.getPrototypeOf(orderService);
+const originalExtractOrder = OrderProto.extractAndSaveOrder;
+const originalDetectDone = OrderProto.detectDoneOrdering;
+
+// ──────────────────────────────────────────────────────────
+// Mock implementations
+// ──────────────────────────────────────────────────────────
+
+const mockGenerate = async (
+  _prompt: string,
+  _options?: AIGenerateOptions,
+): Promise<AIResponse> => {
+  llmCalls++;
+  return {
+    content: cannedContent,
+    provider: 'groq',
+    model: 'test-model',
+    tokens: { input: 10, output: 10 },
+    cost: 0,
+  };
+};
+
+// ──────────────────────────────────────────────────────────
+// Audit helper
+// ──────────────────────────────────────────────────────────
+
+interface AuditInfo {
+  stagesReached: string[];
+  llmCallCount: number;
+  finalIntent: string | null;
+  cartOpsExecuted: number;
+}
+
+function getAudit(logs: Array<Record<string, unknown>>): AuditInfo {
+  const log = logs[0] || {};
+  return {
+    stagesReached: (log.stagesReached as string[]) ?? [],
+    llmCallCount: (log.llmCallCount as number) ?? 0,
+    finalIntent: (log.finalIntent as string | null) ?? null,
+    cartOpsExecuted: (log.cartOpsExecuted as number) ?? 0,
+  };
+}
+
+// ──────────────────────────────────────────────────────────
+// Canned LLM response builder
+// ──────────────────────────────────────────────────────────
+
+function canned(obj: Partial<InterpreterResult>): string {
+  return JSON.stringify({
+    intent: 'clarify',
+    cart_ops: [],
+    buy_signal: 'no',
+    order_extract: null,
+    missing_info: null,
+    identity: null,
+    reply_draft: null,
+    confidence: 0.9,
+    clarification: null,
+    ...obj,
+  });
+}
+
+// ──────────────────────────────────────────────────────────
+// DB helpers
+// ──────────────────────────────────────────────────────────
+
+async function setupStore(): Promise<void> {
+  await prisma.store.upsert({
+    where: { id: STORE_ID },
+    update: { name: 'Golden Dataset Test Store' },
+    create: { id: STORE_ID, name: 'Golden Dataset Test Store' },
+  });
+  for (const p of BASE_PRODUCTS) {
+    await prisma.product.upsert({
+      where: { id: p.id },
+      update: {
+        name: p.name,
+        price: p.price,
+        stock: p.stock,
+        isActive: true,
+        deletedAt: null,
+      },
+      create: {
+        id: p.id,
+        storeId: STORE_ID,
+        name: p.name,
+        price: p.price,
+        stock: p.stock,
+        isActive: true,
+        currency: 'IDR',
+      },
+    });
+  }
+}
+
+async function cleanupStoreData(): Promise<void> {
+  // Order matters: child tables first (FK constraints)
+  await prisma.conversationHistory
+    .deleteMany({ where: { conversation: { storeId: STORE_ID } } })
+    .catch(() => {});
+  await prisma.conversationContext
+    .deleteMany({ where: { conversation: { storeId: STORE_ID } } })
+    .catch(() => {});
+  await prisma.order.deleteMany({ where: { storeId: STORE_ID } }).catch(() => {});
+  await prisma.conversation
+    .deleteMany({ where: { storeId: STORE_ID } })
+    .catch(() => {});
+  await prisma.product
+    .deleteMany({ where: { storeId: STORE_ID } })
+    .catch(() => {});
+  await prisma.store.deleteMany({ where: { id: STORE_ID } }).catch(() => {});
+}
+
+async function createConv(
+  convId: string,
+  customerId: string,
+): Promise<void> {
+  await prisma.conversation.create({
+    data: {
+      id: convId,
+      storeId: STORE_ID,
+      customerId,
+      customerPhone: customerId,
+      channel: 'whatsapp',
+      status: 'open',
+    },
+  });
+  await conversationContextService.initializeContext({
+    storeId: STORE_ID,
+    customerId,
+    conversationId: convId,
+  });
+}
+
+/**
+ * Set pendingClarification (and optionally previousMutation.cartSnapshot)
+ * directly in extractedEntities, simulating what the interpreter /
+ * orchestrator would have stored.
+ */
+async function setPendingInDb(
+  convId: string,
+  question: string,
+  options: Array<{ id: string; label: string; cartOps?: Array<Record<string, unknown>> }>,
+  snapshot?: Array<Record<string, unknown>>,
+): Promise<void> {
+  const entities: Record<string, unknown> = {
+    discussedItems: [],
+    confirmedItems: [],
+    lastAmbiguousPrompt: null,
+    pendingClarification: {
+      question,
+      options,
+      expected_type: 'affirmative',
+      asked_at: new Date().toISOString(),
+      retry_count: 0,
+    },
+    previousMutation: snapshot
+      ? { cartSnapshot: snapshot, message: 'test-pending' }
+      : null,
+  };
+  await prisma.conversationContext.update({
+    where: { conversationId: convId },
+    data: { extractedEntities: entities as any },
+  });
+}
+
+async function processMsg(
+  convId: string,
+  customerId: string,
+  message: string,
+): Promise<{ result: ResponseResult | null; audit: AuditInfo; llmCalls: number }> {
+  // Reset per-call state
+  llmCalls = 0;
+  auditLogs = [];
+  const result = await conversationService.processCustomerMessage(
+    STORE_ID,
+    customerId,
+    convId,
+    message,
+  );
+  const audit = getAudit(auditLogs);
+  return { result, audit, llmCalls };
+}
+
+// ──────────────────────────────────────────────────────────
+// Lifecycle hooks
+// ──────────────────────────────────────────────────────────
+
+before(async () => {
+  // Mock groqAdapter.generate — intercepts interpreter LLM calls
+  (groqAdapter as any).generate = mockGenerate;
+
+  // Mock orderService to prevent real LLM calls in extractAndSaveOrder
+  // and to prevent finalizeDraftOrder side-effects (detectDoneOrdering)
+  OrderProto.extractAndSaveOrder = async () => null;
+  OrderProto.detectDoneOrdering = () => false;
+
+  // Capture audit logs instead of forwarding to winston
+  (adapters.logger as any).info = (msg: string, meta?: unknown) => {
+    if (msg === 'Pipeline audit' && meta && typeof meta === 'object') {
+      auditLogs.push(meta as Record<string, unknown>);
+    }
+  };
+
+  // Seed DB
+  await cleanupStoreData();
+  await setupStore();
+});
+
+after(async () => {
+  // Restore originals
+  (groqAdapter as any).generate = originalGenerate;
+  OrderProto.extractAndSaveOrder = originalExtractOrder;
+  OrderProto.detectDoneOrdering = originalDetectDone;
+  (adapters.logger as any).info = originalLoggerInfo;
+
+  // Tear down
+  await cleanupStoreData();
+  await prisma.$disconnect();
+});
+
+beforeEach(async () => {
+  // Reset mock state
+  llmCalls = 0;
+  cannedContent = '';
+  auditLogs = [];
+
+  // Clean conversation-level data (keep store + base products)
+  await prisma.conversationHistory
+    .deleteMany({ where: { conversation: { storeId: STORE_ID } } })
+    .catch(() => {});
+  await prisma.conversationContext
+    .deleteMany({ where: { conversation: { storeId: STORE_ID } } })
+    .catch(() => {});
+  await prisma.order.deleteMany({ where: { storeId: STORE_ID } }).catch(() => {});
+  await prisma.conversation
+    .deleteMany({ where: { storeId: STORE_ID } })
+    .catch(() => {});
+});
+
+// ──────────────────────────────────────────────────────────
+// Test Cases
+// ──────────────────────────────────────────────────────────
+
+test('Case 1: resolver EXECUTE — "dua duanya" resolves pending clarification (0 LLM)', async () => {
+  const convId = 'conv-case1';
+  await createConv(convId, 'cust-1');
+
+  // Simulate what the interpreter would have produced in Turn 1
+  await setPendingInDb(convId, 'Berat 1 kg untuk woltel dan brambang ya?', [
+    {
+      id: 'opt-1',
+      label: 'woltel 1kg & brambang 1kg',
+      cartOps: [
+        { type: 'add', product: 'woltel', qty: 1, price: 10000 },
+        { type: 'add', product: 'brambang', qty: 1, price: 8000 },
+      ],
+    },
+  ]);
+
+  const { result, audit, llmCalls: calls } = await processMsg(
+    convId,
+    'cust-1',
+    'dua duanya',
+  );
+
+  assert.ok(result, 'processCustomerMessage must return a response');
+  assert.equal(calls, 0, 'resolver stage must not call LLM (I8)');
+  assert.deepEqual(audit.stagesReached, ['resolver']);
+  assert.equal(audit.llmCallCount, 0);
+  assert.equal(audit.finalIntent, 'execute_pending');
+  assert.equal(audit.cartOpsExecuted, 2);
+  assert.ok(
+    result!.message.content.includes('woltel'),
+    'response should mention woltel',
+  );
+  assert.ok(
+    result!.message.content.includes('brambang'),
+    'response should mention brambang',
+  );
+});
+
+test('Case 2: normalizer → "total berapa" → tryTotal tier (0 LLM)', async () => {
+  const convId = 'conv-case2';
+  await createConv(convId, 'cust-2');
+
+  // Verify normalization first (I12 / typo dictionary)
+  assert.equal(
+    normalize('toralin brp', ['beras']),
+    'total berapa',
+    'toralin → total, brp → berapa',
+  );
+
+  const { result, audit, llmCalls: calls } = await processMsg(
+    convId,
+    'cust-2',
+    'toralin brp',
+  );
+
+  assert.ok(result, 'must return a response');
+  assert.equal(calls, 0, 'tryTotal is a 0-LLM fast-path tier');
+  assert.deepEqual(audit.stagesReached, ['normalizer', 'tier3']);
+  assert.equal(audit.llmCallCount, 0);
+  assert.equal(audit.finalIntent, 'fastpath');
+  assert.equal(audit.cartOpsExecuted, 0);
+});
+
+test('Case 3: resolver EXECUTE — "semua" resolves pending (0 LLM)', async () => {
+  const convId = 'conv-case3';
+  await createConv(convId, 'cust-3');
+
+  await setPendingInDb(convId, 'Mau semua produk?', [
+    {
+      id: 'opt-1',
+      label: 'semua',
+      cartOps: [{ type: 'add', product: 'beras', qty: 1, price: 12000 }],
+    },
+  ]);
+
+  const { result, audit, llmCalls: calls } = await processMsg(
+    convId,
+    'cust-3',
+    'semua',
+  );
+
+  assert.ok(result, 'must return a response');
+  assert.equal(calls, 0);
+  assert.deepEqual(audit.stagesReached, ['resolver']);
+  assert.equal(audit.llmCallCount, 0);
+  assert.equal(audit.finalIntent, 'execute_pending');
+  assert.equal(audit.cartOpsExecuted, 1);
+  assert.ok(result!.message.content.includes('beras'), 'cart should contain beras');
+});
+
+test('Case 4: resolver ROLLBACK — "ga jadi" cancels pending (0 LLM)', async () => {
+  const convId = 'conv-case4';
+  await createConv(convId, 'cust-4');
+
+  // Need a cartSnapshot so ROLLBACK can restore
+  const snapshot = [
+    {
+      product: 'beras',
+      qty: 1,
+      price: 12000,
+      confirmedAt: new Date().toISOString(),
+      mentionedAt: new Date().toISOString(),
+    },
+  ];
+
+  await setPendingInDb(
+    convId,
+    'Mau pesan beras 1kg?',
+    [
+      {
+        id: 'opt-1',
+        label: 'beras',
+        cartOps: [{ type: 'add', product: 'beras', qty: 1, price: 12000 }],
+      },
+    ],
+    snapshot,
+  );
+
+  const { result, audit, llmCalls: calls } = await processMsg(
+    convId,
+    'cust-4',
+    'ga jadi',
+  );
+
+  assert.ok(result, 'must return a response');
+  assert.equal(calls, 0);
+  assert.deepEqual(audit.stagesReached, ['resolver']);
+  assert.equal(audit.llmCallCount, 0);
+  assert.equal(audit.finalIntent, 'rollback');
+  assert.equal(audit.cartOpsExecuted, 0);
+  assert.ok(
+    result!.message.content.includes('batal'),
+    'ROLLBACK response must say "dibatalkan"',
+  );
+});
+
+test('Case 5: tryProduct tier — "ada beras" returns price from DB (0 LLM)', async () => {
+  const convId = 'conv-case5';
+  await createConv(convId, 'cust-5');
+
+  const { result, audit, llmCalls: calls } = await processMsg(
+    convId,
+    'cust-5',
+    'ada beras',
+  );
+
+  assert.ok(result, 'must return a response');
+  assert.equal(calls, 0, 'tryProduct is a 0-LLM tier');
+  assert.deepEqual(audit.stagesReached, ['normalizer', 'tier3']);
+  assert.equal(audit.llmCallCount, 0);
+  assert.equal(audit.finalIntent, 'fastpath');
+  assert.ok(result!.message.content.includes('beras'), 'should mention the product');
+  // Price must come from DB (Rp 12.000), not from LLM
+  assert.match(result!.message.content, /Rp\s*12[.,]000/);
+});
+
+test('Case 6: normalizer preserves "berasss" (I12 guard), tryProduct returns DB price (0 LLM)', async () => {
+  // Add "berasss" product temporarily — excluded from Case 5 to avoid
+  // substring-match ambiguity (searchProducts: name contains "beras"
+  // matches both "beras" and "berasss").
+  await prisma.product.create({
+    data: {
+      id: BERASSS_PRODUCT.id,
+      storeId: STORE_ID,
+      name: BERASSS_PRODUCT.name,
+      price: BERASSS_PRODUCT.price,
+      stock: BERASSS_PRODUCT.stock,
+      isActive: true,
+      currency: 'IDR',
+    },
+  });
+  try {
+    // Direct normalization check — I12: product tokens are never mutated
+    const normInput = normalize('berasss ada', ['beras', 'berasss']);
+    assert.ok(
+      normInput.includes('berasss'),
+      'I12 guard: "berasss" must NOT be mutated to "beras"',
+    );
+
+    const convId = 'conv-case6';
+    await createConv(convId, 'cust-6');
+
+    const { result, audit, llmCalls: calls } = await processMsg(
+      convId,
+      'cust-6',
+      'berasss ada',
+    );
+
+    assert.ok(result, 'must return a response');
+    assert.equal(calls, 0);
+    assert.deepEqual(audit.stagesReached, ['normalizer', 'tier3']);
+    assert.equal(audit.llmCallCount, 0);
+    assert.equal(audit.finalIntent, 'fastpath');
+    assert.ok(
+      result!.message.content.includes('berasss'),
+      'response should use the original product name "berasss"',
+    );
+    assert.match(result!.message.content, /Rp\s*15[.,]000/);
+  } finally {
+    await prisma.product
+      .delete({ where: { id: BERASSS_PRODUCT.id } })
+      .catch(() => {});
+  }
+});
+
+test('Case 7: resolver EXECUTE — "iya" resolves pending (0 LLM)', async () => {
+  const convId = 'conv-case7';
+  await createConv(convId, 'cust-7');
+
+  await setPendingInDb(convId, 'Mau pesan beras?', [
+    {
+      id: 'opt-1',
+      label: 'iya',
+      cartOps: [{ type: 'add', product: 'beras', qty: 1, price: 12000 }],
+    },
+  ]);
+
+  const { result, audit, llmCalls: calls } = await processMsg(
+    convId,
+    'cust-7',
+    'iya',
+  );
+
+  assert.ok(result, 'must return a response');
+  assert.equal(calls, 0);
+  assert.deepEqual(audit.stagesReached, ['resolver']);
+  assert.equal(audit.llmCallCount, 0);
+  assert.equal(audit.finalIntent, 'execute_pending');
+  assert.equal(audit.cartOpsExecuted, 1);
+});
+
+test('Case 8: interpreter — LLM called once, reply_draft ≤ 2 sentences', async () => {
+  const convId = 'conv-case8';
+  await createConv(convId, 'cust-8');
+
+  cannedContent = canned({
+    intent: 'smalltalk',
+    cart_ops: [],
+    reply_draft:
+      'Kami punya beras dan sayuran segar. Silakan pilih ya.',
+    confidence: 0.9,
+  });
+
+  const { result, audit, llmCalls: calls } = await processMsg(
+    convId,
+    'cust-8',
+    'rekomendasi apa ya?',
+  );
+
+  assert.ok(result, 'must return a response');
+  assert.equal(calls, 1, 'interpreter must call LLM exactly once (I8)');
+  assert.equal(audit.llmCallCount, 1);
+  assert.deepEqual(audit.stagesReached, [
+    'normalizer',
+    'tier3',
+    'llm',
+  ]);
+  assert.equal(audit.finalIntent, 'smalltalk');
+  assert.equal(audit.cartOpsExecuted, 0);
+
+  // Validate reply_draft is truncated to max 2 sentences
+  assert.ok(result!.message.content, 'response must have content');
+  const sentences = result!.message.content
+    .split(/(?<=[.!?])\s+/)
+    .filter((s) => s.trim().length > 0);
+  assert.ok(
+    sentences.length <= 2,
+    `reply_draft harus maks 2 kalimat, dapat ${sentences.length}`,
+  );
+});
+
+test('Case 9: interpreter → clarification → pending saved in DB', async () => {
+  const convId = 'conv-case9';
+  await createConv(convId, 'cust-9');
+
+  cannedContent = canned({
+    intent: 'clarify',
+    clarification: {
+      question:
+        'Maaf Kak, iPhone 15 belum tersedia di toko kami. Ada alternatif lain?',
+      options: [],
+      expected_type: 'affirmative',
+    },
+    confidence: 0.85,
+  });
+
+  const { result, audit, llmCalls: calls } = await processMsg(
+    convId,
+    'cust-9',
+    'iphone 15',
+  );
+
+  assert.ok(result, 'must return a response');
+  assert.equal(calls, 1);
+  assert.equal(audit.llmCallCount, 1);
+  assert.deepEqual(audit.stagesReached, [
+    'normalizer',
+    'tier3',
+    'llm',
+  ]);
+  assert.equal(audit.finalIntent, 'clarify');
+
+  // Verify pending clarification was persisted to DB
+  const ctxRow = await prisma.conversationContext.findUnique({
+    where: { conversationId: convId },
+    select: { extractedEntities: true },
+  });
+  const entities =
+    conversationContextService.parseExtractedEntities(ctxRow?.extractedEntities);
+  assert.ok(
+    entities.pendingClarification,
+    'pending clarification must be saved',
+  );
+  assert.equal(
+    entities.pendingClarification?.question,
+    'Maaf Kak, iPhone 15 belum tersedia di toko kami. Ada alternatif lain?',
+  );
+});
+
+test('Case 10: interpreter — harga dari DB via cart_ops, not customer "50rb" (I13)', async () => {
+  const convId = 'conv-case10';
+  await createConv(convId, 'cust-10');
+
+  // LLM returns the correct DB price (12000) for beras — not the
+  // customer's "50rb" (50000).  validateCartOps verifies product
+  // existence against storeProducts (I15).
+  cannedContent = canned({
+    intent: 'buy',
+    cart_ops: [{ type: 'add', product: 'beras', qty: 1, price: 12000 }],
+    buy_signal: 'yes',
+    confidence: 0.95,
+  });
+
+  const { result, audit, llmCalls: calls } = await processMsg(
+    convId,
+    'cust-10',
+    'harganya 50rb ya?',
+  );
+
+  assert.ok(result, 'must return a response');
+  assert.equal(calls, 1);
+  assert.equal(audit.llmCallCount, 1);
+  assert.deepEqual(audit.stagesReached, [
+    'normalizer',
+    'tier3',
+    'llm',
+  ]);
+  assert.equal(audit.finalIntent, 'buy');
+  assert.equal(audit.cartOpsExecuted, 1);
+
+  // Price from DB (Rp 12.000), NOT the customer's "50rb" (50.000)
+  assert.ok(result!.message.content.includes('beras'), 'should mention beras');
+  assert.match(result!.message.content, /Rp\s*12[.,]000/);
+  assert.ok(
+    !result!.message.content.includes('50.000'),
+    'customer-stated price "50rb" must NOT appear in response (I13)',
+  );
+  assert.ok(
+    !result!.message.content.includes('50rb'),
+    'customer-stated price "50rb" must NOT appear in response (I13)',
+  );
+});
