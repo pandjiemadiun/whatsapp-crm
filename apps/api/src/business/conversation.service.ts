@@ -3,10 +3,10 @@ import { fallbackService } from './fallback.service.js';
 import { orderService } from './order.service.js';
 import { conversationContextService } from './conversation-context.service.js';
 import { prisma } from '../infrastructure/prisma.js';
-import { decideRoute, buildRouteContext, RouteContext, ConfirmedItemLike } from './route-decider.js';
-import { normalizeMessage } from '../services/message-normalizer.js';
-import { resolvePendingClarification, buildPendingFromClarification } from '../services/clarification-resolver.js';
-import { interpretMessage, countLlmCallsInWindow } from '../services/ot-or-interpreter.js';
+import { productService } from './product.service.js';
+import { normalize } from '../services/chat/normalizer.js';
+import { runOneCall, validateCartOps, truncateTo2Sentences } from '../services/chat/interpreter.js';
+import { resolvePending } from '../services/chat/pendingClarification.js';
 
 import {
   ConversationMessage,
@@ -18,6 +18,9 @@ import {
   ConversationContextData,
   ConfirmedItem,
   ExtractedEntities,
+  PipelineContext,
+  CartOp,
+  PendingClarification,
 } from '../domain/types.js';
 
 interface ConversationListItem {
@@ -106,38 +109,37 @@ export class ConversationService {
       // non-critical
     }
 
-    // ── BAGIAN 2: Pending clarification resolver — runs FIRST, before normalizer/tier/interpreter ──
-    // Jika ada pending clarification, resolver cek afirmatif/negasi V0 LLM.
-    const resolveResult = await resolvePendingClarification(conversationId, storeId, customerMessage);
-    if (resolveResult.handled) {
-      if (resolveResult.escalate) {
-        // Alihkan ke pemilik toko (retry_count max 1 exceeded)
-        await this.saveMessage({
-          id: crypto.randomUUID(),
-          conversationId,
-          sender: 'customer',
-          content: customerMessage,
-          createdAt: new Date(),
-        } as ConversationMessage);
-        await this.saveMessage({
-          id: crypto.randomUUID(),
-          conversationId,
-          sender: 'assistant',
-          content: resolveResult.reply ?? 'Saya akan hubungkan ke pemilik toko.',
-          source: ResponseSource.HUMAN,
-          createdAt: new Date(),
-        } as ConversationMessage);
-        await conversationContextService.refreshSession(conversationId);
-        return this.buildResult(conversationId, {
-          source: ResponseSource.HUMAN,
-          content: resolveResult.reply ?? 'Saya akan hubungkan ke pemilik toko.',
-          confidence: 0.9,
-          cost: 0,
-          metadata: { reason: 'escalation_clarification_retry_exceeded' },
-        });
-      }
+    // ── Audit tracking (DoD FASE 5: setiap pesan catat stages/llm/intent/cartOps) ──
+    const stagesReached: string[] = [];
+    let finalIntent: string | null = null;
+    const cartOpsExecuted: CartOp[] = [];
+    let llmCallCount = 0;
+    let result: ResponseResult | null = null;
 
-      // Approved atau negasi — eksekusi cart_ops TANPA LLM, render dari DB state
+    // ── BAGIAN 2: Pending clarification resolver — runs FIRST, before normalizer (0 LLM) ──
+    // I10: afirmatif/negasi menutup klarifikasi V0 LLM. Menggunakan resolvePending
+    // (pure, action-based) dari chat/pendingClarification.js.
+    const pendingRow = await prisma.conversationContext.findUnique({
+      where: { conversationId },
+      select: { extractedEntities: true },
+    });
+    const entities = conversationContextService.parseExtractedEntities(pendingRow?.extractedEntities);
+    const pending = conversationContextService.getPendingClarification(entities);
+    const rawEntities = (pendingRow?.extractedEntities as Record<string, unknown>) || {};
+    const previousMutation = rawEntities.previousMutation as
+      | { cartSnapshot: unknown[]; message: string }
+      | null
+      | undefined;
+
+    if (pending) {
+      stagesReached.push('resolver');
+      const cartOps = this.flattenPendingOps(pending);
+      const resolved = resolvePending(
+        { pending: { ops: cartOps, snapshot: previousMutation?.cartSnapshot, retryCount: pending.retry_count ?? 0 } },
+        customerMessage
+      );
+
+      // Save customer message
       await this.saveMessage({
         id: crypto.randomUUID(),
         conversationId,
@@ -145,163 +147,239 @@ export class ConversationService {
         content: customerMessage,
         createdAt: new Date(),
       } as ConversationMessage);
+
+      if (resolved.action === 'ESCALATE') {
+        finalIntent = 'escalate';
+        await this.saveMessage({
+          id: crypto.randomUUID(),
+          conversationId,
+          sender: 'assistant',
+          content: 'Saya akan hubungkan ke pemilik toko.',
+          source: ResponseSource.HUMAN,
+          createdAt: new Date(),
+        } as ConversationMessage);
+        await conversationContextService.refreshSession(conversationId);
+        this.logPipelineAudit(conversationId, stagesReached, llmCallCount, finalIntent, cartOpsExecuted);
+        return this.buildResult(conversationId, {
+          source: ResponseSource.HUMAN,
+          content: 'Saya akan hubungkan ke pemilik toko.',
+          confidence: 0.9,
+          cost: 0,
+          metadata: { reason: 'escalation_clarification_retry_exceeded' },
+        });
+      }
+
+      // Clear pending — applies for both EXECUTE and ROLLBACK
+      await conversationContextService.clearPendingClarification(conversationId);
+      await this.clearPreviousMutation(conversationId);
+
+      if (resolved.action === 'EXECUTE') {
+        finalIntent = 'execute_pending';
+        // Execute pending cart ops (0 LLM) — fix I13: harga dari DB via modifyCart
+        if (resolved.ops && resolved.ops.length > 0) {
+          for (const op of resolved.ops) {
+            await conversationContextService.modifyCart(conversationId, 'add', {
+              addedProduct: op.product,
+              qty: op.qty,
+              price: op.price,
+            });
+            cartOpsExecuted.push(op);
+          }
+        }
+        const cart = await this.getCartFromDb(conversationId);
+        const reply = await this.renderCartSummary(conversationId, cart, undefined);
+        await this.saveMessage({
+          id: crypto.randomUUID(),
+          conversationId,
+          sender: 'assistant',
+          content: reply,
+          source: ResponseSource.SOP,
+          createdAt: new Date(),
+        } as ConversationMessage);
+        await conversationContextService.refreshSession(conversationId);
+        this.logPipelineAudit(conversationId, stagesReached, llmCallCount, finalIntent, cartOpsExecuted);
+        return this.buildResult(conversationId, {
+          source: ResponseSource.SOP,
+          content: reply,
+          confidence: 0.9,
+          cost: 0,
+          metadata: { reason: 'resolver_no_llm', cartOpsExecuted: cartOpsExecuted.length },
+        });
+      }
+
+      if (resolved.action === 'ROLLBACK') {
+        finalIntent = 'rollback';
+        if (resolved.snapshot) {
+          await conversationContextService.restoreCart(conversationId, resolved.snapshot as any[]);
+        }
+        const reply = 'Oke Kak, sudah saya batalkan ya. 🙏';
+        await this.saveMessage({
+          id: crypto.randomUUID(),
+          conversationId,
+          sender: 'assistant',
+          content: reply,
+          source: ResponseSource.SOP,
+          createdAt: new Date(),
+        } as ConversationMessage);
+        await conversationContextService.refreshSession(conversationId);
+        this.logPipelineAudit(conversationId, stagesReached, llmCallCount, finalIntent, cartOpsExecuted);
+        return this.buildResult(conversationId, {
+          source: ResponseSource.SOP,
+          content: reply,
+          confidence: 0.9,
+          cost: 0,
+          metadata: { reason: 'rollback' },
+        });
+      }
+
+      // RETRY — belum jelas, increment retry dan re-ask
+      finalIntent = 'retry';
+      const exceeded = await conversationContextService.incrementClarificationRetry(conversationId);
+      if (exceeded) {
+        finalIntent = 'escalate';
+        await this.saveMessage({
+          id: crypto.randomUUID(),
+          conversationId,
+          sender: 'assistant',
+          content: 'Saya akan hubungkan ke pemilik toko.',
+          source: ResponseSource.HUMAN,
+          createdAt: new Date(),
+        } as ConversationMessage);
+        await conversationContextService.refreshSession(conversationId);
+        this.logPipelineAudit(conversationId, stagesReached, llmCallCount, finalIntent, cartOpsExecuted);
+        return this.buildResult(conversationId, {
+          source: ResponseSource.HUMAN,
+          content: 'Saya akan hubungkan ke pemilik toko.',
+          confidence: 0.9,
+          cost: 0,
+          metadata: { reason: 'escalation_clarification_retry_exceeded' },
+        });
+      }
+      const reply = pending.question ?? 'Masih kurang jelas nih. Bisa Kakak beri tahu pilihan Kakak?';
       await this.saveMessage({
         id: crypto.randomUUID(),
         conversationId,
         sender: 'assistant',
-        content: resolveResult.reply ?? 'Baik.',
+        content: reply,
         source: ResponseSource.SOP,
         createdAt: new Date(),
       } as ConversationMessage);
       await conversationContextService.refreshSession(conversationId);
+      this.logPipelineAudit(conversationId, stagesReached, llmCallCount, finalIntent, cartOpsExecuted);
       return this.buildResult(conversationId, {
         source: ResponseSource.SOP,
-        content: resolveResult.reply ?? 'Baik.',
-        confidence: 0.9,
+        content: reply,
+        confidence: 0.85,
         cost: 0,
-        metadata: { reason: 'resolver_no_llm', resolvedAction: resolveResult.action },
+        metadata: { reason: 'resolver_retry' },
       });
     }
 
-    // ── BAGIAN 1: Normalizer — lowercase + squash repeats + slang dict ──
-    // Guard: jika pesan fuzzy-match nama produk aktif, jangan dinormalisasi
-    const normResult = await normalizeMessage(customerMessage, storeId);
-    const normalizedMsg = normResult.normalized;
-
-    // Stage 2.5: Route decision via decideRoute (single source of truth)
-    let result: ResponseResult | null = null;
-
-    try {
-      const routeCtx = await buildRouteContext(conversationId, storeId, normalizedMsg, customerCity);
-      const route = await decideRoute(routeCtx);
-
-      if (route.kind === 'order_change' && routeCtx.activeOrder) {
-        const option = await fallbackService.handleOrderChangeRequest(
-          context, customerMessage, routeCtx.activeOrder.orderStatus
-        );
-        result = this.buildResult(conversationId, option);
-      } else if (route.kind === 'cart_modify' && route.remove) {
-        // BAGIAN 2.4 — Snapshot previousCart sebelum mutasi
-        const cartBeforeMutation = [...routeCtx.cart];
-        const updatedItems = await conversationContextService.modifyCart(conversationId, 'remove', {
-          cancelledProduct: route.remove[0],
-        });
-        await orderService.syncCartStateToDraftOrder(conversationId, storeId, customerId, updatedItems, null);
-
-        // Store previousMutation for potential rollback
-        await this.storePreviousMutation(conversationId, cartBeforeMutation, normalizedMsg);
-
-        const replyText = await this.renderCartSummary(conversationId, updatedItems, route.remove[0]);
-        result = this.buildModifyCartResult(conversationId, replyText);
-      } else if (route.kind === 'cart_clarify') {
-        // BAGIAN 1.3 & 1.4 — Destructive guard / negation rollback
-        if (route.intent === 'ROLLBACK' && routeCtx.previousMutation) {
-          // Rollback to snapshot
-          const restoredItems = await conversationContextService.restoreCart(conversationId, routeCtx.previousMutation.cartSnapshot);
-          await orderService.syncCartStateToDraftOrder(conversationId, storeId, customerId, restoredItems, null);
-          const cartSummary = restoredItems.length > 0
-            ? restoredItems.map(i => `• ${i.product} ×${typeof i.qty === 'number' ? i.qty : 1}`).join('\n')
-            : 'keranjang kosong';
-          const replyText = `Oke Kak, aku batalkan perubahan terakhir ya. *Keranjang sebelumnya* sudah dipulihkan:\n\n${cartSummary}`;
-          result = this.buildModifyCartResult(conversationId, replyText);
-        } else {
-          // Clarification needed — set pending BEFORE sending question (BAGIAN 2.2)
+    // ── BAGIAN 1: Normalizer (0 LLM) ───────────────────────────────────
+    // I12: guard nama produk — cek produk DULU (fuzzy match), jangan dimutasi.
+    stagesReached.push('normalizer');
+    const storeProducts = await this.getStoreProducts(storeId);
+    const productDictionary = storeProducts.map((p) => p.name);
+    const normalizedMsg = normalize(customerMessage, productDictionary);
+    
+    // Bangun PipelineContext sekali — dibawa ke Stage 3 + Stage 4.
+    const pipelineCtx: PipelineContext = await this.buildPipelineContext(
+      storeId,
+      customerId,
+      conversationId,
+      context,
+      customerCity,
+      conversation.customerName ?? null,
+      storeProducts
+    );
+    
+    // ── STAGE 3: Rule-based fast-path tiers (0 LLM) ────────────────────
+    // I13: reply Stage 3 hanya memakai harga dari DB, tidak dari LLM.
+    // getResponse kembalikan terminal fallback (source HUMAN) bila tidak ada
+    // tier yang cocok; perlakukan sebagai miss agar Stage 4 (LLM) dapat jalan.
+    stagesReached.push('tier3');
+    const tierResult = await fallbackService.getResponse(normalizedMsg, pipelineCtx);
+    if (tierResult && tierResult.source !== ResponseSource.HUMAN) {
+      result = tierResult;
+      finalIntent = 'fastpath';
+    }
+    
+    // ── STAGE 4: Single LLM Interpreter (MAKS 1 CALL) ──────────────────
+    // I8: cek ctx.llmCalledThisTurn sebelum panggil runOneCall.
+    if (!result && !pipelineCtx.llmCalledThisTurn) {
+      stagesReached.push('llm');
+      pipelineCtx.llmCalledThisTurn = true;
+      llmCallCount = 1;
+      finalIntent = 'llm';
+      const llmResult = await runOneCall(normalizedMsg, pipelineCtx);
+    
+      if (llmResult) {
+        finalIntent = llmResult.intent ?? 'llm';
+        let executedAdd = false;
+    
+        // I15: validateCartOps dipanggil sebelum executeCartOps.
+        if (llmResult.cart_ops && llmResult.cart_ops.length > 0) {
+          const { valid, missing } = validateCartOps(llmResult.cart_ops, storeProducts);
+          if (valid.length > 0) {
+            await this.executeCartOps(valid, pipelineCtx, normalizedMsg);
+            executedAdd = valid.some((o) => o.type === 'add');
+            cartOpsExecuted.push(...valid);
+          }
+          if (missing.length > 0) {
+            llmResult.missing_info = [...(llmResult.missing_info || []), ...missing];
+          }
+        }
+    
+        if (llmResult.clarification) {
+          // Simpan pending BEFORE kirim pertanyaan (BAGIAN 2.2)
           await conversationContextService.setPendingClarification(conversationId, {
-            question: 'Maaf Kak, bisa dijelaskan produk yang ingin diubah?',
-            options: [{ id: '0', label: 'tolong spesifikkan produk yang ingin dihapus' }],
-            expected_type: 'yes_no',
+            question: llmResult.clarification.question,
+            options: llmResult.clarification.options,
+            expected_type: llmResult.clarification.expected_type,
           });
-          const replyText = `Maaf Kak, bisa dijelaskan produk yang ingin diubah? Misalnya: "Hapus Wortel ya" atau "Ganti Brambang dengan Kentang".`;
           result = this.buildResult(conversationId, {
             source: ResponseSource.SOP,
-            content: replyText,
-            confidence: 0.7,
+            content: llmResult.clarification.question,
+            confidence: 0.85,
             cost: 0,
-            metadata: { reason: 'clarification_needed' },
+            metadata: { reason: 'clarification_asked' },
           });
+        } else if (llmResult.reply_draft) {
+          // Guardrail: reply_draft maks 2 kalimat
+          result = this.buildResult(conversationId, {
+            source: ResponseSource.AI,
+            content: truncateTo2Sentences(llmResult.reply_draft),
+            confidence: llmResult.confidence,
+            cost: 0,
+            metadata: {
+              source: 'interpreter',
+              intent: llmResult.intent,
+              missing_info: llmResult.missing_info || undefined,
+            },
+          });
+        } else if (executedAdd) {
+          // Safety-net: add dieksekusi tapi LLM tidak sertakan reply_draft →
+          // render keranjang dari DB state (harga dari DB, bukan LLM).
+          const cart = await this.getCartFromDb(conversationId);
+          const reply = await this.renderCartSummary(conversationId, cart, undefined);
+          result = this.buildModifyCartResult(conversationId, reply);
         }
       }
-      // For 'total', 'order_status', 'waterfall' -> fall through to waterfall below
-    } catch (err) {
-      adapters.logger.warn('decideRoute failed, falling through to waterfall', { conversationId, err });
     }
-
-// Stage 3 — Buy signal detection
-    const isBuySignal = !result && await fallbackService.detectBuySignal(normalizedMsg);
-    const hasPendingAmbiguity = !result && await fallbackService.hasPendingAmbiguity(conversationId);
-
-    if (!result && (isBuySignal || hasPendingAmbiguity)) {
-      result = await fallbackService.resolveBuySignal(context, normalizedMsg);
-    }
+    
+    // ── STAGE 5: Dead-end fallback ─────────────────────────────────────
     if (!result) {
-      result = await fallbackService.getResponse(context, normalizedMsg, true, customerCity);
+      stagesReached.push('deadend');
+      finalIntent = 'dead_end';
+      result = this.buildResult(conversationId, {
+        source: ResponseSource.HUMAN,
+        content: 'Maaf kak, saya kurang paham. Bisa diulang?',
+        confidence: 0.5,
+        cost: 0,
+        metadata: { reason: 'dead_end_fallback' },
+      });
     }
-
-    // ── BAGIAN 3: One-shot interpreter — only if normalizer + tier + resolver ALL miss ──
-    // I8: max 1 LLM call per message — proof via token-tracker
-    if (!result) {
-      const llmCalls = await countLlmCallsInWindow(conversationId, 120_000);
-      if (llmCalls === 0) {
-        const ctxRow = await prisma.conversationContext.findUnique({
-          where: { conversationId },
-          select: { extractedEntities: true },
-        });
-        const entities = conversationContextService.parseExtractedEntities(ctxRow?.extractedEntities);
-        const cart = entities.confirmedItems || [];
-        const activeOrder = await prisma.order.findFirst({
-          where: { conversationId, deletedAt: null, orderStatus: { notIn: ['shipped', 'delivered', 'cancelled'] } },
-          orderBy: { createdAt: 'desc' },
-          select: { id: true, orderStatus: true, items: true, notes: true },
-        });
-
-        const interpreterResult = await interpretMessage(
-          conversationId,
-          storeId,
-          normalizedMsg,
-          cart.map((i) => ({
-            product: i.product,
-            qty: typeof i.qty === 'number' ? i.qty : undefined,
-            price: i.price ?? undefined,
-          })),
-          activeOrder as any,
-          customerCity
-        );
-
-        if (interpreterResult) {
-          // If interpreter returned a clarification → SET pending BEFORE reply
-          if (interpreterResult.clarification) {
-            await conversationContextService.setPendingClarification(
-              conversationId,
-              buildPendingFromClarification(interpreterResult.clarification)
-            );
-          }
-
-          // Intent data → render from DB state (reply_draft is style only)
-          const addOps = (interpreterResult.cart_ops || []).filter((o: any) => o.type === 'add');
-          if (interpreterResult.intent === 'ADD_TO_CART' && addOps.length > 0) {
-            const addedItems = await conversationContextService.modifyCart(conversationId, 'add', {
-              addedProduct: addOps[0].product,
-              qty: interpreterResult.order_extract?.items?.[0]?.qty,
-            });
-            await orderService.syncCartStateToDraftOrder(conversationId, storeId, customerId, addedItems, null);
-            // Render cart from DB state
-            const reply = await this.renderCartSummary(conversationId, addedItems, addOps[0].product);
-            result = this.buildModifyCartResult(conversationId, reply);
-          } else if (interpreterResult.reply_draft) {
-            // Open intent → reply_draft langsung (maks 2 kalimat, gaya WA)
-            result = this.buildResult(conversationId, {
-              source: ResponseSource.AI,
-              content: interpreterResult.reply_draft,
-              confidence: interpreterResult.confidence,
-              cost: 0,
-              metadata: { source: 'interpreter', intent: interpreterResult.intent },
-            });
-          }
-        }
-      } else {
-        adapters.logger.warn('Interpreter skipped — LLM call budget exceeded (I8)', { conversationId, llmCalls });
-      }
-    }
+    
     await this.saveMessage({
       id: crypto.randomUUID(),
       conversationId,
@@ -311,7 +389,7 @@ export class ConversationService {
     } as ConversationMessage);
     await this.saveMessage(result.message);
     await this.updateConversationStats(context, result);
-
+    
     // Sinkronkan pesan ke context + refresh sesi
     await conversationContextService.appendMessage(conversationId, {
       id: crypto.randomUUID(),
@@ -319,33 +397,29 @@ export class ConversationService {
       sender: 'customer',
       content: customerMessage,
       createdAt: new Date(),
-    });
-await conversationContextService.appendMessage(conversationId, result.message);
+    } as ConversationMessage);
+    await conversationContextService.appendMessage(conversationId, result.message);
     await conversationContextService.refreshSession(conversationId);
-
+    
     // Non-blocking order extraction — fire and forget, errors caught silently
-orderService.extractAndSaveOrder(conversationId, customerId, storeId, normalizedMsg);
-
-    // Non-blocking conversational cart: sync confirmed items to draft order.
-    // Handles both single confirm (metadata.confirmedProduct) and multi-confirm (metadata.confirmedProducts).
-    // BUG-9: gunakan (isBuySignal || hasPendingAmbiguity) karena resolveBuySignal
-    // juga bisa berjalan via hasPendingAmbiguity (mis. "kangkung sama bawang aja").
-    if ((isBuySignal || hasPendingAmbiguity) && result.source === ResponseSource.PRODUCT) {
-      const meta = result.metadata || {};
-      if (meta.confirmedProduct) {
-        await this.syncConfirmedItemToCart(conversationId, storeId, customerId, meta.confirmedProduct as string);
-      } else if (meta.confirmedProducts) {
-        for (const name of meta.confirmedProducts as string[]) {
-          await this.syncConfirmedItemToCart(conversationId, storeId, customerId, name);
-        }
-      }
-    }
-
+    void orderService.extractAndSaveOrder(conversationId, customerId, storeId, normalizedMsg).catch(() => {});
+    
     // Done-ordering signal → finalize draft order to waiting_address
-if (orderService.detectDoneOrdering(normalizedMsg)) {
+    if (orderService.detectDoneOrdering(normalizedMsg)) {
       await orderService.finalizeDraftOrder(conversationId);
     }
-
+    
+    // ── Audit log (DoD FASE 5) ──
+    this.logPipelineAudit(conversationId, stagesReached, llmCallCount, finalIntent, cartOpsExecuted);
+    
+    result.metadata = {
+      ...(result.metadata || {}),
+      stagesReached,
+      llmCallCount,
+      finalIntent,
+      cartOpsExecuted: cartOpsExecuted.length,
+    };
+    
     return result;
 
   }
@@ -353,10 +427,125 @@ if (orderService.detectDoneOrdering(normalizedMsg)) {
   /**
    * Bungkus teks balasan MODIFY_CART menjadi ResponseResult standar.
    */
+  /**
+   * Ambil daftar produk aktif toko sebagai { name, price, stock }.
+   * Dipakai I12 (guard normalizer) + validasi interpreter (validateCartOps).
+   */
+  private async getStoreProducts(
+    storeId: string
+  ): Promise<PipelineContext['storeProducts']> {
+    const products = await productService.listActiveProducts(storeId);
+    return products.map((p) => ({
+      name: p.name,
+      price: p.price ?? 0,
+      stock: p.stock ?? null,
+    }));
+  }
+
+  /**
+   * Bangun PipelineContext (biru) dari ConversationContext DB + relasi.
+   * messages sudah termasuk pesan pelanggan terbaru (dari getOrCreateContext).
+   */
+  private async buildPipelineContext(
+    storeId: string,
+    customerId: string,
+    conversationId: string,
+    context: ConversationContext,
+    customerCity: string | null,
+    customerName: string | null,
+    storeProducts: PipelineContext['storeProducts']
+  ): Promise<PipelineContext> {
+    const ctxRow = await prisma.conversationContext.findUnique({
+      where: { conversationId },
+      select: { extractedEntities: true },
+    });
+    const entities = conversationContextService.parseExtractedEntities(ctxRow?.extractedEntities);
+    const cart = entities.confirmedItems || [];
+
+    const activeOrder = await prisma.order.findFirst({
+      where: {
+        conversationId,
+        deletedAt: null,
+        orderStatus: { notIn: ['shipped', 'delivered', 'cancelled'] },
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, orderStatus: true, items: true, notes: true },
+    });
+
+    return {
+      storeId,
+      customerId,
+      conversationId,
+      messages: context.messages,
+      customerCity,
+      customerName,
+      cart,
+      activeOrder: activeOrder as PipelineContext['activeOrder'],
+      pendingClarification: entities.pendingClarification ?? null,
+      llmCalledThisTurn: false,
+      storeProducts,
+    };
+  }
+
+  /**
+   * Execute (add / remove) validated cart_ops ke DB, lalu sync ke draft order.
+   * Untuk remove, snapshot cart sebelum mutasi agar negasi -> rollback masih
+   * memungkinkan. I15: hanya dipanggil setelah validateCartOps mengembalikan valid.
+   */
+  private async executeCartOps(
+    ops: CartOp[],
+    pipelineCtx: PipelineContext,
+    message: string
+  ): Promise<ConfirmedItem[]> {
+    const { conversationId, storeId, customerId } = pipelineCtx;
+
+    const hasRemove = ops.some((o) => o.type === 'remove');
+    let cartBefore: ConfirmedItem[] = [];
+    if (hasRemove) {
+      cartBefore = await this.getCartFromDb(conversationId);
+      await this.storePreviousMutation(
+        conversationId,
+        cartBefore.map((i) => ({ product: i.product, qty: i.qty ?? null, price: i.price ?? null })),
+        message
+      );
+    }
+
+    let items: ConfirmedItem[] = cartBefore;
+    for (const op of ops) {
+      if (op.type === 'add') {
+        items = await conversationContextService.modifyCart(conversationId, 'add', {
+          addedProduct: op.product,
+          qty: op.qty,
+          price: op.price,
+        });
+      } else if (op.type === 'remove') {
+        items = await conversationContextService.modifyCart(conversationId, 'remove', {
+          cancelledProduct: op.product,
+        });
+      }
+    }
+
+    if (ops.length > 0) {
+      await orderService.syncCartStateToDraftOrder(conversationId, storeId, customerId, items, null);
+    }
+    return items;
+  }
+
+  /**
+   * Baca snapshot keranjang terkonfirmasi dari DB (extractedEntities).
+   */
+  private async getCartFromDb(conversationId: string): Promise<ConfirmedItem[]> {
+    const ctxRow = await prisma.conversationContext.findUnique({
+      where: { conversationId },
+      select: { extractedEntities: true },
+    });
+    return conversationContextService.parseExtractedEntities(ctxRow?.extractedEntities).confirmedItems || [];
+  }
+
   /** BAGIAN 2.4 — Store previousCart snapshot untuk rollback */
   private async storePreviousMutation(
     conversationId: string,
-    cartSnapshot: ConfirmedItemLike[],
+    cartSnapshot: { product: string; qty?: number | string | null; price?: number | null }[],
     message: string
   ): Promise<void> {
     try {
@@ -508,47 +697,6 @@ if (orderService.detectDoneOrdering(normalizedMsg)) {
       });
     } catch (error) {
       adapters.logger.error('Failed to save message', error as Error);
-    }
-  }
-
-  /**
-   * Sync confirmed items and shipping info from conversation context to draft order.
-   */
-  private async syncConfirmedItemToCart(
-    conversationId: string,
-    storeId: string,
-    customerId: string,
-    productName: string
-  ): Promise<void> {
-    try {
-      const ctx = await prisma.conversationContext.findUnique({
-        where: { conversationId },
-        select: { extractedEntities: true },
-      });
-
-      if (!ctx?.extractedEntities) return;
-
-      const raw = ctx.extractedEntities as Record<string, unknown> | null;
-      if (!raw || Array.isArray(raw)) return;
-
-      const confirmed = Array.isArray(raw.confirmedItems)
-        ? raw.confirmedItems as ConfirmedItem[]
-        : [];
-      const shippingAddress = typeof raw.shippingAddress === 'string' ? raw.shippingAddress : null;
-
-      await orderService.syncCartStateToDraftOrder(
-        conversationId,
-        storeId,
-        customerId,
-        confirmed,
-        shippingAddress
-      );
-    } catch (error) {
-      adapters.logger.warn('Failed to sync confirmed item to cart', {
-        conversationId,
-        productName,
-        error: (error as Error).message,
-      });
     }
   }
 
@@ -791,6 +939,52 @@ if (orderService.detectDoneOrdering(normalizedMsg)) {
       faqResponseCount: conv.faqResponseCount,
       history,
     };
+  }
+
+  // ── Audit logging (DoD FASE 5) ──────────────────────────────────────────
+  private logPipelineAudit(
+    conversationId: string,
+    stagesReached: string[],
+    llmCallCount: number,
+    finalIntent: string | null,
+    cartOpsExecuted: CartOp[]
+  ): void {
+    adapters.logger.info('Pipeline audit', {
+      conversationId,
+      stagesReached,
+      llmCallCount,
+      finalIntent,
+      cartOpsExecuted: cartOpsExecuted.length,
+    });
+  }
+
+  // ── Flatten pending clarification options into CartOp[] ───────────────
+  private flattenPendingOps(pending: PendingClarification): CartOp[] {
+    const ops: CartOp[] = [];
+    if (pending.options && pending.options.length > 0) {
+      for (const opt of pending.options) {
+        const cartOps = (opt as { cartOps?: CartOp[] })?.cartOps;
+        if (cartOps) ops.push(...cartOps);
+      }
+    }
+    return ops;
+  }
+
+  // ── Clear previousMutation snapshot from extractedEntities ───────────
+  private async clearPreviousMutation(conversationId: string): Promise<void> {
+    try {
+      const ctxRow = await prisma.conversationContext.findUnique({
+        where: { conversationId },
+        select: { extractedEntities: true },
+      });
+      const entities = conversationContextService.parseExtractedEntities(ctxRow?.extractedEntities);
+      await prisma.conversationContext.update({
+        where: { conversationId },
+        data: { extractedEntities: { ...entities, previousMutation: null } as any },
+      });
+    } catch (e) {
+      adapters.logger.warn('Failed to clear previousMutation', { error: (e as Error).message });
+    }
   }
 }
 

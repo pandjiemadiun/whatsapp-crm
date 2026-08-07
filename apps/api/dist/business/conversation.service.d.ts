@@ -23,6 +23,26 @@ export declare class ConversationService {
     /**
      * Bungkus teks balasan MODIFY_CART menjadi ResponseResult standar.
      */
+    /**
+     * Ambil daftar produk aktif toko sebagai { name, price, stock }.
+     * Dipakai I12 (guard normalizer) + validasi interpreter (validateCartOps).
+     */
+    private getStoreProducts;
+    /**
+     * Bangun PipelineContext (biru) dari ConversationContext DB + relasi.
+     * messages sudah termasuk pesan pelanggan terbaru (dari getOrCreateContext).
+     */
+    private buildPipelineContext;
+    /**
+     * Execute (add / remove) validated cart_ops ke DB, lalu sync ke draft order.
+     * Untuk remove, snapshot cart sebelum mutasi agar negasi -> rollback masih
+     * memungkinkan. I15: hanya dipanggil setelah validateCartOps mengembalikan valid.
+     */
+    private executeCartOps;
+    /**
+     * Baca snapshot keranjang terkonfirmasi dari DB (extractedEntities).
+     */
+    private getCartFromDb;
     /** BAGIAN 2.4 — Store previousCart snapshot untuk rollback */
     private storePreviousMutation;
     /** BAGIAN 2.5 — Render cart state dari DB (bukan dari memory) */
@@ -31,10 +51,6 @@ export declare class ConversationService {
     private buildResult;
     private getOrCreateContext;
     private saveMessage;
-    /**
-     * Sync confirmed items and shipping info from conversation context to draft order.
-     */
-    private syncConfirmedItemToCart;
     private updateConversationStats;
     /**
      * Ambil percakapan lengkap termasuk context dan orders (dengan items).
