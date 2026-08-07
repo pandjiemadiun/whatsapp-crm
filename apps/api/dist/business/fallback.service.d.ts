@@ -1,6 +1,6 @@
-import { ResponseOption, ConversationContext, ResponseResult } from '../domain/types.js';
+import { ResponseOption, ConversationContext, ResponseResult, PipelineContext } from '../domain/types.js';
 export declare class FallbackService {
-    getResponse(context: ConversationContext, customerMessage: string, askIdentity?: boolean, customerCity?: string | null): Promise<ResponseResult>;
+    getResponse(normalizedMsg: string, ctx: PipelineContext): Promise<ResponseResult>;
     private tryCache;
     private tryFAQ;
     private tryKnowledge;
@@ -12,7 +12,6 @@ export declare class FallbackService {
     private tryOrderStatus;
     private tryTotal;
     private trySop;
-    private tryAI;
     private validateDescriptionAgainstProducts;
     private getStoreProfile;
     private createResult;
@@ -22,24 +21,6 @@ export declare class FallbackService {
      * Caps last 10 entries (drop oldest), gunakan upsert untuk race-safe.
      */
     private saveDiscussedItems;
-    private static readonly BUY_KEYWORDS;
-    /**
-     * Deteksi sinyal pembelian.
-     * Keyword heuristic dulu — hanya call LLM jika tidak match keyword sama sekali.
-     */
-    detectBuySignal(message: string): Promise<boolean>;
-    /**
-     * Cek apakah ada pending ambiguous prompt di extractedEntities.
-     * Jika ada, caller harus selalu coba resolveBuySignal meski detectBuySignal false.
-     */
-    hasPendingAmbiguity(conversationId: string): Promise<boolean>;
-    /**
-     * Resolve a buy signal against the conversation's extractedEntities.
-     * Handles 4 cases (A: single→confirm, B: ambiguous→ask back, C: correction,
-     * and the "resolve against lastAmbiguousPrompt" sub-branch).
-     * Returns ResponseResult if resolved, null if caller should fall through to normal chain.
-     */
-    resolveBuySignal(context: ConversationContext, message: string): Promise<ResponseResult | null>;
     private parseEntities;
     private upsertExtractedEntities;
     /**

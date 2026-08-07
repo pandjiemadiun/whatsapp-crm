@@ -2,31 +2,75 @@
  * Pending Clarification Resolver — BAGIAN 2
  * src/services/chat/pendingClarification.ts
  *
- * Pure resolver: given a normalizedText + pendingClarification state,
- * determine whether customer's reply resolves the clarification.
+ * Fase 1 (introduksi) memperkenalkan resolver pure baru: resolvePending(ctx, message).
  *
- * Afirmatif → execute cart_ops TANPA LLM.
- * Negasi → rollback snapshot, clear pending.
- * Eksplisit (angka/urutan) → pilih opsi spesifik.
- * Miss → retry (retry_count ≤1) atau eskalasi ke pemilik toko.
+ * resolvePending — PURE & SYNCHRONOUS (0 LLM, rule-based).
+ *   Guard afirmatif/negasi, lalu retry-cap (maks 1) → escalate.
+ *   I10: afirmatif/negasi menutup klarifikasi tanpa LLM.
+ *
+ * Untuk menjaga kompilasi dependen lama (clarification-resolver.ts + test lama
+ * multi-turn / ot-percakapa) tetap utuh, modul ini JUGA mengekspor:
+ *   - resolvePendingClarification(message, pending)  -> status-based ResolverResult
+ *   - normalizeForMatch, isAffirmative, isNegation
+ *   - selectOption, parseExplicitChoice
+ *
+ * Catatan migrasi: resolvePending (baru, substring-includes) dan
+ * resolvePendingClarification (lama, whole-word) memiliki semantik match yang
+ * membedakan — ini menahan perilaku lama sampai orkestrator dilakoni fase berikutnya.
+ * conversation.service.ts / clarification-resolver.ts TIDAK disentuh fase ini.
  */
-import type { PendingClarification, ResolverResult } from '../../domain/types.js';
+import type { PendingClarification, CartOp, ResolverResult } from '../../domain/types.js';
+/** State pending yang dibawa resolvePending (camelCase, per spesifikasi fase 2). */
+export interface PendingClarificationState {
+    ops?: CartOp[];
+    snapshot?: unknown;
+    retryCount?: number;
+}
+export interface ResolvePendingContext {
+    pending: PendingClarificationState;
+    requiresHumanReview?: boolean;
+}
+/** Hasil resolver — aksi yang dieksekusi setelah clarifying question dijawab. */
+export interface ResolvePendingResult {
+    action: 'EXECUTE' | 'ROLLBACK' | 'RETRY' | 'ESCALATE';
+    /** Ops yang dieksekusi (hanya EXECUTE) */
+    ops?: CartOp[];
+    /** Snapshot cart sebelum mutasi (hanya ROLLBACK) */
+    snapshot?: unknown;
+}
+/**
+ * Resolver utama — BAGIAN 2 (spesifikasi).
+ *
+ * @param ctx     { pending: { ops?, snapshot?, retryCount? }, requiresHumanReview }
+ * @param message  pesan mentah customer
+ * @returns ResolvePendingResult  (action-based)
+ */
+export declare function resolvePending(ctx: ResolvePendingContext, message: string): ResolvePendingResult;
+/**
+ * Normalisasi teks untuk matching: lowercase, trim, squash huruf berulang,
+ * buang trailing punctuation, collapse whitespace.
+ */
 export declare function normalizeForMatch(text: string): string;
-/** Cek apakah teks mengandung kata afirmatif */
+/** Cek apakah teks mengandung kata afirmatif (whole-word match). */
 export declare function isAffirmative(text: string): boolean;
-/** Cek apakah teks mengandung kata negasi */
+/** Cek apakah teks mengandung kata negasi. */
 export declare function isNegation(text: string): boolean;
-/** Cek apakah teks memilih opsi eksplisit (angka, "yang pertama", dsb) */
-export declare function parseExplicitChoice(text: string): number | null;
 /**
- * Cek apakah teks memilih opsi spesifik dari clarification.options.
- * Fuzzy match per kata kunci.
+ * Resolver kompatibilitas lama — PURE, status-based.
+ * Dipakai clarification-resolver.ts (re-export + dynamic import) dan test lama.
+ *
+ * @param message  pesan mentah customer
+ * @param pending  PendingClarification dari DB
+ * @returns ResolverResult (status: RESOLVED | NEED_RETRY | ESCALATE | NOT_PENDING_ANSWER)
  */
-export declare function selectOption(text: string, options: any[]): string[];
+export declare function resolvePendingClarification(message: string, pending: PendingClarification): ResolverResult;
 /**
- * @param normalizedText  pesan yang sudah dinormalisasi
- * @param pending         state pending clarification dari DB
- * @returns ResolverResult
+ * Pilih opsi yang cocok (keyword, case-insensitive) dari daftar label string.
  */
-export declare function resolvePendingClarification(normalizedText: string, pending: PendingClarification): ResolverResult;
+export declare function selectOption(text: string, options: string[]): string[];
+/**
+ * Parse pilihan eksplisit customer terhadap opsi.
+ * Mengembalikan opsi pertama yang cocok, atau null.
+ */
+export declare function parseExplicitChoice(text: string, options: string[]): string | null;
 //# sourceMappingURL=pendingClarification.d.ts.map

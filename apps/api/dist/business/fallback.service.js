@@ -1,13 +1,10 @@
 import { adapters } from '../adapters/container.js';
-import { getAiDefaults } from '../adapters/ai/ai-config.js';
-import { groqAdapter } from '../adapters/ai/groq.adapter.js';
 import { faqService } from './faq.service.js';
 import { knowledgeService } from './knowledge.service.js';
 import { productService } from './product.service.js';
 import { prisma } from '../infrastructure/prisma.js';
 import { ResponseSource, } from '../domain/types.js';
 import { isDeadEnd } from '../services/message-queue.service.js';
-const ROLLING_CONTEXT_SIZE = 10;
 // In-memory cache for store profiles (TTL: 10 minutes)
 const storeProfileCache = new Map();
 const STORE_PROFILE_TTL_MS = 10 * 60 * 1000;
@@ -39,9 +36,19 @@ function formatOperatingHours(operatingHours) {
     return lines.length > 0 ? lines.join(', ') : null;
 }
 export class FallbackService {
-    async getResponse(context, customerMessage, askIdentity = true, customerCity = null) {
-        // Dead-end detection: jika penutupan, langsung return tanpa LLM
-        if (customerMessage && isDeadEnd(customerMessage)) {
+    async getResponse(normalizedMsg, ctx) {
+        const context = {
+            storeId: ctx.storeId,
+            customerId: ctx.customerId,
+            conversationId: ctx.conversationId,
+            messages: ctx.messages,
+            lastMessageAt: ctx.messages.length > 0
+                ? ctx.messages[ctx.messages.length - 1].createdAt
+                : new Date(),
+            status: 'active',
+        };
+        // Dead-end detection
+        if (normalizedMsg && isDeadEnd(normalizedMsg)) {
             return this.createResult(context, {
                 source: ResponseSource.DEAD_END,
                 content: '',
@@ -50,60 +57,56 @@ export class FallbackService {
                 metadata: { reason: 'dead_end_detected' },
             }, ResponseSource.DEAD_END);
         }
-        const cachedResponse = await this.tryCache(context, customerMessage);
+        const cachedResponse = await this.tryCache(context, normalizedMsg);
         if (cachedResponse && cachedResponse.confidence > 0.8) {
             return this.createResult(context, cachedResponse, ResponseSource.CACHE);
         }
-        const faqResponse = await this.tryFAQ(context, customerMessage);
+        const faqResponse = await this.tryFAQ(context, normalizedMsg);
         if (faqResponse && faqResponse.confidence > 0.35) {
             return this.createResult(context, faqResponse, ResponseSource.FAQ);
         }
         // Order status tier — "sudah dikirim?", "status pesanan?"
-        const orderStatusResponse = await this.tryOrderStatus(context, customerMessage);
+        const orderStatusResponse = await this.tryOrderStatus(context, normalizedMsg);
         if (orderStatusResponse && orderStatusResponse.confidence > 0.5) {
             return this.createResult(context, orderStatusResponse, ResponseSource.ORDER_STATUS);
         }
         // Total tier — "totalnya berapa?", "jumlahnya?"
-        const totalResponse = await this.tryTotal(context, customerMessage, customerCity);
+        const totalResponse = await this.tryTotal(context, normalizedMsg, ctx.customerCity);
         if (totalResponse && totalResponse.confidence > 0.5) {
             return this.createResult(context, totalResponse, ResponseSource.TOTAL);
         }
         // BUG-10/12 fix: shipping + payment check BEFORE product.
         // Product search has substring matching — "bayar" → "Bawang" misfire.
         // Monetary/logistics keywords must be intercepted before product lookup.
-        const shippingResponse = await this.tryShipping(context, customerMessage, customerCity, askIdentity);
+        const shippingResponse = await this.tryShipping(context, normalizedMsg, ctx.customerCity, false);
         if (shippingResponse && shippingResponse.confidence > 0.5) {
             return this.createResult(context, shippingResponse, ResponseSource.SHIPPING);
         }
-        const paymentResponse = await this.tryPayment(context, customerMessage);
+        const paymentResponse = await this.tryPayment(context, normalizedMsg);
         if (paymentResponse && paymentResponse.confidence > 0.5) {
             return this.createResult(context, paymentResponse, ResponseSource.PAYMENT);
         }
-        const catalogResponse = await this.tryCatalog(context, customerMessage);
+        const catalogResponse = await this.tryCatalog(context, normalizedMsg);
         if (catalogResponse && catalogResponse.confidence > 0.5) {
             return this.createResult(context, catalogResponse, ResponseSource.CATALOG);
         }
-        const productResponse = await this.tryProduct(context, customerMessage);
+        const productResponse = await this.tryProduct(context, normalizedMsg);
         if (productResponse && productResponse.confidence > 0.5) {
             await this.saveDiscussedItems(context.conversationId, productResponse);
             return this.createResult(context, productResponse, ResponseSource.PRODUCT);
         }
         // BAGIAN 1.6 - Product-not-found: deterministic, no LLM
-        const notFoundResponse = await this.tryProductNotFound(context, customerMessage);
+        const notFoundResponse = await this.tryProductNotFound(context, normalizedMsg);
         if (notFoundResponse && notFoundResponse.confidence > 0.5) {
             return this.createResult(context, notFoundResponse, ResponseSource.CATALOG);
         }
-        const sopResponse = await this.trySop(context, customerMessage);
+        const sopResponse = await this.trySop(context, normalizedMsg);
         if (sopResponse && sopResponse.confidence > 0.5) {
             return this.createResult(context, sopResponse, ResponseSource.SOP);
         }
-        const knowledgeResponse = await this.tryKnowledge(context, customerMessage);
+        const knowledgeResponse = await this.tryKnowledge(context, normalizedMsg);
         if (knowledgeResponse && knowledgeResponse.confidence > 0.35) {
             return this.createResult(context, knowledgeResponse, ResponseSource.KNOWLEDGE);
-        }
-        const aiResponse = await this.tryAI(context, customerMessage);
-        if (aiResponse && aiResponse.confidence > 0.5) {
-            return this.createResult(context, aiResponse, ResponseSource.AI);
         }
         return this.createResult(context, {
             source: ResponseSource.HUMAN,
@@ -185,31 +188,13 @@ export class FallbackService {
                 .map(p => `- ${p.name}${p.price ? ` (Rp ${p.price})` : ''}${p.stock !== null && p.stock > 0 ? ` (stok: ${p.stock})` : ''}`)
                 .join('\n');
             const rawAnswer = `Produk yang tersedia di toko kami:\n${productList}`;
-            try {
-                const prompt = `Berikan daftar produk berikut dalam bahasa Indonesia yang ramah dan singkat untuk WhatsApp commerce. Gunakan emoji minimal:\n\n${productList}`;
-                const paraphrased = await groqAdapter.generate(prompt, {
-                    temperature: 0.3,
-                    maxTokens: 300,
-                    intent: 'paraphrase',
-                    conversationId: context.conversationId,
-                });
-                return {
-                    source: ResponseSource.CATALOG,
-                    content: paraphrased.content || rawAnswer,
-                    confidence: 0.85,
-                    cost: paraphrased.cost || 0,
-                    metadata: { productCount: products.length },
-                };
-            }
-            catch {
-                return {
-                    source: ResponseSource.CATALOG,
-                    content: rawAnswer,
-                    confidence: 0.8,
-                    cost: 0,
-                    metadata: { productCount: products.length },
-                };
-            }
+            return {
+                source: ResponseSource.CATALOG,
+                content: rawAnswer,
+                confidence: 0.85,
+                cost: 0,
+                metadata: { productCount: products.length },
+            };
         }
         catch {
             adapters.logger.warn('Catalog listing failed, skipping to next fallback tier');
@@ -649,111 +634,6 @@ export class FallbackService {
             return null;
         }
     }
-    async tryAI(context, query) {
-        try {
-            // Load custom system prompt from store settings (store-level), fallback to default
-            let systemPrompt = 'You are a helpful WhatsApp commerce assistant for Indonesian MSMEs. Answer concisely and professionally.';
-            try {
-                const setting = await prisma.storeSetting.findUnique({
-                    where: { storeId_key: { storeId: context.storeId, key: 'ai_system_prompt' } },
-                });
-                if (setting?.value) {
-                    systemPrompt = setting.value;
-                }
-            }
-            catch {
-                // Fallback to default on error
-            }
-            // MISI 1 — Anti-hallination: inject produk DB ke system prompt, dan block hallucinasi
-            const activeProducts = await productService.listActiveProducts(context.storeId);
-            if (activeProducts.length === 0) {
-                return {
-                    source: ResponseSource.AI,
-                    content: 'Saat ini kami belum mengisi katalog produk. Silakan tanya langsung ke pemilik toko ya, Kak.',
-                    confidence: 0.95,
-                    cost: 0,
-                };
-            }
-            const productCatalog = activeProducts
-                .map(p => `- ${p.name}: Rp ${p.price?.toLocaleString('id-ID')?.replace(/,/g, '.') || '0'} (stok: ${p.stock ?? 0})`)
-                .join('\n');
-            systemPrompt += `\n\n[PRODUK YANG TERSEDIA — HANYA SEBUTKAN DARI LIST INI]\n${productCatalog}\n\nATURAN KERAS: Jangan pernah menyebut produk di luar list di atas. Jika pelanggan tanya produk yang tidak ada, jawab: 'Maaf Kak, produk itu belum tersedia di toko kami saat ini.'`;
-            // Inject store profile (cached, TTL 10 min)
-            const storeProfile = await this.getStoreProfile(context.storeId);
-            if (storeProfile) {
-                systemPrompt = `${systemPrompt}\n\n[Info Toko]\n${storeProfile}`;
-            }
-            // Inject current active cart context if available
-            try {
-                const ctxRow = await prisma.conversationContext.findUnique({
-                    where: { conversationId: context.conversationId },
-                    select: { extractedEntities: true },
-                });
-                const entities = this.parseEntities(ctxRow?.extractedEntities);
-                if (entities.confirmedItems && entities.confirmedItems.length > 0) {
-                    const cartList = entities.confirmedItems
-                        .map((i) => {
-                        const qty = typeof i.qty === 'number' ? i.qty : 1;
-                        const price = typeof i.price === 'number' ? i.price : 0;
-                        return `- ${i.product} (${qty}x, Rp ${price * qty})`;
-                    })
-                        .join('\n');
-                    systemPrompt += `\n\n[Status Keranjang Belanja Pelanggan Saat Ini]\n${cartList}`;
-                    if (entities.shippingAddress) {
-                        systemPrompt += `\nAlamat Pengiriman: ${entities.shippingAddress}`;
-                    }
-                }
-            }
-            catch {
-                // ignore context read error
-            }
-            // Inject platform style guide (config-backed, hot-reloadable)
-            const aiDefaults = await getAiDefaults();
-            if (aiDefaults.styleGuide) {
-                systemPrompt += `\n\n${aiDefaults.styleGuide}`;
-            }
-            // Rolling context window: last 5-10 messages
-            const recent = context.messages.slice(-ROLLING_CONTEXT_SIZE);
-            const historyLines = recent
-                .map((m) => `${m.sender === 'customer' ? 'User' : 'Assistant'}: ${m.content}`)
-                .join('\n');
-            const history = historyLines ? `Riwayat percakapan:\n${historyLines}\n\n` : '';
-            // Build single prompt — llm.chat sends to Gemini (Primary Generative Speaker)
-            const fullQuery = `[Instruksi Sistem]\n${systemPrompt}\n\n${history}[Pesan Pengguna]\n${query}`;
-            const messages = [{ role: 'user', content: fullQuery }];
-            const result = await adapters.llm.chat(messages, {
-                temperature: aiDefaults.temperature,
-                topP: aiDefaults.topP,
-                maxTokens: aiDefaults.maxTokensGemini,
-                intent: 'tryAI',
-                conversationId: context.conversationId,
-            });
-            // Cache the LLM response for future similar queries (TTL: 1 hour)
-            const cacheKey = `response:${context.storeId}:${query}`;
-            adapters.cache.set(cacheKey, { content: result.content }, 3600).catch(() => { });
-            return {
-                source: ResponseSource.AI,
-                content: result.content,
-                confidence: 0.6,
-                cost: result.cost || 0,
-            };
-        }
-        catch (err) {
-            const isCircuitBreaker = err.message?.includes('Circuit breaker');
-            adapters.logger.warn('AI fallback (tryAI) failed — entering degraded mode', {
-                storeId: context.storeId,
-                conversationId: context.conversationId,
-                error: err.message,
-                circuitBreaker: isCircuitBreaker,
-            });
-            return {
-                source: ResponseSource.HUMAN,
-                content: 'Mohon maaf, saya belum bisa menjawab pertanyaan itu saat ini. Untuk info produk, ongkir, pembayaran, dan status pesanan, saya tetap bisa membantu Kak. 😊',
-                confidence: 0.55,
-                cost: 0,
-            };
-        }
-    }
     async validateDescriptionAgainstProducts(storeId, description) {
         const dbProductNames = await productService.listActiveProducts(storeId);
         const dbNames = dbProductNames.map(p => p.name.toLowerCase());
@@ -935,222 +815,6 @@ export class FallbackService {
             });
         }
     }
-    /**
-     * Deteksi sinyal pembelian.
-     * Keyword heuristic dulu — hanya call LLM jika tidak match keyword sama sekali.
-     */
-    async detectBuySignal(message) {
-        const lower = message.trim().toLowerCase();
-        // 1. Keyword check — fast path
-        const hasKeyword = FallbackService.BUY_KEYWORDS.some(kw => lower.includes(kw));
-        if (hasKeyword)
-            return true;
-        // 2. LLM classification — hanya untuk kasus ambigu
-        try {
-            const result = await adapters.llm.chat([
-                {
-                    role: 'user',
-                    content: `Kamu adalah asisten AI untuk aplikasi WhatsApp commerce Indonesia.
-Tentukan apakah pesan berikut merupakan sinyal pembelian (intent to buy / order).
-Contoh sinyal pembelian: "saya mau", "oke ambil", "checkout", "gas", "cod aja", "pesan ya", dll.
-Pesan: "${message}"
-
-Jawab HANYA "YES" jika ini sinyal pembelian, "NO" jika tidak.`,
-                },
-            ]);
-            const verdict = result.content.trim().toUpperCase();
-            return verdict === 'YES';
-        }
-        catch (err) {
-            adapters.logger.warn('Buy signal LLM classification failed, treating as false', {
-                error: err.message,
-            });
-            return false;
-        }
-    }
-    /**
-     * Cek apakah ada pending ambiguous prompt di extractedEntities.
-     * Jika ada, caller harus selalu coba resolveBuySignal meski detectBuySignal false.
-     */
-    async hasPendingAmbiguity(conversationId) {
-        const ctx = await prisma.conversationContext.findUnique({
-            where: { conversationId },
-            select: { extractedEntities: true },
-        });
-        const entities = this.parseEntities(ctx?.extractedEntities);
-        return (entities.lastAmbiguousPrompt?.trim()?.length ?? 0) > 0;
-    }
-    /**
-     * Resolve a buy signal against the conversation's extractedEntities.
-     * Handles 4 cases (A: single→confirm, B: ambiguous→ask back, C: correction,
-     * and the "resolve against lastAmbiguousPrompt" sub-branch).
-     * Returns ResponseResult if resolved, null if caller should fall through to normal chain.
-     */
-    async resolveBuySignal(context, message) {
-        // 1. Baca extractedEntities dari conversation_context
-        const ctx = await prisma.conversationContext.findUnique({
-            where: { conversationId: context.conversationId },
-            select: { extractedEntities: true },
-        });
-        const entities = this.parseEntities(ctx?.extractedEntities);
-        const discussed = entities.discussedItems;
-        const confirmed = entities.confirmedItems;
-        const lastAmbiguous = entities.lastAmbiguousPrompt;
-        // Buy signal but tidak ada discussedItems dan confirmedItems — fall through to normal chain
-        if (discussed.length === 0 && confirmed.length === 0)
-            return null;
-        // BUG-10/12 permanent fix: Payment/Shipping/SOP queries must NEVER be
-        // intercepted by resolveBuySignal, even if there are pending items in cart.
-        // These are tier-specific intents — the waterfall should handle them.
-        const lowerTrimmed = message.trim().toLowerCase();
-        const isPaymentQuery = /bayar|pembayaran|transfer|rekening|qris|cod|cash|metode|pakai apa|pake apa|via|debit|kredit|ovo|gopay|dana|atm|va|virtual account/.test(lowerTrimmed);
-        const isShippingQuery = /ongkir|kirim|pengiriman|kurir|ekspedisi|jne|j&t|sicepat|anteraja|gosend|grab|diantar|pickup|pengiriman|biaya kirim/.test(lowerTrimmed);
-        const isSopQuery = /sop|retur|komplain|garansi|rusak|stok habis|kosong|barang rusak|pengembalian|refund|prosedur|kebijakan/.test(lowerTrimmed);
-        const isDoneOrdering = /udah segitu|udha segitu|checkout|total berapa|minta total|proses pesanan|kirim pesanan|lunas|lanjut bayar/.test(lowerTrimmed);
-        if (isPaymentQuery || isShippingQuery || isSopQuery || isDoneOrdering)
-            return null;
-        // BUG-4: Semua item sudah dikonfirmasi, belum ada yang dibahas lagi
-        if (discussed.length === 0 && confirmed.length > 0) {
-            const itemList = confirmed
-                .map(i => `• ${i.product} — ${this.formatPrice(i.price ?? 0)}`)
-                .join('\n');
-            return this.createResult(context, {
-                source: ResponseSource.PRODUCT,
-                content: `Siap Kak! Ini rincian keranjang belanja Kakak saat ini:\n\n${itemList}\n\nAda tambahan item lagi Kak, atau mau lanjut infokan *Nama Lengkap & Alamat Pengiriman* untuk dihitung ongkirnya?`,
-                confidence: 0.9,
-                cost: 0,
-            }, ResponseSource.PRODUCT);
-        }
-        const lower = message.trim().toLowerCase();
-        // ── Case E: Correction — "eh bunot, cuma wortel doang"
-        const correctionMatch = this.detectCorrection(lower, confirmed);
-        if (correctionMatch) {
-            const updatedConfirmed = confirmed.filter(c => c.product.toLowerCase() !== correctionMatch.toLowerCase());
-            const remaining = updatedConfirmed;
-            const removed = confirmed.find(c => c.product.toLowerCase() === correctionMatch.toLowerCase());
-            const reply = removed
-                ? `Siap Kak, ${removed.product} sudah dihapus dari keranjang.\n` +
-                    (remaining.length
-                        ? `Sisa item di keranjang: ${remaining.map(i => `${i.product} (${this.formatPrice(i.price ?? 0)})`).join(', ')}`
-                        : 'Saat ini keranjang belanja Kakak masih kosong.')
-                : ' tidak ditemukan di keranjang Anda.';
-            const updated = { ...entities, confirmedItems: remaining, lastAmbiguousPrompt: null };
-            await this.upsertExtractedEntities(context.conversationId, updated);
-            return this.createResult(context, {
-                source: ResponseSource.PRODUCT,
-                content: reply,
-                confidence: 0.8,
-                cost: 0,
-            }, ResponseSource.PRODUCT);
-        }
-        // ── Sub-branch: resolve against lastAmbiguousPrompt
-        if (lastAmbiguous && lastAmbiguous.trim()) {
-            // "dua-duanya" → confirm ALL discussedItems
-            if (lower.includes('dua-duanya') || lower.includes('kedua') || lower.includes('semua')) {
-                const now = new Date().toISOString();
-                const newlyConfirmed = discussed.map(d => ({ ...d, confirmedAt: now }));
-                const merged = [...confirmed, ...newlyConfirmed];
-                const updated = { ...entities, confirmedItems: merged, discussedItems: [], lastAmbiguousPrompt: null };
-                await this.upsertExtractedEntities(context.conversationId, updated);
-                const itemList = newlyConfirmed.map(i => `• ${i.product} — ${this.formatPrice(i.price ?? 0)}`).join('\n');
-                return this.createResult(context, {
-                    source: ResponseSource.PRODUCT,
-                    content: `Sip Kak! Keranjang belanja Kakak sudah diupdate:\n\n${itemList}\n\nAda yang mau ditambah lagi Kak, atau mau langsung checkout?`,
-                    confidence: 0.8,
-                    cost: 0,
-                    metadata: { confirmedProducts: newlyConfirmed.map(i => i.product) },
-                }, ResponseSource.PRODUCT);
-            }
-            // "kangkung aja" / "kangkung sama bawang aja" → confirm ALL matching discussed items
-            const matchedItems = discussed.filter(d => lower.includes(d.product.toLowerCase()));
-            if (matchedItems.length > 0) {
-                const now = new Date().toISOString();
-                const newConfirmed = matchedItems.map(d => ({ ...d, confirmedAt: now }));
-                const matchedNames = new Set(matchedItems.map(m => m.product));
-                const remainingDiscussed = discussed.filter(d => !matchedNames.has(d.product));
-                const updated = {
-                    ...entities,
-                    confirmedItems: [...confirmed, ...newConfirmed],
-                    discussedItems: remainingDiscussed,
-                    lastAmbiguousPrompt: null,
-                };
-                await this.upsertExtractedEntities(context.conversationId, updated);
-                const itemList = newConfirmed
-                    .map(i => `• ${i.product} — ${this.formatPrice(i.price ?? 0)}`)
-                    .join('\n');
-                return this.createResult(context, {
-                    source: ResponseSource.PRODUCT,
-                    content: `Sip Kak!\n${itemList}\nsudah dimasukkan ke keranjang belanja Kakak. 🛒\n\nAda yang mau ditambah lagi Kak, atau mau lanjut checkout?`,
-                    confidence: 0.8,
-                    cost: 0,
-                    metadata: { confirmedProducts: newConfirmed.map(i => i.product) },
-                }, ResponseSource.PRODUCT);
-            }
-            // lastAmbiguousPrompt set but message tidak resolve — biarkan null (fall through)
-        }
-        // ── Negation: "bukan kangkung", "salah wortel" → hapus dari discussedItems, jangan konfirmasi
-        const negated = this.detectNegation(lower, discussed);
-        if (negated.length > 0) {
-            const updatedDiscussed = discussed.filter(d => !negated.includes(d.product.toLowerCase()));
-            const updated = { ...entities, discussedItems: updatedDiscussed, lastAmbiguousPrompt: null };
-            await this.upsertExtractedEntities(context.conversationId, updated);
-            const label = negated.map(n => this.capitalize(n)).join(', ');
-            const reply = `Baik Kak, ${label} tidak dipilih.` +
-                (updatedDiscussed.length
-                    ? ` Sisa produk yang tersedia: ${updatedDiscussed.map(d => d.product).join(', ')}`
-                    : ' Belum ada item yang dikonfirmasi.');
-            return this.createResult(context, {
-                source: ResponseSource.PRODUCT,
-                content: reply,
-                confidence: 0.8,
-                cost: 0,
-            }, ResponseSource.PRODUCT);
-        }
-        // ── Case A: 1 item → auto-confirm
-        if (discussed.length === 1) {
-            const item = discussed[0];
-            const now = new Date().toISOString();
-            const newConfirmed = { ...item, confirmedAt: now };
-            const updated = {
-                ...entities,
-                discussedItems: [],
-                confirmedItems: [...confirmed, newConfirmed],
-                lastAmbiguousPrompt: null,
-            };
-            await this.upsertExtractedEntities(context.conversationId, updated);
-            return this.createResult(context, {
-                source: ResponseSource.PRODUCT,
-                content: `Sip Kak! *${item.product}* (${this.formatPrice(item.price ?? 0)}) sudah dimasukkan ke keranjang belanja. 🛒\n\nAda yang mau ditambah lagi Kak, atau mau langsung checkout?`,
-                confidence: 0.8,
-                cost: 0,
-                metadata: { confirmedProduct: item.product, confirmedPrice: item.price },
-            }, ResponseSource.PRODUCT);
-        }
-        // ── Case B: 2+ items, ambiguous, tidak resolve → ask back concretely
-        if (discussed.length >= 2) {
-            const itemNames = discussed.map(d => d.product);
-            let prompt;
-            if (discussed.length === 2) {
-                const [a, b] = itemNames;
-                prompt = `${a}-nya sama ${b}-nya kak, dua-duanya? Atau salah satu aja?`;
-            }
-            else {
-                const named = itemNames.map(n => `${n}-nya`).join(', ');
-                prompt = `${named} — semua? Atau pilih salah satu aja?`;
-            }
-            const updated = { ...entities, lastAmbiguousPrompt: prompt };
-            await this.upsertExtractedEntities(context.conversationId, updated);
-            return this.createResult(context, {
-                source: ResponseSource.PRODUCT,
-                content: prompt,
-                confidence: 0.7,
-                cost: 0,
-                metadata: { disambiguate: true, discussedItemNames: itemNames },
-            }, ResponseSource.PRODUCT);
-        }
-        // Fallback: shouldn't reach here (discussed.length === 0 was checked at top)
-        return null;
-    }
     // ── Helpers ──
     parseEntities(raw) {
         if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
@@ -1291,16 +955,5 @@ Jawab HANYA "YES" jika ini sinyal pembelian, "NO" jika tidak.`,
         };
     }
 }
-// ============================================================
-// Stage 3 — Buy signal detection + purchase resolution
-// ============================================================
-// Colloquial Indonesian signals that indicate intent to purchase
-FallbackService.BUY_KEYWORDS = [
-    'saya mau', 'mau beli', 'ambil', 'pesan', 'order', 'checkout', 'gas',
-    'gas lah', 'gas ya', 'cod aja', 'bisa cod', 'siap', 'oke', 'ya beli',
-    'membeli', 'beli ini', 'beli', 'konfirmasi pesanan', 'konfirm',
-    'dua-duanya', 'semua', 'kedua', 'ini saja', 'itu aja', 'pilih salah satu',
-    'cuma', 'doang', 'hanya', 'bukan', 'salah', 'eh',
-];
 export const fallbackService = new FallbackService();
 //# sourceMappingURL=fallback.service.js.map

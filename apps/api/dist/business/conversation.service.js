@@ -3,10 +3,10 @@ import { fallbackService } from './fallback.service.js';
 import { orderService } from './order.service.js';
 import { conversationContextService } from './conversation-context.service.js';
 import { prisma } from '../infrastructure/prisma.js';
-import { decideRoute, buildRouteContext } from './route-decider.js';
-import { normalizeMessage } from '../services/message-normalizer.js';
+import { productService } from './product.service.js';
 import { resolvePendingClarification, buildPendingFromClarification } from '../services/clarification-resolver.js';
-import { interpretMessage, countLlmCallsInWindow } from '../services/ot-or-interpreter.js';
+import { normalize } from '../services/chat/normalizer.js';
+import { runOneCall, validateCartOps, truncateTo2Sentences } from '../services/chat/interpreter.js';
 import { ResponseSource, } from '../domain/types.js';
 export class ConversationService {
     async processCustomerMessage(storeId, customerId, conversationId, customerMessage) {
@@ -118,127 +118,84 @@ export class ConversationService {
                 metadata: { reason: 'resolver_no_llm', resolvedAction: resolveResult.action },
             });
         }
-        // ── BAGIAN 1: Normalizer — lowercase + squash repeats + slang dict ──
-        // Guard: jika pesan fuzzy-match nama produk aktif, jangan dinormalisasi
-        const normResult = await normalizeMessage(customerMessage, storeId);
-        const normalizedMsg = normResult.normalized;
-        // Stage 2.5: Route decision via decideRoute (single source of truth)
+        // ── BAGIAN 1: Normalizer (0 LLM) ───────────────────────────────────
+        // I12: guard nama produk — cek produk DULU (fuzzy match), jangan dimutasi.
         let result = null;
-        try {
-            const routeCtx = await buildRouteContext(conversationId, storeId, normalizedMsg, customerCity);
-            const route = await decideRoute(routeCtx);
-            if (route.kind === 'order_change' && routeCtx.activeOrder) {
-                const option = await fallbackService.handleOrderChangeRequest(context, customerMessage, routeCtx.activeOrder.orderStatus);
-                result = this.buildResult(conversationId, option);
-            }
-            else if (route.kind === 'cart_modify' && route.remove) {
-                // BAGIAN 2.4 — Snapshot previousCart sebelum mutasi
-                const cartBeforeMutation = [...routeCtx.cart];
-                const updatedItems = await conversationContextService.modifyCart(conversationId, 'remove', {
-                    cancelledProduct: route.remove[0],
-                });
-                await orderService.syncCartStateToDraftOrder(conversationId, storeId, customerId, updatedItems, null);
-                // Store previousMutation for potential rollback
-                await this.storePreviousMutation(conversationId, cartBeforeMutation, normalizedMsg);
-                const replyText = await this.renderCartSummary(conversationId, updatedItems, route.remove[0]);
-                result = this.buildModifyCartResult(conversationId, replyText);
-            }
-            else if (route.kind === 'cart_clarify') {
-                // BAGIAN 1.3 & 1.4 — Destructive guard / negation rollback
-                if (route.intent === 'ROLLBACK' && routeCtx.previousMutation) {
-                    // Rollback to snapshot
-                    const restoredItems = await conversationContextService.restoreCart(conversationId, routeCtx.previousMutation.cartSnapshot);
-                    await orderService.syncCartStateToDraftOrder(conversationId, storeId, customerId, restoredItems, null);
-                    const cartSummary = restoredItems.length > 0
-                        ? restoredItems.map(i => `• ${i.product} ×${typeof i.qty === 'number' ? i.qty : 1}`).join('\n')
-                        : 'keranjang kosong';
-                    const replyText = `Oke Kak, aku batalkan perubahan terakhir ya. *Keranjang sebelumnya* sudah dipulihkan:\n\n${cartSummary}`;
-                    result = this.buildModifyCartResult(conversationId, replyText);
+        let normalizedMsg = customerMessage;
+        const storeProducts = await this.getStoreProducts(storeId);
+        const productDictionary = storeProducts.map((p) => p.name);
+        normalizedMsg = normalize(customerMessage, productDictionary);
+        // Bangun PipelineContext sekali — dibawa ke Stage 3 + Stage 4.
+        const pipelineCtx = await this.buildPipelineContext(storeId, customerId, conversationId, context, customerCity, conversation.customerName ?? null, storeProducts);
+        // ── STAGE 3: Rule-based fast-path tiers (0 LLM) ────────────────────
+        // I13: reply Stage 3 hanya memakai harga dari DB, tidak dari LLM.
+        // getResponse kembalikan terminal fallback (source HUMAN) bila tidak ada
+        // tier yang cocok; perlakukan sebagai miss agar Stage 4 (LLM) dapat jalan.
+        const tierResult = await fallbackService.getResponse(normalizedMsg, pipelineCtx);
+        if (tierResult && tierResult.source !== ResponseSource.HUMAN) {
+            result = tierResult;
+        }
+        // ── STAGE 4: Single LLM Interpreter (MAKS 1 CALL) ──────────────────
+        // I8: cek ctx.llmCalledThisTurn sebelum panggil runOneCall.
+        if (!result && !pipelineCtx.llmCalledThisTurn) {
+            pipelineCtx.llmCalledThisTurn = true;
+            const llmResult = await runOneCall(normalizedMsg, pipelineCtx);
+            if (llmResult) {
+                let executedAdd = false;
+                // I15: validateCartOps dipanggil sebelum executeCartOps.
+                if (llmResult.cart_ops && llmResult.cart_ops.length > 0) {
+                    const { valid, missing } = validateCartOps(llmResult.cart_ops, storeProducts);
+                    if (valid.length > 0) {
+                        await this.executeCartOps(valid, pipelineCtx, normalizedMsg);
+                        executedAdd = valid.some((o) => o.type === 'add');
+                    }
+                    if (missing.length > 0) {
+                        llmResult.missing_info = [...(llmResult.missing_info || []), ...missing];
+                    }
                 }
-                else {
-                    // Clarification needed — set pending BEFORE sending question (BAGIAN 2.2)
-                    await conversationContextService.setPendingClarification(conversationId, {
-                        question: 'Maaf Kak, bisa dijelaskan produk yang ingin diubah?',
-                        options: [{ id: '0', label: 'tolong spesifikkan produk yang ingin dihapus' }],
-                        expected_type: 'yes_no',
-                    });
-                    const replyText = `Maaf Kak, bisa dijelaskan produk yang ingin diubah? Misalnya: "Hapus Wortel ya" atau "Ganti Brambang dengan Kentang".`;
+                if (llmResult.clarification) {
+                    // Simpan pending BEFORE kirim pertanyaan (BAGIAN 2.2)
+                    await conversationContextService.setPendingClarification(conversationId, buildPendingFromClarification(llmResult.clarification));
                     result = this.buildResult(conversationId, {
                         source: ResponseSource.SOP,
-                        content: replyText,
-                        confidence: 0.7,
+                        content: llmResult.clarification.question,
+                        confidence: 0.85,
                         cost: 0,
-                        metadata: { reason: 'clarification_needed' },
+                        metadata: { reason: 'clarification_asked' },
                     });
                 }
-            }
-            // For 'total', 'order_status', 'waterfall' -> fall through to waterfall below
-        }
-        catch (err) {
-            adapters.logger.warn('decideRoute failed, falling through to waterfall', { conversationId, err });
-        }
-        // Stage 3 — Buy signal detection
-        const isBuySignal = !result && await fallbackService.detectBuySignal(normalizedMsg);
-        const hasPendingAmbiguity = !result && await fallbackService.hasPendingAmbiguity(conversationId);
-        if (!result && (isBuySignal || hasPendingAmbiguity)) {
-            result = await fallbackService.resolveBuySignal(context, normalizedMsg);
-        }
-        if (!result) {
-            result = await fallbackService.getResponse(context, normalizedMsg, true, customerCity);
-        }
-        // ── BAGIAN 3: One-shot interpreter — only if normalizer + tier + resolver ALL miss ──
-        // I8: max 1 LLM call per message — proof via token-tracker
-        if (!result) {
-            const llmCalls = await countLlmCallsInWindow(conversationId, 120000);
-            if (llmCalls === 0) {
-                const ctxRow = await prisma.conversationContext.findUnique({
-                    where: { conversationId },
-                    select: { extractedEntities: true },
-                });
-                const entities = conversationContextService.parseExtractedEntities(ctxRow?.extractedEntities);
-                const cart = entities.confirmedItems || [];
-                const activeOrder = await prisma.order.findFirst({
-                    where: { conversationId, deletedAt: null, orderStatus: { notIn: ['shipped', 'delivered', 'cancelled'] } },
-                    orderBy: { createdAt: 'desc' },
-                    select: { id: true, orderStatus: true, items: true, notes: true },
-                });
-                const interpreterResult = await interpretMessage(conversationId, storeId, normalizedMsg, cart.map((i) => ({
-                    product: i.product,
-                    qty: typeof i.qty === 'number' ? i.qty : undefined,
-                    price: i.price ?? undefined,
-                })), activeOrder, customerCity);
-                if (interpreterResult) {
-                    // If interpreter returned a clarification → SET pending BEFORE reply
-                    if (interpreterResult.clarification) {
-                        await conversationContextService.setPendingClarification(conversationId, buildPendingFromClarification(interpreterResult.clarification));
-                    }
-                    // Intent data → render from DB state (reply_draft is style only)
-                    const addOps = (interpreterResult.cart_ops || []).filter((o) => o.type === 'add');
-                    if (interpreterResult.intent === 'ADD_TO_CART' && addOps.length > 0) {
-                        const addedItems = await conversationContextService.modifyCart(conversationId, 'add', {
-                            addedProduct: addOps[0].product,
-                            qty: interpreterResult.order_extract?.items?.[0]?.qty,
-                        });
-                        await orderService.syncCartStateToDraftOrder(conversationId, storeId, customerId, addedItems, null);
-                        // Render cart from DB state
-                        const reply = await this.renderCartSummary(conversationId, addedItems, addOps[0].product);
-                        result = this.buildModifyCartResult(conversationId, reply);
-                    }
-                    else if (interpreterResult.reply_draft) {
-                        // Open intent → reply_draft langsung (maks 2 kalimat, gaya WA)
-                        result = this.buildResult(conversationId, {
-                            source: ResponseSource.AI,
-                            content: interpreterResult.reply_draft,
-                            confidence: interpreterResult.confidence,
-                            cost: 0,
-                            metadata: { source: 'interpreter', intent: interpreterResult.intent },
-                        });
-                    }
+                else if (llmResult.reply_draft) {
+                    // Guardrail: reply_draft maks 2 kalimat
+                    result = this.buildResult(conversationId, {
+                        source: ResponseSource.AI,
+                        content: truncateTo2Sentences(llmResult.reply_draft),
+                        confidence: llmResult.confidence,
+                        cost: 0,
+                        metadata: {
+                            source: 'interpreter',
+                            intent: llmResult.intent,
+                            missing_info: llmResult.missing_info || undefined,
+                        },
+                    });
+                }
+                else if (executedAdd) {
+                    // Safety-net: add dieksekusi tapi LLM tidak sertakan reply_draft →
+                    // render keranjang dari DB state (harga dari DB, bukan LLM).
+                    const cart = await this.getCartFromDb(conversationId);
+                    const reply = await this.renderCartSummary(conversationId, cart, undefined);
+                    result = this.buildModifyCartResult(conversationId, reply);
                 }
             }
-            else {
-                adapters.logger.warn('Interpreter skipped — LLM call budget exceeded (I8)', { conversationId, llmCalls });
-            }
+        }
+        // ── STAGE 5: Dead-end fallback ─────────────────────────────────────
+        if (!result) {
+            result = this.buildResult(conversationId, {
+                source: ResponseSource.HUMAN,
+                content: 'Maaf kak, saya kurang paham. Bisa diulang?',
+                confidence: 0.5,
+                cost: 0,
+                metadata: { reason: 'dead_end_fallback' },
+            });
         }
         await this.saveMessage({
             id: crypto.randomUUID(),
@@ -261,21 +218,6 @@ export class ConversationService {
         await conversationContextService.refreshSession(conversationId);
         // Non-blocking order extraction — fire and forget, errors caught silently
         orderService.extractAndSaveOrder(conversationId, customerId, storeId, normalizedMsg);
-        // Non-blocking conversational cart: sync confirmed items to draft order.
-        // Handles both single confirm (metadata.confirmedProduct) and multi-confirm (metadata.confirmedProducts).
-        // BUG-9: gunakan (isBuySignal || hasPendingAmbiguity) karena resolveBuySignal
-        // juga bisa berjalan via hasPendingAmbiguity (mis. "kangkung sama bawang aja").
-        if ((isBuySignal || hasPendingAmbiguity) && result.source === ResponseSource.PRODUCT) {
-            const meta = result.metadata || {};
-            if (meta.confirmedProduct) {
-                await this.syncConfirmedItemToCart(conversationId, storeId, customerId, meta.confirmedProduct);
-            }
-            else if (meta.confirmedProducts) {
-                for (const name of meta.confirmedProducts) {
-                    await this.syncConfirmedItemToCart(conversationId, storeId, customerId, name);
-                }
-            }
-        }
         // Done-ordering signal → finalize draft order to waiting_address
         if (orderService.detectDoneOrdering(normalizedMsg)) {
             await orderService.finalizeDraftOrder(conversationId);
@@ -285,6 +227,95 @@ export class ConversationService {
     /**
      * Bungkus teks balasan MODIFY_CART menjadi ResponseResult standar.
      */
+    /**
+     * Ambil daftar produk aktif toko sebagai { name, price, stock }.
+     * Dipakai I12 (guard normalizer) + validasi interpreter (validateCartOps).
+     */
+    async getStoreProducts(storeId) {
+        const products = await productService.listActiveProducts(storeId);
+        return products.map((p) => ({
+            name: p.name,
+            price: p.price ?? 0,
+            stock: p.stock ?? null,
+        }));
+    }
+    /**
+     * Bangun PipelineContext (biru) dari ConversationContext DB + relasi.
+     * messages sudah termasuk pesan pelanggan terbaru (dari getOrCreateContext).
+     */
+    async buildPipelineContext(storeId, customerId, conversationId, context, customerCity, customerName, storeProducts) {
+        const ctxRow = await prisma.conversationContext.findUnique({
+            where: { conversationId },
+            select: { extractedEntities: true },
+        });
+        const entities = conversationContextService.parseExtractedEntities(ctxRow?.extractedEntities);
+        const cart = entities.confirmedItems || [];
+        const activeOrder = await prisma.order.findFirst({
+            where: {
+                conversationId,
+                deletedAt: null,
+                orderStatus: { notIn: ['shipped', 'delivered', 'cancelled'] },
+            },
+            orderBy: { createdAt: 'desc' },
+            select: { id: true, orderStatus: true, items: true, notes: true },
+        });
+        return {
+            storeId,
+            customerId,
+            conversationId,
+            messages: context.messages,
+            customerCity,
+            customerName,
+            cart,
+            activeOrder: activeOrder,
+            pendingClarification: entities.pendingClarification ?? null,
+            llmCalledThisTurn: false,
+            storeProducts,
+        };
+    }
+    /**
+     * Execute (add / remove) validated cart_ops ke DB, lalu sync ke draft order.
+     * Untuk remove, snapshot cart sebelum mutasi agar negasi -> rollback masih
+     * memungkinkan. I15: hanya dipanggil setelah validateCartOps mengembalikan valid.
+     */
+    async executeCartOps(ops, pipelineCtx, message) {
+        const { conversationId, storeId, customerId } = pipelineCtx;
+        const hasRemove = ops.some((o) => o.type === 'remove');
+        let cartBefore = [];
+        if (hasRemove) {
+            cartBefore = await this.getCartFromDb(conversationId);
+            await this.storePreviousMutation(conversationId, cartBefore.map((i) => ({ product: i.product, qty: i.qty ?? null, price: i.price ?? null })), message);
+        }
+        let items = cartBefore;
+        for (const op of ops) {
+            if (op.type === 'add') {
+                items = await conversationContextService.modifyCart(conversationId, 'add', {
+                    addedProduct: op.product,
+                    qty: op.qty,
+                    price: op.price,
+                });
+            }
+            else if (op.type === 'remove') {
+                items = await conversationContextService.modifyCart(conversationId, 'remove', {
+                    cancelledProduct: op.product,
+                });
+            }
+        }
+        if (ops.length > 0) {
+            await orderService.syncCartStateToDraftOrder(conversationId, storeId, customerId, items, null);
+        }
+        return items;
+    }
+    /**
+     * Baca snapshot keranjang terkonfirmasi dari DB (extractedEntities).
+     */
+    async getCartFromDb(conversationId) {
+        const ctxRow = await prisma.conversationContext.findUnique({
+            where: { conversationId },
+            select: { extractedEntities: true },
+        });
+        return conversationContextService.parseExtractedEntities(ctxRow?.extractedEntities).confirmedItems || [];
+    }
     /** BAGIAN 2.4 — Store previousCart snapshot untuk rollback */
     async storePreviousMutation(conversationId, cartSnapshot, message) {
         try {
@@ -421,34 +452,6 @@ export class ConversationService {
         }
         catch (error) {
             adapters.logger.error('Failed to save message', error);
-        }
-    }
-    /**
-     * Sync confirmed items and shipping info from conversation context to draft order.
-     */
-    async syncConfirmedItemToCart(conversationId, storeId, customerId, productName) {
-        try {
-            const ctx = await prisma.conversationContext.findUnique({
-                where: { conversationId },
-                select: { extractedEntities: true },
-            });
-            if (!ctx?.extractedEntities)
-                return;
-            const raw = ctx.extractedEntities;
-            if (!raw || Array.isArray(raw))
-                return;
-            const confirmed = Array.isArray(raw.confirmedItems)
-                ? raw.confirmedItems
-                : [];
-            const shippingAddress = typeof raw.shippingAddress === 'string' ? raw.shippingAddress : null;
-            await orderService.syncCartStateToDraftOrder(conversationId, storeId, customerId, confirmed, shippingAddress);
-        }
-        catch (error) {
-            adapters.logger.warn('Failed to sync confirmed item to cart', {
-                conversationId,
-                productName,
-                error: error.message,
-            });
         }
     }
     async updateConversationStats(context, result) {

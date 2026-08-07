@@ -299,20 +299,15 @@ export interface ResolverResult {
  * Output satu panggilan interpreter (BAGIAN 3).
  */
 export interface InterpreterResult {
-    intent: string;
+    intent: 'product_info' | 'total' | 'buy' | 'smalltalk' | 'clarify';
     cart_ops: CartOp[];
-    buy_signal: boolean;
+    buy_signal: 'yes' | 'no' | 'maybe';
     order_extract: {
-        items?: Array<{
-            product: string;
-            qty?: number;
-            price?: number;
-        }>;
+        order_id?: string;
     } | null;
     missing_info: string[] | null;
     identity: {
         name: string | null;
-        address: string | null;
     } | null;
     reply_draft: string | null;
     confidence: number;
@@ -324,6 +319,30 @@ export interface InterpreterResult {
 }
 /** Legacy alias — kept for backward compat */
 export type InterpreterOutput = InterpreterResult;
+/**
+ * PipelineContext — runtime context yang dibawa sepanjang 5-stage pipeline.
+ * Dibangun sekali di awal processCustomerMessage, tidak persisted ke DB.
+ */
+export interface PipelineContext {
+    storeId: string;
+    customerId: string;
+    conversationId: string;
+    messages: ConversationMessage[];
+    customerCity: string | null;
+    customerName: string | null;
+    cart: ConfirmedItem[];
+    activeOrder: {
+        orderStatus: string;
+        items: any[];
+    } | null;
+    pendingClarification: PendingClarification | null;
+    llmCalledThisTurn: boolean;
+    storeProducts: Array<{
+        name: string;
+        price: number;
+        stock: number | null;
+    }>;
+}
 /**
  * Skema fungsi AI untuk integrasi function-calling LLM.
  */

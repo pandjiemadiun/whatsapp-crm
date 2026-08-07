@@ -265,7 +265,7 @@ describe('Multi-Turn Invariant Tests — ' + TOTAL_CASES + ' transcripts', () =>
                             lastMessageAt: new Date(),
                             status: 'active',
                         };
-                        const wfResult = await fallbackService.getResponse(mockCtx, msg, true, testCase.customerCity || null);
+                        const wfResult = await fallbackService.getResponse(msg, { ...mockCtx, customerCity: testCase.customerCity || null });
                         responseContent = wfResult.message.content;
                         responseSource = wfResult.source;
                     }
@@ -322,9 +322,9 @@ describe('Multi-Turn Invariant Tests — ' + TOTAL_CASES + ' transcripts', () =>
 describe('BAGIAN 4: Invariants I8-I15 (Chat-Flow Arsitektur Satu Panggilan)', () => {
     test('I8: maks 1 LLM call per intent + 1 retry transport/parse saja', async () => {
         // Structure: interpreter has maxRetries=1, only retryable on 429/timeout/JSON-invalid
-        // Verified by code inspection — callSingleInterpreter loops attempt 0..1 (min attempt, max 1 retry)
-        const { callSingleInterpreter } = await import('../services/chat/interpreter.js');
-        assert.ok(typeof callSingleInterpreter === 'function', 'callSingleInterpreter must be exported');
+        // Verified by code inspection — runOneCall loops attempt 0..1 (min attempt, max 1 retry)
+        const { runOneCall } = await import('../services/chat/interpreter.js');
+        assert.ok(typeof runOneCall === 'function', 'runOneCall must be exported');
         // Verify maxRetries is 1 — check via source inspection
         const src = readFileSync(join(process.cwd(), 'src/services/chat/interpreter.ts'), 'utf-8');
         assert.ok(src.includes('maxRetries = 1'), 'Interpreter must have max 1 retry');

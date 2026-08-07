@@ -178,7 +178,7 @@ describe('Golden Dataset — ' + TOTAL_CASES + ' cases', () => {
                     case 'total':
                     case 'order_status':
                     case 'waterfall':
-                        const wfResult = await fallbackService.getResponse(mockCtx, testCase.input, false, customerCity);
+                        const wfResult = await fallbackService.getResponse(testCase.input, { ...mockCtx, customerCity });
                         responseContent = wfResult.message.content;
                         responseSource = wfResult.source;
                         break;

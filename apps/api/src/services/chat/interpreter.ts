@@ -2,80 +2,84 @@
  * Single-Shot Interpreter — BAGIAN 3
  * src/services/chat/interpreter.ts
  *
- * Hanya dipanggil jika normalizer + resolver + tier SEMUA miss.
- * SATU panggilan Groq/Gemini. Config: temp 0.2, jsonMode, maxTokens 250.
- * I8: max 1 LLM call per message + 1 retry transport/parse only.
+ * Hanya dipanggil jika normalizer + resolver + tier SEMUA miss (Stage 4).
+ * SATU panggilan Groq. Config: temp 0.2, jsonMode, maxTokens 250.
+ * I8: max 1 LLM call per message.
+ *
+ * Legacy buy-signal + context-interpreter logic absorbed into runOneCall —
+ * buy_signal + intent + cart_ops in a single Groq call.
  */
 import { groqAdapter } from '../../adapters/ai/groq.adapter.js';
 import { adapters } from '../../adapters/container.js';
-import { getAiDefaults } from '../../adapters/ai/ai-config.js';
 import { prisma } from '../../infrastructure/prisma.js';
-import type { InterpreterResult, ClarificationOption } from '../../domain/types.js';
+import type {
+  InterpreterResult,
+  CartOp,
+  PipelineContext,
+} from '../../domain/types.js';
 
 /** 3 potongan transcript nyata founder — few-shot */
 const FEW_SHOT = `--- Contoh 1 ---\ncustomer: "toralin brp ya?"\nassistant: "Total belanjaan Kakak: Rp 25.000 ya. Ada tambahan?"\ncustomer: "mau tambah ayam goreng"\nassistant: "Oke, ayam goreng sudah dimasukkan. Total baru: Rp 35.000."\n\n--- Contoh 2 ---\ncustomer: "brp ongkirr ke jakarta?"\nassistant: "Ongkir ke Jakarta: Rp 15.000 (standar) atau Rp 25.000 (express)."\ncustomer: "mau express"\n\n--- Contoh 3 ---\ncustomer: "mau beli wortel dan kentang, dua-duanya"\nassistant: "Baik Kak, wortel dan kentang sudah di keranjang. Mau tambah?"\ncustomer: "ya, keduanya"\n`;
 
 const INTERPRETER_SCHEMA = `{
-  intent: "ADD_TO_CART"|"REMOVE_FROM_CART"|"CHECK_TOTAL"|"CHECK_SHIPPING"|"CHECK_ORDER_STATUS"|"COMPLEX_CONVERSATION",
-  cart_ops: [{ type: "add"|"remove", product: string, qty?: number, price?: number }],
-  buy_signal: boolean,
-  order_extract: { items?: [{ product: string, qty?: number, price?: number }] } | null,
-  missing_info: string[] | null,
-  identity: { name: string|null, address: string|null } | null,
-  reply_draft: string | null,
-  confidence: 0.0-1.0,
-  clarification: { question: string, options: [{ id: string, label: string, cartOps?: [{ type, product, qty?, price? }], action?: string }], expected_type: "affirmative"|"choice"|"yes_no" } | null
+  "intent": "product_info|total|buy|smalltalk|clarify",
+  "cart_ops": [{ "type": "add|remove", "product": string, "qty": number, "price": number }],
+  "buy_signal": "yes|no|maybe",
+  "order_extract": { "order_id": string } | null,
+  "missing_info": string[] | null,
+  "identity": { "name": string } | null,
+  "reply_draft": string | null,
+  "confidence": 0.0-1.0,
+  "clarification": { "question": string, "options": [{ "id": string, "label": string, "cartOps": [{ "type":"add|remove", "product": string, "qty": number, "price": number }], "action": string }], "expected_type": "affirmative|choice|yes_no" } | null
 }`;
 
 /**
- * callSingleInterpreter — BAGIAN 3.
+ * runOneCall — BAGIAN 3 (SATU LLM CALL).
  *
- * @param normalizedText  pesan yang sudah dinormalisasi
- * @param context          conversation context (storeId, customerId, conversationId, messages)
- * @param dbSnapshot       { cart, activeOrder, customerCity, products }
+ * Absorbs: intent classification, buy_signal, cart ops, missing info,
+ * identity extraction, clarification generation — ALL in ONE Groq call.
+ *
+ * @param normalizedText  pesan yang sudah dinormalisasi (Stage 2 output)
+ * @param ctx             PipelineContext (storeId, cart, activeOrder, products, city, messages)
+ * @returns InterpreterResult | null
  */
-export async function callSingleInterpreter(
+export async function runOneCall(
   normalizedText: string,
-  context: {
-    storeId: string;
-    customerId: string;
-    conversationId: string;
-    messages: any[];
-  },
-  dbSnapshot: {
-    cart: Array<{ product: string; qty?: number; price?: number }>;
-    activeOrder: { orderStatus: string; items: any[] } | null;
-    customerCity: string | null;
-    products: Array<{ name: string; price: number; stock: number | null }>;
-  }
+  ctx: PipelineContext
 ): Promise<InterpreterResult | null> {
   // Build conversation history
-  const lastMessages = context.messages
+  const lastMessages = ctx.messages
     .slice(-6)
     .map((m) => `${m.sender === 'customer' ? 'customer' : 'assistant'}: ${m.content}`)
     .join('\n');
 
-  const productCatalog = dbSnapshot.products
+  const productCatalog = ctx.storeProducts
     .map((p) => `- ${p.name} (Rp ${p.price}, stok: ${p.stock ?? 0})`)
     .join('\n');
 
-  const cartSummary = dbSnapshot.cart.length > 0
-    ? dbSnapshot.cart.map((c) => `${c.product} (qty: ${c.qty || 1})`).join('; ')
+  const cartSummary = ctx.cart.length > 0
+    ? ctx.cart
+        .map((c) => `${(c as any).product ?? (c as any).name} (qty: ${(c as any).qty || (c as any).quantity || 1})`)
+        .join('; ')
     : 'kosong';
 
-  const orderInfo = dbSnapshot.activeOrder
-    ? `status=${dbSnapshot.activeOrder.orderStatus}, items=${dbSnapshot.activeOrder.items
+  const orderInfo = ctx.activeOrder
+    ? `status=${ctx.activeOrder.orderStatus}, items=${ctx.activeOrder.items
         .map((i: any) => i.product || i.productName)
         .join(', ')}`
     : 'tidak ada order aktif';
 
-  const prompt = `[Instruksi: Anda adalah interpreter WhatsApp commerce. Output JSON ONLY. Schema:\n${INTERPRETER_SCHEMA}\n]` +
+  const prompt = `[SYSTEM — Interpreter WhatsApp commerce QloBot.
+Berikan HANYA JSON valid. Aturan kaku:
+  1. JANGAN sertakan harga/stok di reply_draft — reply_draft hanya teks ucapan semata.
+  2. reply_draft maks 2 kalimat.
+  3. Jika produk yang disebutkan customer tidak ada di katalog, set intent='clarify', isi clarification.question, dan JANGAN menebak harga/stok.
+Schema:\n${INTERPRETER_SCHEMA}\n]` +
     `\n\n${FEW_SHOT}` +
     `\n--- Riwayat 6 pesan terakhir ---\n${lastMessages || '(belum ada)'}` +
-    `\n\n--- State ---\nKeranjang: [${cartSummary}]\nOrder aktif: ${orderInfo}\nProduk toko:\n${productCatalog}\nKota customer: ${dbSnapshot.customerCity || 'tidak diketahui'}` +
+    `\n\n--- State ---\nKeranjang: [${cartSummary}]\nOrder aktif: ${orderInfo}\nProduk toko:\n${productCatalog}\nKota customer: ${ctx.customerCity || 'tidak diketahui'}\nNama customer: ${ctx.customerName || 'tidak diketahui'}` +
     `\n\n--- Pesan customer (sudah dinormalisasi) ---\n"${normalizedText}"\n\nBerikan JSON:`;
 
-  const defaults = await getAiDefaults();
   const maxRetries = 1; // I8: max 1 retry (transport/parse only)
   let lastError: Error | null = null;
 
@@ -86,21 +90,21 @@ export async function callSingleInterpreter(
         maxTokens: 250,
         jsonMode: true,
         intent: 'conversation-interpreter',
-        conversationId: context.conversationId,
+        conversationId: ctx.conversationId,
       });
 
       const parsed: Partial<InterpreterResult> = JSON.parse(result.content);
 
-      // Validation — schema ketat
+      // Validation
       if (!parsed.intent || typeof parsed.confidence !== 'number') {
         lastError = new Error(`Invalid schema: ${JSON.stringify(parsed).slice(0, 200)}`);
-        continue; // retry
+        continue;
       }
 
-      // I8: log ke token-tracker
-      adapters.logger.info('Interpreter single call', {
-        conversationId: context.conversationId,
+      adapters.logger.info('Interpreter runOneCall', {
+        conversationId: ctx.conversationId,
         intent: parsed.intent,
+        buy_signal: parsed.buy_signal,
         confidence: parsed.confidence,
         attempt,
         inputTokens: result.tokens.input,
@@ -110,24 +114,23 @@ export async function callSingleInterpreter(
       return parsed as InterpreterResult;
     } catch (err) {
       lastError = err as Error;
-      // Jika bukan 429/timeout/parse error → jangan retry
       const isRetryable =
         lastError.message.includes('429') ||
         lastError.message.includes('timeout') ||
         lastError.message.includes('JSON');
       if (!isRetryable) {
         adapters.logger.warn('Interpreter non-retryable error', {
-          conversationId: context.conversationId,
+          conversationId: ctx.conversationId,
           error: lastError.message,
         });
         return null;
       }
-      continue; // retry
+      continue;
     }
   }
 
   adapters.logger.error('Interpreter exhausted retries', {
-    conversationId: context.conversationId,
+    conversationId: ctx.conversationId,
     error: lastError?.message,
   });
   return null;
@@ -139,9 +142,9 @@ export async function callSingleInterpreter(
  * I15: cart_ops dari LLM wajib divalidasi terhadap DB
  */
 export async function validateCartOpsAgainstDb(
-  cartOps: any[],
+  cartOps: CartOp[],
   storeId: string
-): Promise<{ valid: any[]; invalid: any[] }> {
+): Promise<{ valid: CartOp[]; invalid: CartOp[] }> {
   const products = await prisma.product.findMany({
     where: { storeId, deletedAt: null, isActive: true },
     select: { name: true, price: true, stock: true },
@@ -152,8 +155,8 @@ export async function validateCartOpsAgainstDb(
     productMap.set(p.name.toLowerCase().trim(), { price: p.price, stock: p.stock });
   }
 
-  const valid: any[] = [];
-  const invalid: any[] = [];
+  const valid: CartOp[] = [];
+  const invalid: CartOp[] = [];
 
   for (const op of cartOps) {
     const dbProduct = productMap.get(op.product.toLowerCase().trim());
@@ -161,18 +164,70 @@ export async function validateCartOpsAgainstDb(
       invalid.push(op);
       continue;
     }
-    // Validasi qty
     if (typeof op.qty !== 'number' || op.qty < 1) {
-      invalid.push({ ...op, qty: 1, price: dbProduct.price }); // default qty=1
+      invalid.push({ ...op, qty: 1, price: dbProduct.price });
       continue;
     }
-    // Gunakan harga dari DB, bukan dari LLM
     valid.push({
       ...op,
       qty: Math.floor(op.qty),
-      price: dbProduct.price, // override LLM price
+      price: dbProduct.price,
     });
   }
 
   return { valid, invalid };
+}
+
+/**
+ * validateCartOps — validasi cart_ops terhadap katalog produk di memori (storeProducts).
+ *
+ * Untuk setiap op, cek `product` (sku / product_ref) ada di storeProducts.
+ * Op tak ditemukan -> dimasukkan ke `missing` (caller gabung ke missing_info
+ * pada InterpreterResult). Hanya mengembalikan op yang valid saja.
+ *
+ * Pure & sync — tidak sentuh DB/LLM. Pipeline (FASE 4) panggil setelah runOneCall.
+ */
+export interface ValidateCartOpsResult {
+  valid: CartOp[];
+  /** product refs (nama) tak ditemukan di katalog — gabung ke missing_info */
+  missing: string[];
+}
+
+export function validateCartOps(
+  cartOps: CartOp[],
+  storeProducts: PipelineContext['storeProducts']
+): ValidateCartOpsResult {
+  const known = new Set(
+    storeProducts.map((p) => p.name.toLowerCase().trim())
+  );
+
+  const valid: CartOp[] = [];
+  const missing: string[] = [];
+
+  for (const op of cartOps) {
+    const ref = op.product.toLowerCase().trim();
+    if (known.has(ref)) {
+      valid.push(op);
+    } else {
+      missing.push(op.product);
+    }
+  }
+
+  return { valid, missing };
+}
+
+/**
+ * truncateTo2Sentences — memotong teks ke (paling banyak) 2 kalimat pertama.
+ * Kalimat dipisahkan oleh [.!?] diikuti pemisah spasi (look-behind boundary).
+ *
+ * Pure & sync. Pipeline (FASE 4) pakai sebagai safety-net agar reply_draft
+ * tak melebihi 2 kalimat, sekaligus memenuhi aturan system prompt.
+ */
+export function truncateTo2Sentences(text: string): string {
+  if (!text) return '';
+  const sentences = text
+    .split(/(?<=[.!?])\s+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return sentences.slice(0, 2).join(' ');
 }
