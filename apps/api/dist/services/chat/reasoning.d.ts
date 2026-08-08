@@ -70,7 +70,10 @@ export declare function convertPositionalSupersedes(result: InterpreterResultV2)
  * @param catalog        katalog produk toko
  * @param history        riwayat conversasi (untuk prompt LLM)
  * @param fallbackService  service tier deterministik (READ-ONLY; typed as any)
+ * @param storeId        id toko (diteruskan ke fast path untuk tier call)
+ * @param conversationId id percakapan (diteruskan agar tier 'total' membaca
+ *                         cart DB yang benar)
  * @returns ReasoningOutcome
  */
-export declare function understand(message: string, workspace: WorkspaceV2, catalog: CatalogItem[], history: HistoryTurn[], fallbackService: any): Promise<ReasoningOutcome>;
+export declare function understand(message: string, workspace: WorkspaceV2, catalog: CatalogItem[], history: HistoryTurn[], fallbackService: any, storeId?: string, conversationId?: string): Promise<ReasoningOutcome>;
 //# sourceMappingURL=reasoning.d.ts.map

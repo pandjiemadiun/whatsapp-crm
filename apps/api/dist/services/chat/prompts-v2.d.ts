@@ -3,7 +3,7 @@
  * src/services/chat/prompts-v2.ts
  *
  * Builder untuk system prompt + user prompt LLM interpreter v3.2, beserta
- * 5 contoh transkrip (few-shot) sebagai konstanta terpisah.
+ * 6 contoh transkrip (few-shot) sebagai konstanta terpisah.
  *
  * I8: artefak prompt ini tidak memanggil model — hanya memproduksi string
  *     yang dikirimkan ke interpreter (stage 4, LLM).
@@ -36,12 +36,13 @@ export declare function buildSystemPrompt(catalog: CatalogItem[]): string;
  */
 export declare function buildUserPrompt(message: string, workspace: WorkspaceV2, history: HistoryTurn[]): string;
 /**
- * 5 contoh (user_message + konteks + expected_json) yang memandu interpreter:
+ * 6 contoh (user_message + konteks + expected_json) yang memandu interpreter:
  *   1. multi-act 3 produk — tidak ada product mention yang missing.
  *   2. revisi dalam satu kalimat — act kedua punya supersedes=act_id pertama.
  *   3. topic switch — pending aktif + user tanya di luar scope order.
  *   4. quantifier mismatch — user merujuk opsi ketiga yang tidak ada.
  *   5. afirmasi ambigu — "iya" pada 4 opsi, butuh clarification.
+ *   6. multi-add dalam satu kalimat — 3 produk qty 1 eksplisit, confidence tinggi.
  */
 export declare const FEW_SHOTS: FewShotV2[];
 //# sourceMappingURL=prompts-v2.d.ts.map

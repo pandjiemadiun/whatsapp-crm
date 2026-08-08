@@ -88,10 +88,12 @@ export declare function parkPendingAndIncrementTurns(workspace: WorkspaceV2, pen
  * @param workspace      state workspace perpercakapan (v2)
  * @param catalog        katalog produk toko
  * @param fallbackService  service tier deterministik (READ-ONLY); typed as any
+ * @param storeId        id toko (diteruskan ke tier, READ-ONLY)
+ * @param conversationId id percakapan (agar tier 'total' membaca cart DB yang benar)
  * @returns FastPathResult — discriminated union
  *
  * I8: maksimal 0 panggilan LLM di fast path ini.
  * I10: semua hasil resolved/tier berasal dari rule-based resolver, bukan LLM.
  */
-export declare function tryFastPath(message: string, workspace: WorkspaceV2, catalog: CatalogItem[], fallbackService: any): Promise<FastPathResult>;
+export declare function tryFastPath(message: string, workspace: WorkspaceV2, catalog: CatalogItem[], fallbackService: any, storeId?: string, conversationId?: string): Promise<FastPathResult>;
 //# sourceMappingURL=fast-path.d.ts.map

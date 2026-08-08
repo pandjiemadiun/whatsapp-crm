@@ -79,6 +79,7 @@ export declare class ConversationService {
     findByIdWithHistory(id: string): Promise<ConversationDetail | null>;
     private logPipelineAudit;
     private flattenPendingOps;
+    private deriveResolvedCartOps;
     private clearPreviousMutation;
 }
 export declare const conversationService: ConversationService;

@@ -551,6 +551,9 @@ export class FallbackService {
                     }
                 }
             }
+            // FIX B: skip item dengan qty <= 0 supaya "Brambang (0x)" tidak muncul
+            // di receipt dan tidak menyumbang subtotal.
+            items = items.filter((ci) => Number(ci.qty || 0) > 0);
             // Guard 1: empty cart → tawarkan masukkan item, jangan "Rp 0"
             if (items.length === 0) {
                 const conv = await prisma.conversation.findUnique({
