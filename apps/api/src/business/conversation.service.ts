@@ -6,7 +6,16 @@ import { prisma } from '../infrastructure/prisma.js';
 import { productService } from './product.service.js';
 import { normalize } from '../services/chat/normalizer.js';
 import { runOneCall, validateCartOps, truncateTo2Sentences } from '../services/chat/interpreter.js';
+import { getStoreEngine } from '../services/chat/engine-config.js';
+import { understand } from '../services/chat/reasoning.js';
+import { planActs } from '../services/chat/planner.js';
+import { validate } from '../services/chat/validator-v2.js';
+import { loadWorkspace, saveWorkspace, incrementDeferredTurns, shouldAutoDrop, dropPending } from '../services/chat/workspace.js';
+import { composeReply } from '../services/chat/composer-v2.js';
 import { resolvePending } from '../services/chat/pendingClarification.js';
+import { shouldRunShadow } from '../services/chat/shadow-config.js';
+import { buildShadowEntry, logShadowEntry } from '../services/chat/shadow-logger.js';
+
 
 import {
   ConversationMessage,
@@ -93,6 +102,126 @@ export class ConversationService {
     }
 
     const context = await this.getOrCreateContext(storeId, customerId, conversationId, customerMessage);
+
+    // ── ENGINE BRANCHING (v1|v2) ──
+    const engine = await getStoreEngine(storeId);
+    
+    if (engine === 'v2') {
+      try {
+        // 1. Load workspace dari DB (extractedEntities)
+        // Using context.extractedEntities, assuming getOrCreateContext returns context with extractedEntities directly or accessible via contextRow
+        // Let's use the context passed as a raw object (as seen in context definition)
+        const ctxRow = await prisma.conversationContext.findUnique({
+            where: { conversationId },
+            select: { extractedEntities: true }
+        });
+        
+        // Data di DB (JSON) sudah diparse otomatis oleh Prisma menjadi object
+        const workspace = loadWorkspace(JSON.stringify(ctxRow?.extractedEntities || {}));
+        
+        // 2. Auto-drop deferred pending
+        for (const pending of workspace.pendings) {
+          if (pending.status === 'deferred') {
+            incrementDeferredTurns(workspace, pending.id);
+            if (shouldAutoDrop(pending)) {
+              dropPending(workspace, pending.id);
+              adapters.logger.info('Auto-dropped deferred pending', { pendingId: pending.id });
+            }
+          }
+        }
+        
+        // 3. Jalankan reasoning engine v2
+        const rawCatalog = await this.getStoreProducts(storeId);
+        const catalog = rawCatalog.map(p => ({
+            id: p.name,
+            name: p.name,
+            price: p.price,
+            category: null // Assuming category is not available in getStoreProducts output
+        }));
+        const history = context.messages.map(m => ({
+            id: m.id,
+            conversationId: m.conversationId,
+            role: m.sender === 'customer' ? 'user' : 'assistant',
+            content: m.content,
+            source: m.source,
+            costUSD: m.cost || 0,
+            createdAt: m.createdAt,
+        }));
+        
+        const reasoningOutcome = await understand(
+          customerMessage,
+          workspace,
+          catalog,
+          history as any,
+          fallbackService
+        );
+        
+        // 4. Execute planned acts (jika ada cart_update)
+        if (reasoningOutcome.outcome === 'reasoned' && (reasoningOutcome as any).plannedActs.length > 0) {
+          const cartActs = (reasoningOutcome as any).plannedActs.filter((a: any) => a.intent.includes('cart'));
+          for (const act of cartActs) {
+            if (act.entities && act.entities.length > 0) {
+              const productEntity = act.entities.find((e: any) => e.type === 'product');
+              if (productEntity) {
+                // Panggil executeCartOps existing dengan validasi DB
+                await this.executeCartOps([{
+                  type: act.intent === 'remove' ? 'remove' : 'add',
+                  product: productEntity.value,
+                  qty: act.qty || 1,
+                }], {
+                    conversationId,
+                    storeId,
+                    customerId,
+                    messages: [],
+                    customerCity: null
+                } as any, customerMessage);
+              }
+            }
+          }
+        }
+        
+        // 5. Save workspace ke DB
+        const updatedContextEntities = saveWorkspace(workspace);
+        await conversationContextService.updateExtractedEntities(conversationId, JSON.parse(updatedContextEntities));
+        
+        // 6. Compose reply pakai composer-v2
+        const reply = composeReply({
+          plannedActs: (reasoningOutcome as any).plannedActs || [],
+          reasoningResult: (reasoningOutcome as any).result || { acts: [], unmatched_mentions: [], topic_switch: false, draft_cart_ops: [], confidence: { entities: 0, intent: 0, selection: 0, topic: 0 } },
+          workspace,
+          catalog,
+          clarificationAttempt: 1,
+        });
+        
+        // 7. Return result (same format as v1)
+        const result = this.buildResult(conversationId, {
+          source: ResponseSource.AI,
+          content: reply,
+          confidence: (reasoningOutcome as any).result?.confidence.selection || 0.8,
+          cost: 0,
+          metadata: { engine: 'v2', outcome: reasoningOutcome.outcome, llmCalls: reasoningOutcome.llmCalls },
+        });
+        
+        await this.saveMessage({ id: crypto.randomUUID(), conversationId, sender: 'customer', content: customerMessage, createdAt: new Date() } as ConversationMessage);
+        await this.saveMessage(result.message);
+        
+        adapters.logger.info('Engine v2 active', { storeId, conversationId, outcome: reasoningOutcome.outcome });
+        return result;
+        
+      } catch (err) {
+        // CIRCUIT BREAKER: fallback ke v1
+        adapters.logger.error('Engine v2 failed, fallback to v1', {
+          storeId,
+          conversationId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        // Fall through ke logic v1 di bawah
+      }
+    }
+    
+    // ── LOGIC V1 EXISTING (tidak diubah) ──
+
+    // ── END ENGINE BRANCHING ──
 
     // Extract customerCity from context entities
     let customerCity: string | null = null;
@@ -377,6 +506,63 @@ export class ConversationService {
         confidence: 0.5,
         cost: 0,
         metadata: { reason: 'dead_end_fallback' },
+      });
+    }
+
+    // ── SHADOW HOOK (log-only, background, fail-open) ──
+    if (shouldRunShadow(storeId)) {
+      // Background execution — tidak menambah latensi jalur kritis
+      setImmediate(async () => {
+        try {
+          // Jalankan reasoning engine v3.2
+          const reasoningOutcome = await understand(
+            customerMessage,
+            context as any,
+            (await this.getStoreProducts(storeId)).map((p) => ({
+              id: 'unknown',
+              name: p.name,
+              price: p.price,
+              category: null,
+            })),
+            context.messages.map((m) => ({
+              role: m.sender === 'customer' ? 'user' : 'assistant',
+              content: m.content,
+            })) as any,
+            fallbackService
+          );
+
+          // Build shadow entry
+          const reasoned = reasoningOutcome.outcome === 'reasoned' ? reasoningOutcome : null;
+          const shadowEntry = buildShadowEntry({
+            conversationId,
+            messageId: crypto.randomUUID(),
+            storeId,
+            oldSource: result!.source,
+            oldReply: result!.message.content,
+            oldEntities: result!.message.metadata?.entities ?? [],
+            newOutcome: reasoningOutcome.outcome,
+            reasoningResult: reasoned ? reasoned.result : {
+              acts: [],
+              unmatched_mentions: [],
+              topic_switch: false,
+              draft_cart_ops: [],
+              confidence: { entities: 0, intent: 0, selection: 0, topic: 0 },
+            } as any,
+            plannedActs: reasoned ? reasoned.plannedActs : [],
+            validatorReasons: [],
+            validatorRetryable: false,
+            llmCalls: reasoningOutcome.llmCalls as 0 | 1 | 2,
+          });
+
+          // Log shadow entry
+          logShadowEntry(shadowEntry);
+        } catch (err) {
+          // Fail-open: jangan ganggu respons lama
+          adapters.logger.warn('Shadow reasoning failed', {
+            conversationId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
       });
     }
     

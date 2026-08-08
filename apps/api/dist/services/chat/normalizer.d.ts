@@ -15,7 +15,7 @@
  *
  * I12: nama produk aktif TIDAK pernah dimutasi.
  */
-/** Alias uppercase — kompatibilitas lama (message-normalizer.ts re-export). */
+/** Uppercase alias kept for backward compatibility with existing imports. */
 export declare const TYPO_DICTIONARY: Record<string, string>;
 /**
  * Tokenize pesan menjadi array token berdasarkan whitespace.
@@ -50,7 +50,7 @@ export interface NormalizerResult {
  */
 export declare function normalizeMessage(message: string, storeId: string, productNames?: string[]): Promise<NormalizerResult>;
 /**
- * Alias synchronous klasik (kompat message-normalizer.ts re-export).
+ * Synchronous alias for classic use.
  */
 export declare function normalizeText(text: string): string;
 /**

@@ -4,9 +4,15 @@ import { orderService } from './order.service.js';
 import { conversationContextService } from './conversation-context.service.js';
 import { prisma } from '../infrastructure/prisma.js';
 import { productService } from './product.service.js';
-import { resolvePendingClarification, buildPendingFromClarification } from '../services/clarification-resolver.js';
 import { normalize } from '../services/chat/normalizer.js';
 import { runOneCall, validateCartOps, truncateTo2Sentences } from '../services/chat/interpreter.js';
+import { getStoreEngine } from '../services/chat/engine-config.js';
+import { understand } from '../services/chat/reasoning.js';
+import { loadWorkspace, saveWorkspace, incrementDeferredTurns, shouldAutoDrop, dropPending } from '../services/chat/workspace.js';
+import { composeReply } from '../services/chat/composer-v2.js';
+import { resolvePending } from '../services/chat/pendingClarification.js';
+import { shouldRunShadow } from '../services/chat/shadow-config.js';
+import { buildShadowEntry, logShadowEntry } from '../services/chat/shadow-logger.js';
 import { ResponseSource, } from '../domain/types.js';
 export class ConversationService {
     async processCustomerMessage(storeId, customerId, conversationId, customerMessage) {
@@ -48,6 +54,105 @@ export class ConversationService {
             });
         }
         const context = await this.getOrCreateContext(storeId, customerId, conversationId, customerMessage);
+        // ── ENGINE BRANCHING (v1|v2) ──
+        const engine = await getStoreEngine(storeId);
+        if (engine === 'v2') {
+            try {
+                // 1. Load workspace dari DB (extractedEntities)
+                // Using context.extractedEntities, assuming getOrCreateContext returns context with extractedEntities directly or accessible via contextRow
+                // Let's use the context passed as a raw object (as seen in context definition)
+                const ctxRow = await prisma.conversationContext.findUnique({
+                    where: { conversationId },
+                    select: { extractedEntities: true }
+                });
+                const workspace = loadWorkspace(ctxRow?.extractedEntities ? JSON.stringify(ctxRow.extractedEntities) : '{}');
+                // 2. Auto-drop deferred pending
+                for (const pending of workspace.pendings) {
+                    if (pending.status === 'deferred') {
+                        incrementDeferredTurns(workspace, pending.id);
+                        if (shouldAutoDrop(pending)) {
+                            dropPending(workspace, pending.id);
+                            adapters.logger.info('Auto-dropped deferred pending', { pendingId: pending.id });
+                        }
+                    }
+                }
+                // 3. Jalankan reasoning engine v2
+                const rawCatalog = await this.getStoreProducts(storeId);
+                const catalog = rawCatalog.map(p => ({
+                    id: p.name,
+                    name: p.name,
+                    price: p.price,
+                    category: null // Assuming category is not available in getStoreProducts output
+                }));
+                const history = context.messages.map(m => ({
+                    id: m.id,
+                    conversationId: m.conversationId,
+                    role: m.sender === 'customer' ? 'user' : 'assistant',
+                    content: m.content,
+                    source: m.source,
+                    costUSD: m.cost || 0,
+                    createdAt: m.createdAt,
+                }));
+                const reasoningOutcome = await understand(customerMessage, workspace, catalog, history, fallbackService);
+                // 4. Execute planned acts (jika ada cart_update)
+                if (reasoningOutcome.outcome === 'reasoned' && reasoningOutcome.plannedActs.length > 0) {
+                    const cartActs = reasoningOutcome.plannedActs.filter((a) => a.intent.includes('cart'));
+                    for (const act of cartActs) {
+                        if (act.entities && act.entities.length > 0) {
+                            const productEntity = act.entities.find((e) => e.type === 'product');
+                            if (productEntity) {
+                                // Panggil executeCartOps existing dengan validasi DB
+                                await this.executeCartOps([{
+                                        type: act.intent === 'remove' ? 'remove' : 'add',
+                                        product: productEntity.value,
+                                        qty: act.qty || 1,
+                                    }], {
+                                    conversationId,
+                                    storeId,
+                                    customerId,
+                                    messages: [],
+                                    customerCity: null
+                                }, customerMessage);
+                            }
+                        }
+                    }
+                }
+                // 5. Save workspace ke DB
+                const updatedContextEntities = saveWorkspace(workspace);
+                await conversationContextService.updateExtractedEntities(conversationId, JSON.parse(updatedContextEntities));
+                // 6. Compose reply pakai composer-v2
+                const reply = composeReply({
+                    plannedActs: reasoningOutcome.plannedActs || [],
+                    reasoningResult: reasoningOutcome.result || { acts: [], unmatched_mentions: [], topic_switch: false, draft_cart_ops: [], confidence: { entities: 0, intent: 0, selection: 0, topic: 0 } },
+                    workspace,
+                    catalog,
+                    clarificationAttempt: 1,
+                });
+                // 7. Return result (same format as v1)
+                const result = this.buildResult(conversationId, {
+                    source: ResponseSource.AI,
+                    content: reply,
+                    confidence: reasoningOutcome.result?.confidence.selection || 0.8,
+                    cost: 0,
+                    metadata: { engine: 'v2', outcome: reasoningOutcome.outcome, llmCalls: reasoningOutcome.llmCalls },
+                });
+                await this.saveMessage({ id: crypto.randomUUID(), conversationId, sender: 'customer', content: customerMessage, createdAt: new Date() });
+                await this.saveMessage(result.message);
+                adapters.logger.info('Engine v2 active', { storeId, conversationId, outcome: reasoningOutcome.outcome });
+                return result;
+            }
+            catch (err) {
+                // CIRCUIT BREAKER: fallback ke v1
+                adapters.logger.error('Engine v2 failed, fallback to v1', {
+                    storeId,
+                    conversationId,
+                    error: err instanceof Error ? err.message : String(err),
+                });
+                // Fall through ke logic v1 di bawah
+            }
+        }
+        // ── LOGIC V1 EXISTING (tidak diubah) ──
+        // ── END ENGINE BRANCHING ──
         // Extract customerCity from context entities
         let customerCity = null;
         try {
@@ -63,37 +168,28 @@ export class ConversationService {
         catch {
             // non-critical
         }
-        // ── BAGIAN 2: Pending clarification resolver — runs FIRST, before normalizer/tier/interpreter ──
-        // Jika ada pending clarification, resolver cek afirmatif/negasi V0 LLM.
-        const resolveResult = await resolvePendingClarification(conversationId, storeId, customerMessage);
-        if (resolveResult.handled) {
-            if (resolveResult.escalate) {
-                // Alihkan ke pemilik toko (retry_count max 1 exceeded)
-                await this.saveMessage({
-                    id: crypto.randomUUID(),
-                    conversationId,
-                    sender: 'customer',
-                    content: customerMessage,
-                    createdAt: new Date(),
-                });
-                await this.saveMessage({
-                    id: crypto.randomUUID(),
-                    conversationId,
-                    sender: 'assistant',
-                    content: resolveResult.reply ?? 'Saya akan hubungkan ke pemilik toko.',
-                    source: ResponseSource.HUMAN,
-                    createdAt: new Date(),
-                });
-                await conversationContextService.refreshSession(conversationId);
-                return this.buildResult(conversationId, {
-                    source: ResponseSource.HUMAN,
-                    content: resolveResult.reply ?? 'Saya akan hubungkan ke pemilik toko.',
-                    confidence: 0.9,
-                    cost: 0,
-                    metadata: { reason: 'escalation_clarification_retry_exceeded' },
-                });
-            }
-            // Approved atau negasi — eksekusi cart_ops TANPA LLM, render dari DB state
+        // ── Audit tracking (DoD FASE 5: setiap pesan catat stages/llm/intent/cartOps) ──
+        const stagesReached = [];
+        let finalIntent = null;
+        const cartOpsExecuted = [];
+        let llmCallCount = 0;
+        let result = null;
+        // ── BAGIAN 2: Pending clarification resolver — runs FIRST, before normalizer (0 LLM) ──
+        // I10: afirmatif/negasi menutup klarifikasi V0 LLM. Menggunakan resolvePending
+        // (pure, action-based) dari chat/pendingClarification.js.
+        const pendingRow = await prisma.conversationContext.findUnique({
+            where: { conversationId },
+            select: { extractedEntities: true },
+        });
+        const entities = conversationContextService.parseExtractedEntities(pendingRow?.extractedEntities);
+        const pending = conversationContextService.getPendingClarification(entities);
+        const rawEntities = pendingRow?.extractedEntities || {};
+        const previousMutation = rawEntities.previousMutation;
+        if (pending) {
+            stagesReached.push('resolver');
+            const cartOps = this.flattenPendingOps(pending);
+            const resolved = resolvePending({ pending: { ops: cartOps, snapshot: previousMutation?.cartSnapshot, retryCount: pending.retry_count ?? 0 } }, customerMessage);
+            // Save customer message
             await this.saveMessage({
                 id: crypto.randomUUID(),
                 conversationId,
@@ -101,46 +197,156 @@ export class ConversationService {
                 content: customerMessage,
                 createdAt: new Date(),
             });
+            if (resolved.action === 'ESCALATE') {
+                finalIntent = 'escalate';
+                await this.saveMessage({
+                    id: crypto.randomUUID(),
+                    conversationId,
+                    sender: 'assistant',
+                    content: 'Saya akan hubungkan ke pemilik toko.',
+                    source: ResponseSource.HUMAN,
+                    createdAt: new Date(),
+                });
+                await conversationContextService.refreshSession(conversationId);
+                this.logPipelineAudit(conversationId, stagesReached, llmCallCount, finalIntent, cartOpsExecuted);
+                return this.buildResult(conversationId, {
+                    source: ResponseSource.HUMAN,
+                    content: 'Saya akan hubungkan ke pemilik toko.',
+                    confidence: 0.9,
+                    cost: 0,
+                    metadata: { reason: 'escalation_clarification_retry_exceeded' },
+                });
+            }
+            // Clear pending — applies for both EXECUTE and ROLLBACK
+            await conversationContextService.clearPendingClarification(conversationId);
+            await this.clearPreviousMutation(conversationId);
+            if (resolved.action === 'EXECUTE') {
+                finalIntent = 'execute_pending';
+                // Execute pending cart ops (0 LLM) — fix I13: harga dari DB via modifyCart
+                if (resolved.ops && resolved.ops.length > 0) {
+                    for (const op of resolved.ops) {
+                        await conversationContextService.modifyCart(conversationId, 'add', {
+                            addedProduct: op.product,
+                            qty: op.qty,
+                            price: op.price,
+                        });
+                        cartOpsExecuted.push(op);
+                    }
+                }
+                const cart = await this.getCartFromDb(conversationId);
+                const reply = await this.renderCartSummary(conversationId, cart, undefined);
+                await this.saveMessage({
+                    id: crypto.randomUUID(),
+                    conversationId,
+                    sender: 'assistant',
+                    content: reply,
+                    source: ResponseSource.SOP,
+                    createdAt: new Date(),
+                });
+                await conversationContextService.refreshSession(conversationId);
+                this.logPipelineAudit(conversationId, stagesReached, llmCallCount, finalIntent, cartOpsExecuted);
+                return this.buildResult(conversationId, {
+                    source: ResponseSource.SOP,
+                    content: reply,
+                    confidence: 0.9,
+                    cost: 0,
+                    metadata: { reason: 'resolver_no_llm', cartOpsExecuted: cartOpsExecuted.length },
+                });
+            }
+            if (resolved.action === 'ROLLBACK') {
+                finalIntent = 'rollback';
+                if (resolved.snapshot) {
+                    await conversationContextService.restoreCart(conversationId, resolved.snapshot);
+                }
+                const reply = 'Oke Kak, sudah saya batalkan ya. 🙏';
+                await this.saveMessage({
+                    id: crypto.randomUUID(),
+                    conversationId,
+                    sender: 'assistant',
+                    content: reply,
+                    source: ResponseSource.SOP,
+                    createdAt: new Date(),
+                });
+                await conversationContextService.refreshSession(conversationId);
+                this.logPipelineAudit(conversationId, stagesReached, llmCallCount, finalIntent, cartOpsExecuted);
+                return this.buildResult(conversationId, {
+                    source: ResponseSource.SOP,
+                    content: reply,
+                    confidence: 0.9,
+                    cost: 0,
+                    metadata: { reason: 'rollback' },
+                });
+            }
+            // RETRY — belum jelas, increment retry dan re-ask
+            finalIntent = 'retry';
+            const exceeded = await conversationContextService.incrementClarificationRetry(conversationId);
+            if (exceeded) {
+                finalIntent = 'escalate';
+                await this.saveMessage({
+                    id: crypto.randomUUID(),
+                    conversationId,
+                    sender: 'assistant',
+                    content: 'Saya akan hubungkan ke pemilik toko.',
+                    source: ResponseSource.HUMAN,
+                    createdAt: new Date(),
+                });
+                await conversationContextService.refreshSession(conversationId);
+                this.logPipelineAudit(conversationId, stagesReached, llmCallCount, finalIntent, cartOpsExecuted);
+                return this.buildResult(conversationId, {
+                    source: ResponseSource.HUMAN,
+                    content: 'Saya akan hubungkan ke pemilik toko.',
+                    confidence: 0.9,
+                    cost: 0,
+                    metadata: { reason: 'escalation_clarification_retry_exceeded' },
+                });
+            }
+            const reply = pending.question ?? 'Masih kurang jelas nih. Bisa Kakak beri tahu pilihan Kakak?';
             await this.saveMessage({
                 id: crypto.randomUUID(),
                 conversationId,
                 sender: 'assistant',
-                content: resolveResult.reply ?? 'Baik.',
+                content: reply,
                 source: ResponseSource.SOP,
                 createdAt: new Date(),
             });
             await conversationContextService.refreshSession(conversationId);
+            this.logPipelineAudit(conversationId, stagesReached, llmCallCount, finalIntent, cartOpsExecuted);
             return this.buildResult(conversationId, {
                 source: ResponseSource.SOP,
-                content: resolveResult.reply ?? 'Baik.',
-                confidence: 0.9,
+                content: reply,
+                confidence: 0.85,
                 cost: 0,
-                metadata: { reason: 'resolver_no_llm', resolvedAction: resolveResult.action },
+                metadata: { reason: 'resolver_retry' },
             });
         }
         // ── BAGIAN 1: Normalizer (0 LLM) ───────────────────────────────────
         // I12: guard nama produk — cek produk DULU (fuzzy match), jangan dimutasi.
-        let result = null;
-        let normalizedMsg = customerMessage;
+        stagesReached.push('normalizer');
         const storeProducts = await this.getStoreProducts(storeId);
         const productDictionary = storeProducts.map((p) => p.name);
-        normalizedMsg = normalize(customerMessage, productDictionary);
+        const normalizedMsg = normalize(customerMessage, productDictionary);
         // Bangun PipelineContext sekali — dibawa ke Stage 3 + Stage 4.
         const pipelineCtx = await this.buildPipelineContext(storeId, customerId, conversationId, context, customerCity, conversation.customerName ?? null, storeProducts);
         // ── STAGE 3: Rule-based fast-path tiers (0 LLM) ────────────────────
         // I13: reply Stage 3 hanya memakai harga dari DB, tidak dari LLM.
         // getResponse kembalikan terminal fallback (source HUMAN) bila tidak ada
         // tier yang cocok; perlakukan sebagai miss agar Stage 4 (LLM) dapat jalan.
+        stagesReached.push('tier3');
         const tierResult = await fallbackService.getResponse(normalizedMsg, pipelineCtx);
         if (tierResult && tierResult.source !== ResponseSource.HUMAN) {
             result = tierResult;
+            finalIntent = 'fastpath';
         }
         // ── STAGE 4: Single LLM Interpreter (MAKS 1 CALL) ──────────────────
         // I8: cek ctx.llmCalledThisTurn sebelum panggil runOneCall.
         if (!result && !pipelineCtx.llmCalledThisTurn) {
+            stagesReached.push('llm');
             pipelineCtx.llmCalledThisTurn = true;
+            llmCallCount = 1;
+            finalIntent = 'llm';
             const llmResult = await runOneCall(normalizedMsg, pipelineCtx);
             if (llmResult) {
+                finalIntent = llmResult.intent ?? 'llm';
                 let executedAdd = false;
                 // I15: validateCartOps dipanggil sebelum executeCartOps.
                 if (llmResult.cart_ops && llmResult.cart_ops.length > 0) {
@@ -148,6 +354,7 @@ export class ConversationService {
                     if (valid.length > 0) {
                         await this.executeCartOps(valid, pipelineCtx, normalizedMsg);
                         executedAdd = valid.some((o) => o.type === 'add');
+                        cartOpsExecuted.push(...valid);
                     }
                     if (missing.length > 0) {
                         llmResult.missing_info = [...(llmResult.missing_info || []), ...missing];
@@ -155,7 +362,11 @@ export class ConversationService {
                 }
                 if (llmResult.clarification) {
                     // Simpan pending BEFORE kirim pertanyaan (BAGIAN 2.2)
-                    await conversationContextService.setPendingClarification(conversationId, buildPendingFromClarification(llmResult.clarification));
+                    await conversationContextService.setPendingClarification(conversationId, {
+                        question: llmResult.clarification.question,
+                        options: llmResult.clarification.options,
+                        expected_type: llmResult.clarification.expected_type,
+                    });
                     result = this.buildResult(conversationId, {
                         source: ResponseSource.SOP,
                         content: llmResult.clarification.question,
@@ -189,12 +400,63 @@ export class ConversationService {
         }
         // ── STAGE 5: Dead-end fallback ─────────────────────────────────────
         if (!result) {
+            stagesReached.push('deadend');
+            finalIntent = 'dead_end';
             result = this.buildResult(conversationId, {
                 source: ResponseSource.HUMAN,
                 content: 'Maaf kak, saya kurang paham. Bisa diulang?',
                 confidence: 0.5,
                 cost: 0,
                 metadata: { reason: 'dead_end_fallback' },
+            });
+        }
+        // ── SHADOW HOOK (log-only, background, fail-open) ──
+        if (shouldRunShadow(storeId)) {
+            // Background execution — tidak menambah latensi jalur kritis
+            setImmediate(async () => {
+                try {
+                    // Jalankan reasoning engine v3.2
+                    const reasoningOutcome = await understand(customerMessage, context, (await this.getStoreProducts(storeId)).map((p) => ({
+                        id: 'unknown',
+                        name: p.name,
+                        price: p.price,
+                        category: null,
+                    })), context.messages.map((m) => ({
+                        role: m.sender === 'customer' ? 'user' : 'assistant',
+                        content: m.content,
+                    })), fallbackService);
+                    // Build shadow entry
+                    const reasoned = reasoningOutcome.outcome === 'reasoned' ? reasoningOutcome : null;
+                    const shadowEntry = buildShadowEntry({
+                        conversationId,
+                        messageId: crypto.randomUUID(),
+                        storeId,
+                        oldSource: result.source,
+                        oldReply: result.message.content,
+                        oldEntities: result.message.metadata?.entities ?? [],
+                        newOutcome: reasoningOutcome.outcome,
+                        reasoningResult: reasoned ? reasoned.result : {
+                            acts: [],
+                            unmatched_mentions: [],
+                            topic_switch: false,
+                            draft_cart_ops: [],
+                            confidence: { entities: 0, intent: 0, selection: 0, topic: 0 },
+                        },
+                        plannedActs: reasoned ? reasoned.plannedActs : [],
+                        validatorReasons: [],
+                        validatorRetryable: false,
+                        llmCalls: reasoningOutcome.llmCalls,
+                    });
+                    // Log shadow entry
+                    logShadowEntry(shadowEntry);
+                }
+                catch (err) {
+                    // Fail-open: jangan ganggu respons lama
+                    adapters.logger.warn('Shadow reasoning failed', {
+                        conversationId,
+                        error: err instanceof Error ? err.message : String(err),
+                    });
+                }
             });
         }
         await this.saveMessage({
@@ -217,11 +479,20 @@ export class ConversationService {
         await conversationContextService.appendMessage(conversationId, result.message);
         await conversationContextService.refreshSession(conversationId);
         // Non-blocking order extraction — fire and forget, errors caught silently
-        orderService.extractAndSaveOrder(conversationId, customerId, storeId, normalizedMsg);
+        void orderService.extractAndSaveOrder(conversationId, customerId, storeId, normalizedMsg).catch(() => { });
         // Done-ordering signal → finalize draft order to waiting_address
         if (orderService.detectDoneOrdering(normalizedMsg)) {
             await orderService.finalizeDraftOrder(conversationId);
         }
+        // ── Audit log (DoD FASE 5) ──
+        this.logPipelineAudit(conversationId, stagesReached, llmCallCount, finalIntent, cartOpsExecuted);
+        result.metadata = {
+            ...(result.metadata || {}),
+            stagesReached,
+            llmCallCount,
+            finalIntent,
+            cartOpsExecuted: cartOpsExecuted.length,
+        };
         return result;
     }
     /**
@@ -659,6 +930,45 @@ export class ConversationService {
             faqResponseCount: conv.faqResponseCount,
             history,
         };
+    }
+    // ── Audit logging (DoD FASE 5) ──────────────────────────────────────────
+    logPipelineAudit(conversationId, stagesReached, llmCallCount, finalIntent, cartOpsExecuted) {
+        adapters.logger.info('Pipeline audit', {
+            conversationId,
+            stagesReached,
+            llmCallCount,
+            finalIntent,
+            cartOpsExecuted: cartOpsExecuted.length,
+        });
+    }
+    // ── Flatten pending clarification options into CartOp[] ───────────────
+    flattenPendingOps(pending) {
+        const ops = [];
+        if (pending.options && pending.options.length > 0) {
+            for (const opt of pending.options) {
+                const cartOps = opt?.cartOps;
+                if (cartOps)
+                    ops.push(...cartOps);
+            }
+        }
+        return ops;
+    }
+    // ── Clear previousMutation snapshot from extractedEntities ───────────
+    async clearPreviousMutation(conversationId) {
+        try {
+            const ctxRow = await prisma.conversationContext.findUnique({
+                where: { conversationId },
+                select: { extractedEntities: true },
+            });
+            const entities = conversationContextService.parseExtractedEntities(ctxRow?.extractedEntities);
+            await prisma.conversationContext.update({
+                where: { conversationId },
+                data: { extractedEntities: { ...entities, previousMutation: null } },
+            });
+        }
+        catch (e) {
+            adapters.logger.warn('Failed to clear previousMutation', { error: e.message });
+        }
     }
 }
 export const conversationService = new ConversationService();
