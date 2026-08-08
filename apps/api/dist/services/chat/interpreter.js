@@ -6,8 +6,8 @@
  * SATU panggilan Groq. Config: temp 0.2, jsonMode, maxTokens 250.
  * I8: max 1 LLM call per message.
  *
- * detectBuySignal + contextInterpreter (dari fallback.service.ts / route-decider.ts)
- * diserap ke dalam runOneCall — buy_signal + intent + cart_ops dalam SATU call.
+ * Legacy buy-signal + context-interpreter logic absorbed into runOneCall —
+ * buy_signal + intent + cart_ops in a single Groq call.
  */
 import { groqAdapter } from '../../adapters/ai/groq.adapter.js';
 import { adapters } from '../../adapters/container.js';

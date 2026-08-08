@@ -26,6 +26,7 @@ import adminAuditRoutes from './routes/admin/audit-logs.js';
 import adminBackupRoutes from './routes/admin/backups.js';
 import adminKeyRotationRoutes from './routes/admin/key-rotation.js';
 import adminMagicPasteRoutes from './routes/admin/magic-paste.js';
+import adminEngineRoutes from './routes/admin/engine.js';
 import missionControlRouter from './routes/admin/mission-control.js';
 import adminAnalyticsRoutes from './routes/admin/analytics.js';
 import productsRouter from './routes/products.js';
@@ -98,6 +99,7 @@ app.use('/api/admin/backups', adminAuthMiddleware, adminBackupRoutes);
 app.use('/api/admin/key-rotation', adminAuthMiddleware, adminKeyRotationRoutes);
 app.use('/api/admin/analytics', adminAuthMiddleware, adminAnalyticsRoutes);
 app.use('/api/admin/magic-paste', adminAuthMiddleware, adminMagicPasteRoutes);
+app.use('/api/admin/engine', adminAuthMiddleware, adminEngineRoutes);
 app.use('/api/admin/mission-control', adminAuthMiddleware, requireAdminRole(['super_admin']), missionControlRouter);
 app.use('/api/admin', adminProductsRoutes);
 // Store-owner product routes (auth) — mounted BEFORE public catalog

@@ -8,8 +8,7 @@
  *   Guard afirmatif/negasi, lalu retry-cap (maks 1) → escalate.
  *   I10: afirmatif/negasi menutup klarifikasi tanpa LLM.
  *
- * Untuk menjaga kompilasi dependen lama (clarification-resolver.ts + test lama
- * multi-turn / ot-percakapa) tetap utuh, modul ini JUGA mengekspor:
+ * Untuk menjaga kompilasi backward compatibility, modul ini juga mengekspor
  *   - resolvePendingClarification(message, pending)  -> status-based ResolverResult
  *   - normalizeForMatch, isAffirmative, isNegation
  *   - selectOption, parseExplicitChoice
@@ -17,7 +16,6 @@
  * Catatan migrasi: resolvePending (baru, substring-includes) dan
  * resolvePendingClarification (lama, whole-word) memiliki semantik match yang
  * membedakan — ini menahan perilaku lama sampai orkestrator dilakoni fase berikutnya.
- * conversation.service.ts / clarification-resolver.ts TIDAK disentuh fase ini.
  */
 import type { PendingClarification, CartOp, ResolverResult } from '../../domain/types.js';
 /** State pending yang dibawa resolvePending (camelCase, per spesifikasi fase 2). */
@@ -57,7 +55,7 @@ export declare function isAffirmative(text: string): boolean;
 export declare function isNegation(text: string): boolean;
 /**
  * Resolver kompatibilitas lama — PURE, status-based.
- * Dipakai clarification-resolver.ts (re-export + dynamic import) dan test lama.
+ * Dipakai legacy compatibility re-exports.
  *
  * @param message  pesan mentah customer
  * @param pending  PendingClarification dari DB

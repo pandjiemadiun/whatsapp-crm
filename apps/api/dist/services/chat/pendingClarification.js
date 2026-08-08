@@ -94,7 +94,7 @@ function flattenCartOps(pending) {
 }
 /**
  * Resolver kompatibilitas lama — PURE, status-based.
- * Dipakai clarification-resolver.ts (re-export + dynamic import) dan test lama.
+ * Dipakai legacy compatibility re-exports.
  *
  * @param message  pesan mentah customer
  * @param pending  PendingClarification dari DB

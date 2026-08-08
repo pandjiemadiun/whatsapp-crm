@@ -17,6 +17,32 @@ redis.on('error', (err) => {
 });
 
 export class RedisAdapter {
+  async lpush(key: string, value: string): Promise<number> {
+    try {
+      return await redis.lpush(key, value);
+    } catch (err) {
+      adapters.logger.error(`Redis LPUSH failed: ${key}`, err as Error);
+      return 0;
+    }
+  }
+
+  async lrange(key: string, start: number, stop: number): Promise<string[]> {
+    try {
+      return await redis.lrange(key, start, stop);
+    } catch (err) {
+      adapters.logger.error(`Redis LRANGE failed: ${key}`, err as Error);
+      return [];
+    }
+  }
+
+  async ltrim(key: string, start: number, stop: number): Promise<void> {
+    try {
+      await redis.ltrim(key, start, stop);
+    } catch (err) {
+      adapters.logger.error(`Redis LTRIM failed: ${key}`, err as Error);
+    }
+  }
+
   async get<T>(key: string): Promise<T | null> {
     try {
       const data = await redis.get(key);

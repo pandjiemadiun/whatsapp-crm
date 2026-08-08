@@ -77,6 +77,9 @@ export declare class ConversationService {
     getConversationStats(conversationId: string): Promise<ConversationStats>;
     findAllByStore(storeId: string): Promise<ConversationListItem[]>;
     findByIdWithHistory(id: string): Promise<ConversationDetail | null>;
+    private logPipelineAudit;
+    private flattenPendingOps;
+    private clearPreviousMutation;
 }
 export declare const conversationService: ConversationService;
 export {};

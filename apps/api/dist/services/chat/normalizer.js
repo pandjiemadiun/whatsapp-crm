@@ -52,7 +52,7 @@ const typoDictionary = {
     iyaa: 'iya',
     ok: 'oke',
 };
-/** Alias uppercase — kompatibilitas lama (message-normalizer.ts re-export). */
+/** Uppercase alias kept for backward compatibility with existing imports. */
 export const TYPO_DICTIONARY = typoDictionary;
 // ─────────────────────────────────────────────────────────────────────────────
 // Levenshtein edit distance
@@ -166,7 +166,7 @@ export async function normalizeMessage(message, storeId, productNames) {
     };
 }
 /**
- * Alias synchronous klasik (kompat message-normalizer.ts re-export).
+ * Synchronous alias for classic use.
  */
 export function normalizeText(text) {
     return normalize(text, []);
