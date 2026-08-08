@@ -1,7 +1,14 @@
 import { Router } from 'express';
 import { getStoreEngine, setStoreEngine } from '../../services/chat/engine-config.js';
 import { redisAdapter } from '../../adapters/cache/redis.adapter.js';
+import { getCanaryMetrics } from '../../services/chat/engine-metrics.js';
 const router = Router();
+// Canary metrics
+router.get('/metrics/:storeId', async (req, res) => {
+    const { storeId } = req.params;
+    const days = req.query.days ? parseInt(req.query.days) : 7;
+    res.json(await getCanaryMetrics(storeId, days));
+});
 // Get config for a store
 router.get('/:storeId', async (req, res) => {
     const { storeId } = req.params;

@@ -124,12 +124,15 @@ function buildValidatorContext(workspace, catalog) {
  * @param catalog        katalog produk toko
  * @param history        riwayat conversasi (untuk prompt LLM)
  * @param fallbackService  service tier deterministik (READ-ONLY; typed as any)
+ * @param storeId        id toko (diteruskan ke fast path untuk tier call)
+ * @param conversationId id percakapan (diteruskan agar tier 'total' membaca
+ *                         cart DB yang benar)
  * @returns ReasoningOutcome
  */
-export async function understand(message, workspace, catalog, history, fallbackService) {
+export async function understand(message, workspace, catalog, history, fallbackService, storeId = '', conversationId = '') {
     // ── A. FAST PATH (0 LLM) ─────────────────────────────────────────────────
     // cek fast path DULU sebelum LLM (guard-first)
-    const fastResult = await tryFastPath(message, workspace, catalog, fallbackService);
+    const fastResult = await tryFastPath(message, workspace, catalog, fallbackService, storeId, conversationId);
     if (fastResult.hit) {
         // Resolved (pending) atau tier — 0 LLM call
         // I8: tidak ada panggilan LLM di sini
@@ -189,6 +192,16 @@ export async function understand(message, workspace, catalog, history, fallbackS
     }
     // ok = false
     if (!validation1.retryable) {
+        if (validation1.reasons.some((r) => r.includes('I-V2-6'))) {
+            add(trace, 'clarification_trigger', { reasons: validation1.reasons });
+            return {
+                outcome: 'reasoned',
+                result: attempt1.result,
+                plannedActs: [],
+                llmCalls: stats.calls,
+                trace,
+            };
+        }
         // Terminal (I-V2-4/I-V2-6) → JANGAN retry LLM
         add(trace, 'fallback', {
             reason: 'terminal_validation',

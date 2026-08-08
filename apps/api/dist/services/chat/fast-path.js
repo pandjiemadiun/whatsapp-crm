@@ -22,12 +22,41 @@ const ORDINAL_MAP = {
     keempat: 3,
     kelima: 4,
 };
+/** Kata penanda order/cart intent (guard sebelum tier fallback, substring-matched). */
+const ORDER_INTENT_KEYWORDS = [
+    'mau',
+    'beli',
+    'pesan',
+    'tambah',
+    'kurang',
+    'hapus',
+    'ga jadi',
+    'gak jadi',
+    'batal',
+    'cancel',
+];
 // ─────────────────────────────────────────────────────────────────────────────
 // Helper: normalisasi pesan untuk tier call
 // ─────────────────────────────────────────────────────────────────────────────
 /** Normalisasi pesan: lowercase, trim, squash huruf berulang, buang punctuation. */
 function normalizeMessage(message) {
     return normalizeForMatch(message);
+}
+/**
+ * Cek apakah pesan adalah order/cart intent (guard murah, 0-LLM).
+ * Dipanggil SEBELUM tier fallback agar multi-add / cancel JANGAN disergap
+ * tier klarifikasi produk (mis. tryProduct menyergap "aku mau kangkung 1").
+ *
+ * Deteksi (terhadap pesan ternormalisasi):
+ *   - mengandung nama produk dari catalog DAN angka kuantitas, ATAU
+ *   - mengandung kata kunci order (mau/beli/pesan/tambah/kurang/hapus/
+ *     ga jadi/gak jadi/batal/cancel).
+ */
+function isOrderIntent(message, catalog) {
+    if (ORDER_INTENT_KEYWORDS.some((kw) => message.includes(kw)))
+        return true;
+    const mentionsProduct = catalog.some((c) => message.includes(c.name.toLowerCase()));
+    return mentionsProduct && /\d/.test(message);
 }
 // ─────────────────────────────────────────────────────────────────────────────
 // Helper: match deterministik terhadap pending clarification
@@ -184,11 +213,11 @@ function tryMatchPending(message, pending) {
  * Hanya bidang yang dibutuhkan fallbackService.getResponse.
  * I8: tidak ada panggilan LLM di sini — hanya persiapan konteks saja.
  */
-function buildMinimalContext(workspace, catalog) {
+function buildMinimalContext(workspace, catalog, storeId, conversationId) {
     return {
-        storeId: '',
+        storeId,
         customerId: '',
-        conversationId: '',
+        conversationId,
         messages: [],
         customerCity: null,
         customerName: null,
@@ -220,12 +249,14 @@ function buildMinimalContext(workspace, catalog) {
  * @param workspace      state workspace perpercakapan (v2)
  * @param catalog        katalog produk toko
  * @param fallbackService  service tier deterministik (READ-ONLY); typed as any
+ * @param storeId        id toko (diteruskan ke tier, READ-ONLY)
+ * @param conversationId id percakapan (agar tier 'total' membaca cart DB yang benar)
  * @returns FastPathResult — discriminated union
  *
  * I8: maksimal 0 panggilan LLM di fast path ini.
  * I10: semua hasil resolved/tier berasal dari rule-based resolver, bukan LLM.
  */
-export async function tryFastPath(message, workspace, catalog, fallbackService) {
+export async function tryFastPath(message, workspace, catalog, fallbackService, storeId = '', conversationId = '') {
     const normalizedMsg = normalizeMessage(message);
     // ── A. CEK PENDING ACTIVE ──────────────────────────────────────────────
     // cek pending active DULU sebelum tier (guard-first per spesifikasi)
@@ -243,12 +274,23 @@ export async function tryFastPath(message, workspace, catalog, fallbackService) 
         parkPendingAndIncrementTurns(workspace, pending.id);
         return { hit: false, pendingParked: true, topicSwitch: true };
     }
+    // ── A2. ORDER-INTENT GUARD ─────────────────────────────────────────────
+    // Multi-add & cancel JANGAN disergap tier klarifikasi produk —
+    // biarkan LLM reasoning (Stage 4) yang menangani.
+    if (isOrderIntent(normalizedMsg, catalog)) {
+        return { hit: false, pendingParked: false, topicSwitch: false };
+    }
     // ── B. CEK TIER DETERMINISTIK (READ-ONLY) ──────────────────────────────
     // Baru cek tier setelah konfirmasi tidak ada pending active
-    const ctx = buildMinimalContext(workspace, catalog);
+    const ctx = buildMinimalContext(workspace, catalog, storeId, conversationId);
     const tierResult = await fallbackService.getResponse(normalizedMsg, ctx);
-    // Jika bukan HUMAN → ada jawaban deterministik
+    // Jika bukan HUMAN → ada jawaban deterministik.
+    // FIX A: klarifikasi produk ambigu (PRODUCT) dianggap miss — tier hanya
+    // menyodorkan list produk, biarkan LLM reasoning yang menuntas jalur beli.
     if (tierResult && tierResult.source !== ResponseSource.HUMAN) {
+        if (tierResult.source === ResponseSource.PRODUCT) {
+            return { hit: false, pendingParked: false, topicSwitch: false };
+        }
         return { hit: true, outcome: 'tier', payload: tierResult };
     }
     // ── C. RETURN — semua miss, lanjut ke LLM interpreter (Stage 4) ────────

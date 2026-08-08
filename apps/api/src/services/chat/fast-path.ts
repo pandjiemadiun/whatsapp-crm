@@ -48,6 +48,20 @@ const ORDINAL_MAP: Readonly<Record<string, number>> = {
   kelima: 4,
 };
 
+/** Kata penanda order/cart intent (guard sebelum tier fallback, substring-matched). */
+const ORDER_INTENT_KEYWORDS: readonly string[] = [
+  'mau',
+  'beli',
+  'pesan',
+  'tambah',
+  'kurang',
+  'hapus',
+  'ga jadi',
+  'gak jadi',
+  'batal',
+  'cancel',
+];
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Result types
 // ─────────────────────────────────────────────────────────────────────────────
@@ -85,6 +99,24 @@ export type FastPathResult =
 /** Normalisasi pesan: lowercase, trim, squash huruf berulang, buang punctuation. */
 function normalizeMessage(message: string): string {
   return normalizeForMatch(message);
+}
+
+/**
+ * Cek apakah pesan adalah order/cart intent (guard murah, 0-LLM).
+ * Dipanggil SEBELUM tier fallback agar multi-add / cancel JANGAN disergap
+ * tier klarifikasi produk (mis. tryProduct menyergap "aku mau kangkung 1").
+ *
+ * Deteksi (terhadap pesan ternormalisasi):
+ *   - mengandung nama produk dari catalog DAN angka kuantitas, ATAU
+ *   - mengandung kata kunci order (mau/beli/pesan/tambah/kurang/hapus/
+ *     ga jadi/gak jadi/batal/cancel).
+ */
+function isOrderIntent(message: string, catalog: CatalogItem[]): boolean {
+  if (ORDER_INTENT_KEYWORDS.some((kw) => message.includes(kw))) return true;
+  const mentionsProduct = catalog.some((c) =>
+    message.includes(c.name.toLowerCase())
+  );
+  return mentionsProduct && /\d/.test(message);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -268,12 +300,14 @@ function tryMatchPending(message: string, pending: PendingV2): ResolvedPayload |
  */
 function buildMinimalContext(
   workspace: WorkspaceV2,
-  catalog: CatalogItem[]
+  catalog: CatalogItem[],
+  storeId: string,
+  conversationId: string
 ): PipelineContext {
   return {
-    storeId: '',
+    storeId,
     customerId: '',
-    conversationId: '',
+    conversationId,
     messages: [],
     customerCity: null,
     customerName: null,
@@ -310,6 +344,8 @@ function buildMinimalContext(
  * @param workspace      state workspace perpercakapan (v2)
  * @param catalog        katalog produk toko
  * @param fallbackService  service tier deterministik (READ-ONLY); typed as any
+ * @param storeId        id toko (diteruskan ke tier, READ-ONLY)
+ * @param conversationId id percakapan (agar tier 'total' membaca cart DB yang benar)
  * @returns FastPathResult — discriminated union
  *
  * I8: maksimal 0 panggilan LLM di fast path ini.
@@ -319,7 +355,9 @@ export async function tryFastPath(
   message: string,
   workspace: WorkspaceV2,
   catalog: CatalogItem[],
-  fallbackService: any
+  fallbackService: any,
+  storeId: string = '',
+  conversationId: string = ''
 ): Promise<FastPathResult> {
   const normalizedMsg = normalizeMessage(message);
 
@@ -343,16 +381,28 @@ export async function tryFastPath(
     return { hit: false, pendingParked: true, topicSwitch: true };
   }
 
+  // ── A2. ORDER-INTENT GUARD ─────────────────────────────────────────────
+  // Multi-add & cancel JANGAN disergap tier klarifikasi produk —
+  // biarkan LLM reasoning (Stage 4) yang menangani.
+  if (isOrderIntent(normalizedMsg, catalog)) {
+    return { hit: false, pendingParked: false, topicSwitch: false };
+  }
+
   // ── B. CEK TIER DETERMINISTIK (READ-ONLY) ──────────────────────────────
   // Baru cek tier setelah konfirmasi tidak ada pending active
-  const ctx = buildMinimalContext(workspace, catalog);
+  const ctx = buildMinimalContext(workspace, catalog, storeId, conversationId);
   const tierResult: ResponseResult = await fallbackService.getResponse(
     normalizedMsg,
     ctx
   );
 
-  // Jika bukan HUMAN → ada jawaban deterministik
+  // Jika bukan HUMAN → ada jawaban deterministik.
+  // FIX A: klarifikasi produk ambigu (PRODUCT) dianggap miss — tier hanya
+  // menyodorkan list produk, biarkan LLM reasoning yang menuntas jalur beli.
   if (tierResult && tierResult.source !== ResponseSource.HUMAN) {
+    if (tierResult.source === ResponseSource.PRODUCT) {
+      return { hit: false, pendingParked: false, topicSwitch: false };
+    }
     return { hit: true, outcome: 'tier', payload: tierResult };
   }
 

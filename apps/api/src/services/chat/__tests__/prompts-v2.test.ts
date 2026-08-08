@@ -129,8 +129,8 @@ describe('buildUserPrompt (FASE B1)', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('FEW_SHOTS (FASE B1)', () => {
-  it('FEW_SHOTS.length === 5', () => {
-    assert.equal(FEW_SHOTS.length, 5);
+  it('FEW_SHOTS.length === 6', () => {
+    assert.equal(FEW_SHOTS.length, 6);
   });
 
   it('setiap few-shot punya struktur {user_message, context_description, expected_json}', () => {

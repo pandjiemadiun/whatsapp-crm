@@ -65,7 +65,8 @@ export class ConversationService {
                     where: { conversationId },
                     select: { extractedEntities: true }
                 });
-                const workspace = loadWorkspace(ctxRow?.extractedEntities ? JSON.stringify(ctxRow.extractedEntities) : '{}');
+                // Data di DB (JSON) sudah diparse otomatis oleh Prisma menjadi object
+                const workspace = loadWorkspace(JSON.stringify(ctxRow?.extractedEntities || {}));
                 // 2. Auto-drop deferred pending
                 for (const pending of workspace.pendings) {
                     if (pending.status === 'deferred') {
@@ -93,19 +94,94 @@ export class ConversationService {
                     costUSD: m.cost || 0,
                     createdAt: m.createdAt,
                 }));
-                const reasoningOutcome = await understand(customerMessage, workspace, catalog, history, fallbackService);
+                const reasoningOutcome = await understand(customerMessage, workspace, catalog, history, fallbackService, storeId, conversationId);
+                // ── FAST PATH HIT: pakai payload langsung ──
+                if (reasoningOutcome.outcome === 'tier') {
+                    const payload = reasoningOutcome.payload;
+                    const replyText = payload?.message?.content || payload?.reply || payload?.content || 'Maaf kak, saya kurang paham.';
+                    const result = this.buildResult(conversationId, {
+                        source: ResponseSource.AI,
+                        content: replyText,
+                        confidence: 0.9,
+                        cost: 0,
+                        metadata: { engine: 'v2', outcome: reasoningOutcome.outcome, llmCalls: reasoningOutcome.llmCalls },
+                    });
+                    await this.saveMessage({ id: crypto.randomUUID(), conversationId, sender: 'customer', content: customerMessage, createdAt: new Date() });
+                    await this.saveMessage(result.message);
+                    adapters.logger.info('Engine v2 active', { storeId, conversationId, outcome: reasoningOutcome.outcome, llmCalls: reasoningOutcome.llmCalls });
+                    return result;
+                }
+                // ── OUTCOME 'resolved': fast-path resolver (0 LLM) ──
+                if (reasoningOutcome.outcome === 'resolved') {
+                    const payload = reasoningOutcome.payload;
+                    const pending = workspace.pendings.find((p) => p.id === payload.pendingId);
+                    if (pending) {
+                        pending.status = 'resolved';
+                    }
+                    // EXECUTE: turunkan cart ops dari pending + resolvedIndices/matchedNames,
+                    // lalu eksekusi via executeCartOps yang sama (harga dari catalog/DB).
+                    if (payload.action === 'EXECUTE' && pending) {
+                        const ops = this.deriveResolvedCartOps(pending, payload, catalog);
+                        if (ops.length > 0) {
+                            await this.executeCartOps(ops, {
+                                conversationId,
+                                storeId,
+                                customerId,
+                                messages: [],
+                                customerCity: null,
+                            }, customerMessage);
+                        }
+                    }
+                    // Save workspace ke DB
+                    const resolvedContextEntities = saveWorkspace(workspace);
+                    await conversationContextService.updateExtractedEntities(conversationId, JSON.parse(resolvedContextEntities));
+                    // Compose reply dengan total dari DB cart
+                    const resolvedCart = await this.getCartFromDb(conversationId);
+                    const resolvedSubtotal = resolvedCart.reduce((sum, i) => sum + (Number(i.price) * Number(i.qty || 1)), 0);
+                    let resolvedReply;
+                    if (payload.action === 'EXECUTE') {
+                        resolvedReply = await this.renderCartSummary(conversationId, resolvedCart);
+                        if (resolvedSubtotal > 0) {
+                            resolvedReply += `\n\nTotal belanja Kakak: *Rp ${resolvedSubtotal.toLocaleString('id-ID')}*.`;
+                        }
+                    }
+                    else {
+                        resolvedReply = 'Oke Kak, sudah saya batalkan ya. 🙏';
+                    }
+                    const resolvedResult = this.buildResult(conversationId, {
+                        source: ResponseSource.SOP,
+                        content: resolvedReply,
+                        confidence: 0.9,
+                        cost: 0,
+                        metadata: { engine: 'v2', outcome: 'resolved', action: payload.action, llmCalls: reasoningOutcome.llmCalls },
+                    });
+                    await this.saveMessage({ id: crypto.randomUUID(), conversationId, sender: 'customer', content: customerMessage, createdAt: new Date() });
+                    await this.saveMessage(resolvedResult.message);
+                    adapters.logger.info('Engine v2 active', { storeId, conversationId, outcome: 'resolved', action: payload.action, llmCalls: reasoningOutcome.llmCalls });
+                    return resolvedResult;
+                }
                 // 4. Execute planned acts (jika ada cart_update)
                 if (reasoningOutcome.outcome === 'reasoned' && reasoningOutcome.plannedActs.length > 0) {
-                    const cartActs = reasoningOutcome.plannedActs.filter((a) => a.intent.includes('cart'));
+                    const priceMap = new Map();
+                    for (const item of catalog) {
+                        priceMap.set((item.name || '').toLowerCase(), item.price ?? 0);
+                    }
+                    const cartActs = reasoningOutcome.plannedActs.filter((a) => {
+                        const intent = ((a?.intent) || '').toLowerCase();
+                        return intent.includes('cart') || intent.includes('remove') || intent.includes('hapus') || intent.includes('cancel') || intent.includes('delete') || intent.includes('batal');
+                    });
                     for (const act of cartActs) {
                         if (act.entities && act.entities.length > 0) {
                             const productEntity = act.entities.find((e) => e.type === 'product');
                             if (productEntity) {
-                                // Panggil executeCartOps existing dengan validasi DB
+                                const intent = ((act.intent) || '').toLowerCase();
+                                const isRemove = intent.includes('remove') || intent.includes('hapus') || intent.includes('cancel') || intent.includes('delete') || intent.includes('batal');
+                                // Panggil executeCartOps existing dengan harga dari DB (I13), bukan LLM
                                 await this.executeCartOps([{
-                                        type: act.intent === 'remove' ? 'remove' : 'add',
+                                        type: isRemove ? 'remove' : 'add',
                                         product: productEntity.value,
                                         qty: act.qty || 1,
+                                        price: isRemove ? 0 : (priceMap.get(String(productEntity.value).toLowerCase()) ?? 0),
                                     }], {
                                     conversationId,
                                     storeId,
@@ -138,7 +214,7 @@ export class ConversationService {
                 });
                 await this.saveMessage({ id: crypto.randomUUID(), conversationId, sender: 'customer', content: customerMessage, createdAt: new Date() });
                 await this.saveMessage(result.message);
-                adapters.logger.info('Engine v2 active', { storeId, conversationId, outcome: reasoningOutcome.outcome });
+                adapters.logger.info('Engine v2 active', { storeId, conversationId, outcome: reasoningOutcome.outcome, error: reasoningOutcome.error, llmCalls: reasoningOutcome.llmCalls });
                 return result;
             }
             catch (err) {
@@ -147,6 +223,7 @@ export class ConversationService {
                     storeId,
                     conversationId,
                     error: err instanceof Error ? err.message : String(err),
+                    stack: err instanceof Error ? err.stack : undefined,
                 });
                 // Fall through ke logic v1 di bawah
             }
@@ -424,7 +501,7 @@ export class ConversationService {
                     })), context.messages.map((m) => ({
                         role: m.sender === 'customer' ? 'user' : 'assistant',
                         content: m.content,
-                    })), fallbackService);
+                    })), fallbackService, storeId);
                     // Build shadow entry
                     const reasoned = reasoningOutcome.outcome === 'reasoned' ? reasoningOutcome : null;
                     const shadowEntry = buildShadowEntry({
@@ -620,6 +697,7 @@ export class ConversationService {
         }
         if (currentItems.length > 0) {
             const cartSummary = currentItems
+                .filter((i) => Number(i.qty || 0) > 0)
                 .map((i) => {
                 const qty = typeof i.qty === 'number' ? i.qty : 1;
                 const price = typeof i.price === 'number' ? i.price : 0;
@@ -950,6 +1028,34 @@ export class ConversationService {
                 if (cartOps)
                     ops.push(...cartOps);
             }
+        }
+        return ops;
+    }
+    // ── Derive CartOp[] dari pending v2 (workspace) + ResolvedPayload ────
+    // Opsi pending v2 adalah label string (umumnya nama produk). Untuk EXECUTE,
+    // matchedNames/resolvedIndices menandakan opsi yang dipilih → add qty 1,
+    // harga dari catalog/DB (I13 — bukan dari LLM/fast-path).
+    deriveResolvedCartOps(pending, payload, catalog) {
+        const priceMap = new Map();
+        for (const c of catalog) {
+            priceMap.set(c.name.toLowerCase(), c.price);
+        }
+        const names = payload.matchedNames && payload.matchedNames.length > 0
+            ? payload.matchedNames
+            : (payload.resolvedIndices ?? [])
+                .map((i) => pending.options[i])
+                .filter((n) => typeof n === 'string');
+        const ops = [];
+        for (const name of names) {
+            const product = (name || '').trim();
+            if (!product)
+                continue;
+            ops.push({
+                type: 'add',
+                product,
+                qty: 1,
+                price: priceMap.get(product.toLowerCase()) ?? 0,
+            });
         }
         return ops;
     }

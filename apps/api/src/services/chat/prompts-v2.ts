@@ -3,7 +3,7 @@
  * src/services/chat/prompts-v2.ts
  *
  * Builder untuk system prompt + user prompt LLM interpreter v3.2, beserta
- * 5 contoh transkrip (few-shot) sebagai konstanta terpisah.
+ * 6 contoh transkrip (few-shot) sebagai konstanta terpisah.
  *
  * I8: artefak prompt ini tidak memanggil model — hanya memproduksi string
  *     yang dikirimkan ke interpreter (stage 4, LLM).
@@ -73,7 +73,7 @@ k. summary_update: 1–2 kalimat ringkasan state percakapan setelah pesan ini.
 Produk yang tersedia di katalog: ${productNames}
 
 ========== CONTOH (FEW-SHOT) ==========
-Lihat konstanta FEW_SHOTS untuk 5 contoh transkrip permintaan yang diharapkan.`;
+Lihat konstanta FEW_SHOTS untuk 6 contoh transkrip permintaan yang diharapkan.`;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -115,16 +115,17 @@ Kembalikan respons HANYA sebagai JSON yang valid sesuai InterpreterResultV2 (lih
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FEW_SHOTS (5 contoh transkrip untuk dilatih interpreter)
+// FEW_SHOTS (6 contoh transkrip untuk dilatih interpreter)
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * 5 contoh (user_message + konteks + expected_json) yang memandu interpreter:
+ * 6 contoh (user_message + konteks + expected_json) yang memandu interpreter:
  *   1. multi-act 3 produk — tidak ada product mention yang missing.
  *   2. revisi dalam satu kalimat — act kedua punya supersedes=act_id pertama.
  *   3. topic switch — pending aktif + user tanya di luar scope order.
  *   4. quantifier mismatch — user merujuk opsi ketiga yang tidak ada.
  *   5. afirmasi ambigu — "iya" pada 4 opsi, butuh clarification.
+ *   6. multi-add dalam satu kalimat — 3 produk qty 1 eksplisit, confidence tinggi.
  */
 export const FEW_SHOTS: FewShotV2[] = [
   {
@@ -203,6 +204,23 @@ export const FEW_SHOTS: FewShotV2[] = [
   "clarification": {"question":"Mau pilih yang mana dari A/B/C/D?","options":["A","B","C","D"],"expected_type":"choice"},
   "confidence": {"entities":0.3,"intent":0.3,"selection":0.3,"topic":0.3},
   "summary_update": "Customer mengonfirmasi secara ambigu pada 4 opsi; butuh klarifikasi."
+}`,
+  },
+  {
+    user_message: 'Aku mau kangkung 1, wortel 1, kentang 1 ya',
+    context_description:
+      'Customer order 3 produk sekaligus (multi-add) dalam satu kalimat; semua product mention masuk acts[].entities, qty=1 eksplisit, confidence tinggi.',
+    expected_json: `{
+  "acts": [
+    {"act_id":"act_kangkung","intent":"cart_update","entities":[{"type":"product","value":"kangkung","confidence":0.9}],"qty":1,"qty_source":"explicit","confidence":0.9,"supersedes":null},
+    {"act_id":"act_wortel","intent":"cart_update","entities":[{"type":"product","value":"wortel","confidence":0.9}],"qty":1,"qty_source":"explicit","confidence":0.9,"supersedes":null},
+    {"act_id":"act_kentang","intent":"cart_update","entities":[{"type":"product","value":"kentang","confidence":0.9}],"qty":1,"qty_source":"explicit","confidence":0.9,"supersedes":null}
+  ],
+  "unmatched_mentions": [],
+  "topic_switch": false,
+  "draft_cart_ops": [],
+  "confidence": {"entities":0.9,"intent":0.9,"selection":0.95,"topic":0.9},
+  "summary_update": "Customer menambahkan kangkung, wortel, dan kentang ke keranjang."
 }`,
   },
 ];
