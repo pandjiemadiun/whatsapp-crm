@@ -42,7 +42,7 @@ Canary engine v3.2 di toko store-f7140b5c. Tujuan: buktikan 3 bug asli fix
 - I11: kamus slang normalizer (toralin→total) — typo masih lolos tier total
 - I12: guard nama produk di normalizer — belum diverifikasi
 - Golden dataset + test invarian permanen I8-I15 — baru test unit parsial
-- Eskalasi ke pemilik toko setelah retry klarifikasi — belum ada
+- Eskalasi ke pemilik toko setelah retry klarifikasi — **SELESAI & VERIFIED (TASK C1, commit 718c375)**: escalation sekarang set `conversation.status='human_takeover'`+`humanTakeoverAt` di kedua cabang ESCALATE (conversation.service.ts:419, 506) via `markHumanTakeover`, pakai balasan jujur (`composeEscalateReply`). Bukti DB readback Prisma: BEFORE {status:'open',humanTakeoverAt:null} → AFTER {status:'human_takeover',humanTakeoverAt:ISO}. Unit test `composeEscalateReply`/`escalateStatusUpdate` pass; full suite tetap 20p / 2 pre-existing-fail. Lihat catatan audit penuh + Stage 2 dilampir di bawah.
 - Keputusan terbuka: "dua duanya" jika opsi >2; retry LLM dihitung panggilan atau tidak
 
 ## ROADMAP SETELAH ENGINE V2 STABIL: PWA WEB CHATBOX
@@ -86,3 +86,46 @@ Acceptance: test baru safety-boundary-v2.test.ts 5/5 pass (v1 never called,
 EXACTLY satu mutation, return reply tidak throw). npx tsc --noEmit 0 error, 
 npx tsc OK, pm2 restart api online tanpa crash loop.
 NEXT: golden dataset I8-I15 invarian untuk kunci permanen.
+
+## TEMUAN TASK C1 — AUDIT ESKALASI KE PEMILIK TOKO (Stage 1, SELESAI)
+Tanggal: 9 Agu 2026 (sesi ini)
+Verdict: GAP NYATA — opsi (c). Eskalasi perclarification tidak memicu
+tindakan ke owner, hanya balasan generik.
+
+Bukti (file:line):
+- validator-v2.ts:265-273 I-V2-4 (attempts>CLARIFICATION_MAX_ATTEMPTS)
+  ok=false, retryable=false — logic benar & di-test validator-v2.test.ts:94.
+  TAPI: reasoning.ts:224 `understand()` (yang memanggil validate/I-V2-4)
+  HANYA dipanggil oleh SHADOW hook conversation.service.ts:657
+  (background, fail-open) — bukan jalur keputusan produksi.
+- Jalur produksi (conversation.service.ts) pakai runOneCall (line 582),
+  bukan understand(). Eskalasi produksi = BAGIAN 2 pending resolver:
+  * line 419-437 (resolvePending -> ESCALATE): kirim "Saya akan hubungkan
+    ke pemilik toko." (source HUMAN) + RETURN EARLY.
+  * line 506-524 (retry-exceeded): sama — cand message + return early.
+- Pada KEDUA cabang: TIDAK ada pemanggilan prisma.conversation.update
+  untuk status='human_takeover' / humanTakeoverAt.
+  updateConversationStats (line 1037-1055) — yang SET 'status' — hanya
+  dijalankan di jalur NORMAL, dan TIDAK pernah meng-set 'human_takeover'
+  (konvensi hanya di-set oleh circuit breaker, lihat msg di line 1037).
+- notifyHumanTakeover (message-processor.service.ts:485-498, yang SET
+  status='human_takeover'+humanTakeoverAt) HANYA dipanggil oleh circuit
+  breaker ketika LLM unavailable (line 217-220, 245-251) — trigger
+  BERBEDA (infra LLM down), bukan "customer gagal klarifikasi 2x".
+- Owner dashboard (admin/stores.ts:547) filter humanTakeoverAt != null;
+  schema.prisma:150 punya kolom humanTakeoverAt DateTime?.
+- Kesimpulan: opsi (a) status human_takeover TIDAK ter-set; opsi (b) tidak
+  ada notifikasi WA/dashboard/email ke owner dari jalur clarify-retry;
+  opsi (c) hanya cand balasan generik ("Saya akan hubungkan ke pemilik
+  toko.") tanpa tindakan lanjutan. Ini yang dimaksud STATUS-V2.md lama
+  "eskalasi — belum ada".
+
+Stage 2 (fix) — dilakukan sesuai scope TASK C1:
+- composer-v2.ts: tambah composeEscalateReply() (balasan jujur, bukan
+  "kurang paham") + escalateStatusUpdate() payload konvensi existing.
+- conversation.service.ts: kedua cabang ESCALATE/terminal panggil
+  markHumanTakeover() (set status='human_takeover'+humanTakeoverAt)
+  dan pakai reply yang jujur. Scope HANYA cabang escalate/terminal.
+VERIFIED STAGE 1: audit+laporan selesai sebelum kode disentuh. Gap jelas
+opsi (c) → diperbolehkan lanjut Stage 2 langsung per ketentuan TASK.
+
