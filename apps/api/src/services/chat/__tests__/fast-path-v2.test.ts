@@ -230,3 +230,62 @@ describe('tryFastPath — tier deterministik (FASE B3)', () => {
     }
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// C. Multi-product order guard (narrow) — FIX multi-add
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('tryFastPath — multi-product order guard (narrow)', () => {
+  it('order multi-produk (>=2 nama produk + kata order) → hit=false', async () => {
+    const ws = makeWorkspace({ pendings: [] });
+    // "mau wortel kangkung kentang" — 2+ produk + order verb → skip tier
+    const result = await tryFastPath(
+      'aku mau wortel kangkung kentang ya',
+      ws,
+      CATALOG,
+      makeStubFallback(ResponseSource.CATALOG)
+    );
+    assert.equal(result.hit, false);
+    if (!result.hit) {
+      assert.equal(result.pendingParked, false);
+      assert.equal(result.topicSwitch, false);
+    }
+  });
+
+  it('greeting ("Halo") → tetap tier hit:true', async () => {
+    const ws = makeWorkspace({ pendings: [] });
+    const result = await tryFastPath('Halo', ws, CATALOG, makeStubFallback(ResponseSource.CATALOG));
+    assert.equal(result.hit, true);
+    if (result.hit) {
+      assert.equal(result.outcome, 'tier');
+      assert.ok('source' in result.payload);
+    }
+  });
+
+  it('katalog ("Kamu jual apa?") → tetap tier hit:true', async () => {
+    const ws = makeWorkspace({ pendings: [] });
+    const result = await tryFastPath('Kamu jual apa?', ws, CATALOG, makeStubFallback(ResponseSource.CATALOG));
+    assert.equal(result.hit, true);
+    if (result.hit) {
+      assert.equal(result.outcome, 'tier');
+      assert.ok('source' in result.payload);
+    }
+  });
+
+  it('multi-produk TANPA order verb → tier tetap jalan', async () => {
+    const ws = makeWorkspace({ pendings: [] });
+    // Ada 2+ nama produk ("wortel","kentang") tapi tidak ada kata
+    // mau/beli/pesan/tambah/ambil → guard narrow TIDAK terpicu.
+    const result = await tryFastPath(
+      'wortel kangkung kentang ya',
+      ws,
+      CATALOG,
+      makeStubFallback(ResponseSource.CATALOG)
+    );
+    assert.equal(result.hit, true);
+    if (result.hit) {
+      assert.equal(result.outcome, 'tier');
+      assert.ok('source' in result.payload);
+    }
+  });
+});

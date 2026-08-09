@@ -318,3 +318,37 @@ describe('validate — I-V2-9 qty/qty_source (FASE A2)', () => {
     assert.equal(v.retryable, true);
   });
 });
+
+describe('validate — defensive entity value (regresi crash [object Object])', () => {
+  it('product entity tanpa value -> TIDAK throw, ditandai invalid (I-V2-1-invalid)', () => {
+    // LLM output malformed: product entity meng-omit `value`.
+    const act = makeAct({
+      act_id: 'nv',
+      intent: 'cart_update',
+      entities: [
+        { type: 'product', value: undefined as unknown as string, confidence: 0.9 },
+      ],
+    });
+    const result = makeValidResult({ acts: [act] });
+    // Harusnya TIDAK melempar (dulu: TypeError .value.toLowerCase()).
+    let v: ValidatorResultV2;
+    assert.doesNotThrow(() => {
+      v = validate(result, makeValidCtx());
+    });
+    assert.equal(v!.ok, false);
+    assert.equal(v!.retryable, true);
+    assert.ok(v!.reasons.some((r) => r.includes('I-V2-1-invalid')));
+  });
+
+  it('product entity valid tetap dijaga semantics "no product value left behind"', () => {
+    // entity valid, bukan di catalog, bukan unmatched -> tetap I-V2-1 biasa
+    const act = makeAct({
+      act_id: 'ok',
+      entities: [{ type: 'product', value: 'Air Putih', confidence: 0.9 }],
+    });
+    const v = validate(makeValidResult({ acts: [act] }), makeValidCtx());
+    assert.equal(v.retryable, true);
+    assert.ok(v.reasons.some((r) => r.includes('I-V2-1')));
+    assert.ok(!v.reasons.some((r) => r.includes('I-V2-1-invalid')));
+  });
+});

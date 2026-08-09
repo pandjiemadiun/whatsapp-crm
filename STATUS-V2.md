@@ -38,3 +38,20 @@ Canary engine v3.2 di toko store-f7140b5c. Tujuan: buktikan 3 bug asli fix
 - fonnteToken: sudah di-restore (asli)
 - Redis flag: store-f7140b5c:engine = v2
 - Test gratis: curl webhook + baca dashboard /dashboard/conversations
+## DARI DOKUMEN LAMA — MASIH VALID, BELUM DIKERJAKAN
+- I11: kamus slang normalizer (toralin→total) — typo masih lolos tier total
+- I12: guard nama produk di normalizer — belum diverifikasi
+- Golden dataset + test invarian permanen I8-I15 — baru test unit parsial
+- Eskalasi ke pemilik toko setelah retry klarifikasi — belum ada
+- Keputusan terbuka: "dua duanya" jika opsi >2; retry LLM dihitung panggilan atau tidak
+
+## ROADMAP SETELAH ENGINE V2 STABIL: PWA WEB CHATBOX
+- Blueprint lengkap ada di chat 9/8 00:50 (simpan sbg 04_PWA_BLUEPRINT.md).
+- Prinsip: zero-friction auth (uid URL->localStorage), <300KB, multi-tenant
+  qlobot.web.id/c/<slug>, UI mirip WA.
+- 3 endpoint: GET /api/pwa/:slug/init, GET .../history?uid=, POST .../message
+  (POST menembak pipeline AI sama -> gratis tanpa Fonnte).
+- 5 milestone: skeleton -> session handoff -> 2-way chat -> manifest+katalog -> push.
+- Bonus: M1-M3 = test harness gratis pengganti Fonnte.
+- CATATAN: uid map ke conversationId existing (store:<nomor>); channel WA/WEB
+  field terpisah, JANGAN timpa field source.

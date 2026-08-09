@@ -26,6 +26,7 @@ import type { FastPathResult } from './fast-path.js';
 import { buildSystemPrompt, buildUserPrompt } from './prompts-v2.js';
 import type { HistoryTurn } from './prompts-v2.js';
 import { validate, type ValidatorContextV2 } from './validator-v2.js';
+import type { ValidatorResultV2 } from './types-v2.js';
 import { planActs } from './planner.js';
 import { groqAdapter } from '../../adapters/ai/groq.adapter.js';
 
@@ -287,7 +288,23 @@ export async function understand(
 
   // Validate
   const validatorCtx = buildValidatorContext(workspace, catalog);
-  const validation1 = validate(attempt1.result, validatorCtx);
+  let validation1: ValidatorResultV2;
+  try {
+    validation1 = validate(attempt1.result, validatorCtx);
+  } catch (err) {
+    // Validator crash (misal LLM output malformed) — JANGAN biarkan engine crash.
+    const msg = err instanceof Error ? err.message : String(err);
+    const stack = err instanceof Error ? err.stack : undefined;
+    // eslint-disable-next-line no-console
+    console.error('[validator-v2] validate() attempt 1 threw:', { message: msg, stack });
+    add(trace, 'validator_crash', { attempt: 1, error: msg });
+    return {
+      outcome: 'fallback_reasoning_failed',
+      error: `validator error: ${msg}`,
+      llmCalls: stats.calls as 0 | 1 | 2,
+      trace,
+    };
+  }
   add(trace, 'validator_ok', {
     ok: validation1.ok,
     retryable: validation1.retryable,
@@ -355,7 +372,23 @@ export async function understand(
   }
 
   convertPositionalSupersedes(attempt2.result);
-  const validation2 = validate(attempt2.result, validatorCtx);
+  let validation2: ValidatorResultV2;
+  try {
+    validation2 = validate(attempt2.result, validatorCtx);
+  } catch (err) {
+    // Validator crash (misal LLM output malformed) — JANGAN biarkan engine crash.
+    const msg = err instanceof Error ? err.message : String(err);
+    const stack = err instanceof Error ? err.stack : undefined;
+    // eslint-disable-next-line no-console
+    console.error('[validator-v2] validate() attempt 2 threw:', { message: msg, stack });
+    add(trace, 'validator_crash', { attempt: 2, error: msg });
+    return {
+      outcome: 'fallback_reasoning_failed',
+      error: `validator error: ${msg}`,
+      llmCalls: stats.calls as 0 | 1 | 2,
+      trace,
+    };
+  }
   add(trace, 'validator_ok', {
     ok: validation2.ok,
     attempt: 2,
