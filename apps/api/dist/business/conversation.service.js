@@ -57,6 +57,23 @@ export class ConversationService {
         // ── ENGINE BRANCHING (v1|v2) ──
         const engine = await getStoreEngine(storeId);
         if (engine === 'v2') {
+            let v2MutationExecuted = false;
+            const buildSafeReply = (error) => {
+                adapters.logger.error('CRITICAL: Engine v2 failed after cart mutation, returning generic safe reply', {
+                    storeId,
+                    conversationId,
+                    mutationCommitted: true,
+                    error: error instanceof Error ? error.message : String(error),
+                    stack: error instanceof Error ? error.stack : undefined,
+                });
+                return this.buildResult(conversationId, {
+                    source: ResponseSource.AI,
+                    content: 'Baik kak, pesanan Kakak sudah kami catat. Silakan ketik *total* atau *cek pesanan* untuk melihat ringkasannya ya. 🙏',
+                    confidence: 0.5,
+                    cost: 0,
+                    metadata: { engine: 'v2', outcome: 'safe-reply', error: error instanceof Error ? error.message : String(error) },
+                });
+            };
             try {
                 // 1. Load workspace dari DB (extractedEntities)
                 // Using context.extractedEntities, assuming getOrCreateContext returns context with extractedEntities directly or accessible via contextRow
@@ -130,35 +147,47 @@ export class ConversationService {
                                 messages: [],
                                 customerCity: null,
                             }, customerMessage);
+                            // ── P0 SAFETY BOUNDARY: mutasi cart sukses, jangan pernah jalan ke v1 ──
+                            v2MutationExecuted = true;
                         }
                     }
-                    // Save workspace ke DB
-                    const resolvedContextEntities = saveWorkspace(workspace);
-                    await conversationContextService.updateExtractedEntities(conversationId, JSON.parse(resolvedContextEntities));
-                    // Compose reply dengan total dari DB cart
-                    const resolvedCart = await this.getCartFromDb(conversationId);
-                    const resolvedSubtotal = resolvedCart.reduce((sum, i) => sum + (Number(i.price) * Number(i.qty || 1)), 0);
-                    let resolvedReply;
-                    if (payload.action === 'EXECUTE') {
-                        resolvedReply = await this.renderCartSummary(conversationId, resolvedCart);
-                        if (resolvedSubtotal > 0) {
-                            resolvedReply += `\n\nTotal belanja Kakak: *Rp ${resolvedSubtotal.toLocaleString('id-ID')}*.`;
+                    try {
+                        // Save workspace ke DB
+                        const resolvedContextEntities = saveWorkspace(workspace);
+                        await conversationContextService.updateExtractedEntities(conversationId, JSON.parse(resolvedContextEntities));
+                        // Compose reply dengan total dari DB cart
+                        const resolvedCart = await this.getCartFromDb(conversationId);
+                        const resolvedSubtotal = resolvedCart.reduce((sum, i) => sum + (Number(i.price) * Number(i.qty || 1)), 0);
+                        let resolvedReply;
+                        if (payload.action === 'EXECUTE') {
+                            resolvedReply = await this.renderCartSummary(conversationId, resolvedCart);
+                            if (resolvedSubtotal > 0) {
+                                resolvedReply += `\n\nTotal belanja Kakak: *Rp ${resolvedSubtotal.toLocaleString('id-ID')}*.`;
+                            }
                         }
+                        else {
+                            resolvedReply = 'Oke Kak, sudah saya batalkan ya. 🙏';
+                        }
+                        const resolvedResult = this.buildResult(conversationId, {
+                            source: ResponseSource.SOP,
+                            content: resolvedReply,
+                            confidence: 0.9,
+                            cost: 0,
+                            metadata: { engine: 'v2', outcome: 'resolved', action: payload.action, llmCalls: reasoningOutcome.llmCalls },
+                        });
+                        await this.saveMessage({ id: crypto.randomUUID(), conversationId, sender: 'customer', content: customerMessage, createdAt: new Date() });
+                        await this.saveMessage(resolvedResult.message);
+                        adapters.logger.info('Engine v2 active', { storeId, conversationId, outcome: 'resolved', action: payload.action, llmCalls: reasoningOutcome.llmCalls });
+                        return resolvedResult;
                     }
-                    else {
-                        resolvedReply = 'Oke Kak, sudah saya batalkan ya. 🙏';
+                    catch (postMutationErr) {
+                        // ── P0 SAFETY BOUNDARY: mutasi SUDAH terjadi → return safe reply ke customer ──
+                        if (v2MutationExecuted) {
+                            return buildSafeReply(postMutationErr);
+                        }
+                        // Mutasi belum terjadi → throw biar outer catch fallback ke v1
+                        throw postMutationErr;
                     }
-                    const resolvedResult = this.buildResult(conversationId, {
-                        source: ResponseSource.SOP,
-                        content: resolvedReply,
-                        confidence: 0.9,
-                        cost: 0,
-                        metadata: { engine: 'v2', outcome: 'resolved', action: payload.action, llmCalls: reasoningOutcome.llmCalls },
-                    });
-                    await this.saveMessage({ id: crypto.randomUUID(), conversationId, sender: 'customer', content: customerMessage, createdAt: new Date() });
-                    await this.saveMessage(resolvedResult.message);
-                    adapters.logger.info('Engine v2 active', { storeId, conversationId, outcome: 'resolved', action: payload.action, llmCalls: reasoningOutcome.llmCalls });
-                    return resolvedResult;
                 }
                 // 4. Execute planned acts (jika ada cart_update)
                 if (reasoningOutcome.outcome === 'reasoned' && reasoningOutcome.plannedActs.length > 0) {
@@ -192,33 +221,45 @@ export class ConversationService {
                                     messages: [],
                                     customerCity: null
                                 }, customerMessage);
+                                // ── P0 SAFETY BOUNDARY: mutasi cart sukses, jangan pernah jalan ke v1 ──
+                                v2MutationExecuted = true;
                             }
                         }
                     }
                 }
-                // 5. Save workspace ke DB
-                const updatedContextEntities = saveWorkspace(workspace);
-                await conversationContextService.updateExtractedEntities(conversationId, JSON.parse(updatedContextEntities));
-                // 6. Compose reply pakai composer-v2
-                const reply = composeReply({
-                    plannedActs: reasoningOutcome.plannedActs || [],
-                    reasoningResult: reasoningOutcome.result || { acts: [], unmatched_mentions: [], topic_switch: false, draft_cart_ops: [], confidence: { entities: 0, intent: 0, selection: 0, topic: 0 } },
-                    workspace,
-                    catalog,
-                    clarificationAttempt: 1,
-                });
-                // 7. Return result (same format as v1)
-                const result = this.buildResult(conversationId, {
-                    source: ResponseSource.AI,
-                    content: reply,
-                    confidence: reasoningOutcome.result?.confidence?.selection || 0.8,
-                    cost: 0,
-                    metadata: { engine: 'v2', outcome: reasoningOutcome.outcome, llmCalls: reasoningOutcome.llmCalls },
-                });
-                await this.saveMessage({ id: crypto.randomUUID(), conversationId, sender: 'customer', content: customerMessage, createdAt: new Date() });
-                await this.saveMessage(result.message);
-                adapters.logger.info('Engine v2 active', { storeId, conversationId, outcome: reasoningOutcome.outcome, error: reasoningOutcome.error, llmCalls: reasoningOutcome.llmCalls });
-                return result;
+                try {
+                    // 5. Save workspace ke DB
+                    const updatedContextEntities = saveWorkspace(workspace);
+                    await conversationContextService.updateExtractedEntities(conversationId, JSON.parse(updatedContextEntities));
+                    // 6. Compose reply pakai composer-v2
+                    const reply = composeReply({
+                        plannedActs: reasoningOutcome.plannedActs || [],
+                        reasoningResult: reasoningOutcome.result || { acts: [], unmatched_mentions: [], topic_switch: false, draft_cart_ops: [], confidence: { entities: 0, intent: 0, selection: 0, topic: 0 } },
+                        workspace,
+                        catalog,
+                        clarificationAttempt: 1,
+                    });
+                    // 7. Return result (same format as v1)
+                    const result = this.buildResult(conversationId, {
+                        source: ResponseSource.AI,
+                        content: reply,
+                        confidence: reasoningOutcome.result?.confidence?.selection || 0.8,
+                        cost: 0,
+                        metadata: { engine: 'v2', outcome: reasoningOutcome.outcome, llmCalls: reasoningOutcome.llmCalls },
+                    });
+                    await this.saveMessage({ id: crypto.randomUUID(), conversationId, sender: 'customer', content: customerMessage, createdAt: new Date() });
+                    await this.saveMessage(result.message);
+                    adapters.logger.info('Engine v2 active', { storeId, conversationId, outcome: reasoningOutcome.outcome, error: reasoningOutcome.error, llmCalls: reasoningOutcome.llmCalls });
+                    return result;
+                }
+                catch (postMutationErr) {
+                    // ── P0 SAFETY BOUNDARY: mutasi SUDAH terjadi → return safe reply ke customer ──
+                    if (v2MutationExecuted) {
+                        return buildSafeReply(postMutationErr);
+                    }
+                    // Mutasi belum terjadi → throw biar outer catch fallback ke v1
+                    throw postMutationErr;
+                }
             }
             catch (err) {
                 // CIRCUIT BREAKER: fallback ke v1
