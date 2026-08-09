@@ -17,6 +17,8 @@ import {
   PipelineContext,
 } from '../domain/types.js';
 import { isDeadEnd } from '../services/message-queue.service.js';
+// TASK B1 — pure product-name match scoring (extracted to keep chat tests hermetic).
+import { shouldAnswerSingleProduct } from '../services/chat/product-match.js';
 
 // In-memory cache for store profiles (TTL: 10 minutes)
 const storeProfileCache = new Map<string, { profile: string; expiresAt: number }>();
@@ -244,25 +246,28 @@ async getResponse(
       const results = await productService.searchProducts(context.storeId, query);
       if (results.length === 0) return null;
 
-      // searchProducts already sorts: name.startsWith(query) first, then createdAt desc
-      const best = results[0];
+      // Per TASK B1 (P1 semantic authority): tryProduct is a 0-LLM fast tier
+      // and may ONLY answer when HIGH-CONFIDENCE the product was meant.
       const q = query.trim().toLowerCase();
-
-      // Simple text similarity: berapa banyak kata query yang muncul di nama produk
+      // Ranking score (ordering only — higher tiers keep precedence so the
+      // disambiguation question still lists the strongest candidates first).
       const queryWords = q.split(/\s+/).filter(w => w.length > 1);
       const matchScore = (name: string) => {
         const lower = name.toLowerCase();
-        if (lower === q) return 4;
-        if (lower.startsWith(q)) return 3;
-        if (lower.includes(q)) return 2;
+        if (lower === q) return 4;          // exact whole-token
+        if (lower.startsWith(q)) return 3; // prefix (stronger than substring)
+        if (lower.includes(q)) return 2;    // substring
         const wordHits = queryWords.filter(w => lower.includes(w)).length;
-        return wordHits;
+        return wordHits;                    // partial word overlap
       };
 
       const scored = results.map(r => ({ ...r, score: matchScore(r.name) }));
       scored.sort((a, b) => b.score - a.score);
 
-      // Ambiguity detection: 2+ product dengan score yang sama = ambiguous
+      // Ambiguity detection: 2+ product dengan score yang sama = ambiguous.
+      // (UNCHANGED behavior — disambiguation prompt is the intended fallback for
+      // genuine multi-candidate ambiguity; only the SINGLE-match quality gate
+      // below is tightened by TASK B1.)
       const topScore = scored[0].score;
       const similarCount = scored.filter(r => r.score === topScore).length;
 
@@ -286,8 +291,26 @@ async getResponse(
         };
       }
 
-      // Single match
+      // Single match — apply HIGH-CONFIDENCE gate (TASK B1).
       const p = scored[0];
+      const qualifies = shouldAnswerSingleProduct(q, p.name, results.length);
+
+      // (c) Otherwise (substring-only, weak word-hit, low confidence) -> MISS.
+      // Returning null makes getResponse fall through to the next tier / LLM,
+      // and crucially performs NO side effect (no saveDiscussedItems) — exactly
+      // like any other miss.
+      if (!qualifies) {
+        adapters.logger.info('tryProduct miss (low confidence single match)', {
+          storeId: context.storeId,
+          conversationId: context.conversationId,
+          query: q,
+          candidate: p.name,
+          score: topScore,
+        });
+        return null;
+      }
+
+      // (a)/(b) High-confidence single match -> answer directly.
       let response = `Halo Kak! Untuk *${p.name}* harganya *${this.formatPrice(p.price)}* per unit ya. 🌿`;
       if (p.stock !== null) {
         if (p.stock > 0) {
@@ -302,7 +325,7 @@ async getResponse(
       return {
         source: ResponseSource.PRODUCT,
         content: response,
-        confidence: Math.min(0.9, 0.4 + (topScore * 0.15)),
+        confidence: 0.9,
         cost: 0,
         metadata: { productIds: [p.id], matchedNames: [p.name], matchedPrices: [p.price] },
       };

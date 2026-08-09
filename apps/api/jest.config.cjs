@@ -23,7 +23,7 @@ module.exports = {
   testEnvironment: 'node',
   // treat .ts as ESM so ts-jest useESM path runs and `import.meta.url` is valid
   extensionsToTreatAsEsm: ['.ts'],
-  testMatch: ['<rootDir>/src/services/chat/__tests__/**/*.test.ts'],
+  testMatch: ['<rootDir>/src/services/chat/__tests__/**/*.test.ts', '<rootDir>/src/services/chat/tests/**/*.test.ts'],
   moduleNameMapper: {
     // strip `.js` from relative ESM specifiers → resolve to .ts source
     '^(\\.{1,2}/.*)\\.js$': '$1',
