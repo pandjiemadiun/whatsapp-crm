@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { composeReply } from '../composer-v2.js';
+import { composeReply, composeEscalateReply, escalateStatusUpdate, ESCALATE_REPLY } from '../composer-v2.js';
 import type { ActV2, InterpreterResultV2, WorkspaceV2 } from '../types-v2.js';
 
 describe('composer-v2', () => {
@@ -162,5 +162,32 @@ describe('composer-v2', () => {
     });
     assert.match(reply, /Dihapus dari keranjang: Wortel/);
     assert.ok(!reply.includes('kurang paham'));
+  });
+
+  // ── TASK C1 Stage 2: escalation must be a REAL action, not a generic reply ──
+  it('TASK C1: composeEscalateReply() adalah balasan jujur, bukan generic "kurang paham"', () => {
+    const reply = composeEscalateReply();
+    assert.equal(reply, ESCALATE_REPLY);
+    // Wajib menyatakan dengan jujur akan menyambungkan ke admin/pemilik
+    assert.match(reply.toLowerCase(), /admin toko|pemilik toko/);
+    // Wajib TIDAK sama dengan balasan generik dead-end
+    assert.ok(!reply.includes('kurang paham'), 'escalate reply must not be the generic dead-end text');
+    // Bandingkan lewat string-typed const agar tidak TS2367 literal-overlap.
+    const OLD_CANNED: string = 'Saya akan hubungkan ke pemilik toko.';
+    assert.notStrictEqual(reply, OLD_CANNED, 'must not reuse the old canned-only text');
+    assert.notStrictEqual(reply, 'Maaf kak, saya kurang paham. Bisa diulang?');
+  });
+
+  it('TASK C1: escalateStatusUpdate() memakai konvensi existing (human_takeover + humanTakeoverAt), bukan status baru', () => {
+    const update = escalateStatusUpdate();
+    // Konvensi yang SUDAH ADA di codebase:
+    //   routes/conversations.ts:88   -> status='human_takeover', set humanTakeoverAt
+    //   message-processor.service.ts:491 -> sama
+    //   schema.prisma Conversation.humanTakeoverAt DateTime?
+    assert.equal(update.status, 'human_takeover');
+    assert.ok(update.humanTakeoverAt instanceof Date, 'humanTakeoverAt must be a Date');
+    assert.ok(update.humanTakeoverAt.getTime() > 0, 'humanTakeoverAt must be populated');
+    // JANGAN memperkenalkan enum status baru ('escalated') — pakai konvensi existing.
+    assert.equal(update.status, 'human_takeover');
   });
 });
