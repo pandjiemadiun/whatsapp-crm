@@ -25,21 +25,23 @@ export function buildSystemPrompt(catalog) {
 ========== ATURAN (WAJIB DITEGAKKAN) ==========
 a. HANYA JSON valid sesuai InterpreterResultV2 — jangan sertakan teks, markdown, atau penjelasan di luar JSON.
 b. JANGAN sertakan harga/stok di reply_draft; reply_draft maksimal 2 kalimat.
-c. Setiap entitas produk yang user sebut WAJIB muncul di acts[].entities ATAU di unmatched_mentions. Jangan pernah diam-diam menghilangkan sebuah mention.
+c. Setiap entitas produk yang user sebut WAJIB masuk di acts[].entities ATAU di unmatched_mentions. Jangan pernah diam-diam menghilangkan sebuah mention.
 d. qty_source: 'explicit' HANYA jika teks user menyebut angka/satuan (misal '2 kg' atau '1 buah'). Jika tidak eksplisit, isi 'default' dan biarkan qty=null.
 e. JANGAN mengisi field yang tidak ada bukti di percakapan (anti-hallucination).
 f. Selection dinyatakan sebagai SetOp (ALL/NAMES/INDICES/FILTER_CATEGORY/FILTER_PRICE_RANK/MINUS/LAST_REPEAT), bukan teks bebas.
-g. Revisi dalam satu kalimat: buat act baru dengan supersedes mengacu pada act_id yang direvisi. Contoh: 'es teh 1, eh gajadi es jeruk aja' → 2 acts, act kedua punya supersedes=act_id pertama.
-h. Quantifier: resolution_type salah satu dari exact|subset|ambiguous|mismatch. Jika resolution_type=mismatch, WAJIB isi mismatch_reason.
-i. confidence per dimensi (entities/intent/selection/topic) angka 0–1.
-j. Jika ada pending active dan pesan user bukan jawaban confirmation → topic_switch=true.
-k. summary_update: 1–2 kalimat ringkasan state percakapan setelah pesan ini.
+g. Revisi dalam satu kalimat: buat act baru dengan supersede mengacu pada act_id yang direvisi. Contoh: 'es teh 1, eh gajadi es jeruk aja' → 2 acts, act kedua punya supersedes=act_id pertama.
+h. Quantifier: resolution_type salah satu dari exact|subset|ambiguous|mismatch (jika mismatch, wajib isi mismatch_reason).
+i. Pembatalan (cancel) produk pakai intent 'cancel'; JANGAN pakai intent cart_update. Contoh: 'eh wortel ga jadi' → intent cancel, entity produk 'wortel'.
+j. confidence per dimensi (entities/intent/selection/topic) angka 0–1.
+k. Jika ada pending active dan pesan user bukan jawaban confirmation → topic_switch=true.
+l. Jika user hanya menyapa (greeting) dan tidak ada act yang perlu dieksekusi → acts=[], isi reply_draft dengan balasan ramah.
+m. summary_update: 1–2 kalimat ringkasan state percakapan setelah pesan ini.
 
 ========== KATALOG PRODUK ==========
 Produk yang tersedia di katalog: ${productNames}
 
 ========== CONTOH (FEW-SHOT) ==========
-Lihat konstanta FEW_SHOTS untuk 6 contoh transkrip permintaan yang diharapkan.`;
+Lihat konstanta FEW_SHOTS untuk 8 contoh transkrip permintaan yang diharapkan.`;
 }
 // ─────────────────────────────────────────────────────────────────────────────
 // buildUserPrompt
@@ -73,16 +75,18 @@ ${histLines}
 Kembalikan respons HANYA sebagai JSON yang valid sesuai InterpreterResultV2 (lihat system prompt).`;
 }
 // ─────────────────────────────────────────────────────────────────────────────
-// FEW_SHOTS (6 contoh transkrip untuk dilatih interpreter)
+// FEW_SHOTS (8 contoh transkrip untuk dilatih interpreter)
 // ─────────────────────────────────────────────────────────────────────────────
 /**
- * 6 contoh (user_message + konteks + expected_json) yang memandu interpreter:
+ * 8 contoh (user_message + konteks + expected_json) yang memandu interpreter:
  *   1. multi-act 3 produk — tidak ada product mention yang missing.
  *   2. revisi dalam satu kalimat — act kedua punya supersedes=act_id pertama.
  *   3. topic switch — pending aktif + user tanya di luar scope order.
  *   4. quantifier mismatch — user merujuk opsi ketiga yang tidak ada.
- *   5. afirmasi ambigu — "iya" pada 4 opsi, butuh clarification.
+ *   5. afirmasi ambigu — "iya" pada 4 opsi, butuh clarifikasi.
  *   6. multi-add dalam satu kalimat — 3 produk qty 1 eksplisit, confidence tinggi.
+ *   7. greeting — acts kosong, reply_draft ramah.
+ *   8. cancel — intent cancel + reply_draft konfirmasi pembatalan.
  */
 export const FEW_SHOTS = [
     {
@@ -172,6 +176,34 @@ export const FEW_SHOTS = [
   "draft_cart_ops": [],
   "confidence": {"entities":0.9,"intent":0.9,"selection":0.95,"topic":0.9},
   "summary_update": "Customer menambahkan kangkung, wortel, dan kentang ke keranjang."
+}`,
+    },
+    {
+        user_message: 'Halo kak',
+        context_description: 'Customer hanya menyapa (greeting), tidak ada produk/nujuan order. Tidak ada act yang perlu dieksekusi; jawab ramah lewat reply_draft.',
+        expected_json: `{
+  "acts": [],
+  "unmatched_mentions": [],
+  "topic_switch": false,
+  "draft_cart_ops": [],
+  "reply_draft": "Halo kak! Ada yang bisa saya bantu? Jangan ragu, silakan tanya apa saja.",
+  "confidence": {"entities":0,"intent":0.1,"selection":0,"topic":0.2},
+  "summary_update": "Customer menyapa; bot membalas salam."
+}`,
+    },
+    {
+        user_message: 'Eh wortel ga jadi',
+        context_description: 'Customer membatalkan/cancel produk "wortel" yang sebelumnya di keranjang. Intent=cancel, entity produk jejak; JANGAN ubatkan sebagai cart_update.',
+        expected_json: `{
+  "acts": [
+    {"act_id":"act_cancel_wortel","intent":"cancel","entities":[{"type":"product","value":"wortel","confidence":0.9}],"qty":null,"qty_source":"default","confidence":0.9,"supersedes":null}
+  ],
+  "unmatched_mentions": [],
+  "topic_switch": false,
+  "draft_cart_ops": [],
+  "reply_draft": "Oke kak, wortel sudah saya batalkan dari keranjang.",
+  "confidence": {"entities":0.9,"intent":0.95,"selection":0.9,"topic":0.6},
+  "summary_update": "Customer membatalkan wortel dari keranjang."
 }`,
     },
 ];

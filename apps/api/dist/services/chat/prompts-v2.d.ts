@@ -36,13 +36,15 @@ export declare function buildSystemPrompt(catalog: CatalogItem[]): string;
  */
 export declare function buildUserPrompt(message: string, workspace: WorkspaceV2, history: HistoryTurn[]): string;
 /**
- * 6 contoh (user_message + konteks + expected_json) yang memandu interpreter:
+ * 8 contoh (user_message + konteks + expected_json) yang memandu interpreter:
  *   1. multi-act 3 produk — tidak ada product mention yang missing.
  *   2. revisi dalam satu kalimat — act kedua punya supersedes=act_id pertama.
  *   3. topic switch — pending aktif + user tanya di luar scope order.
  *   4. quantifier mismatch — user merujuk opsi ketiga yang tidak ada.
- *   5. afirmasi ambigu — "iya" pada 4 opsi, butuh clarification.
+ *   5. afirmasi ambigu — "iya" pada 4 opsi, butuh clarifikasi.
  *   6. multi-add dalam satu kalimat — 3 produk qty 1 eksplisit, confidence tinggi.
+ *   7. greeting — acts kosong, reply_draft ramah.
+ *   8. cancel — intent cancel + reply_draft konfirmasi pembatalan.
  */
 export declare const FEW_SHOTS: FewShotV2[];
 //# sourceMappingURL=prompts-v2.d.ts.map

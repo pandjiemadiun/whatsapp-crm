@@ -35,6 +35,19 @@ const ORDER_INTENT_KEYWORDS = [
     'batal',
     'cancel',
 ];
+/**
+ * Kata penanda katalog/menu intent (guard order INTENT — kalau ada di pesan,
+ * pesan kemungkinan besar cuma nanya daftar product, bukan order multi-produk).
+ */
+const CATALOG_INTENT_KEYWORDS = [
+    'jual apa',
+    'jualan apa',
+    'katalog',
+    'menu',
+    'produk apa',
+    'list produk',
+    'ada apa',
+];
 /** Kata order untuk guard multi-produk (narrow). */
 const MULTI_PRODUCT_ORDER_VERBS = [
     'mau',
@@ -63,6 +76,10 @@ function normalizeMessage(message) {
  *     ga jadi/gak jadi/batal/cancel).
  */
 function isOrderIntent(message, catalog) {
+    // Kalau ada indikasi katalog/menu ("jual apa", "katalog"), JANGAN treat
+    // sebagai order — biarkan tier tryCatalog menjawab (B).
+    if (CATALOG_INTENT_KEYWORDS.some((kw) => message.includes(kw)))
+        return false;
     if (ORDER_INTENT_KEYWORDS.some((kw) => message.includes(kw)))
         return true;
     const mentionsProduct = catalog.some((c) => message.includes(c.name.toLowerCase()));
