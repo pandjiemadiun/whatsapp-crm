@@ -63,3 +63,26 @@ Canary engine v3.2 di toko store-f7140b5c. Tujuan: buktikan 3 bug asli fix
 4. composer-v2: reply tidak pernah kosong.
 Acceptance lulus; Halo/katalog/total tanpa regresi.
 NEXT: golden dataset I8-I15 + test WA kondisi nyata.
+
+3 bug asli FIX: kentan hilang, negasi, total.
+Test regresi permanen: 50 test v2 pass.
+NEXT: golden dataset invarian I8-I15 untuk kunci permanen.
+
+## UPDATE 9/8 — TASK A CLOSED: P0 SAFETY BOUNDARY (RAILS.md §3 P0)
+Risiko paling bahaya dari audit 9/8 ("V2 mutate DB → exception → fallback v1 → 
+proses ulang pesan sama → ANCAM dobel mutasi") DITUTUP di conversation.service.ts.
+
+Mekanisme:
+- `v2MutationExecuted` flag (false default) → di-set `true` BUKAN setelah 
+  `executeCartOps` sukses (jalur resolved EXECUTE + reasoned/cartActs).
+- Semua langkah post-mutation (saveWorkspace, composeReply, buildResult, 
+  saveMessage) dibungkus local try/catch yang TIDAK melempar keluar:
+  - kalau error → log CRITICAL + return safe reply statis (tanpa LLM) + return 
+    early (tidak pernah menyentuh outer catch).
+  - tanpa mutasi → error tetap di-lempar ke outer catch (v1 fallback dipertahankan)
+    agar perilaku pre-mutation sementara yang lama tidak berubah.
+Outer catch (circuit breaker v2->v1) TIDAK diubah.
+Acceptance: test baru safety-boundary-v2.test.ts 5/5 pass (v1 never called, 
+EXACTLY satu mutation, return reply tidak throw). npx tsc --noEmit 0 error, 
+npx tsc OK, pm2 restart api online tanpa crash loop.
+NEXT: golden dataset I8-I15 invarian untuk kunci permanen.
