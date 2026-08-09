@@ -240,6 +240,18 @@ describe('tryFastPath — multi-product order guard (narrow)', () => {
             assert.ok('source' in result.payload);
         }
     });
+    it('B: "Saya mau pesan, kamu jual apa saja" (katalog keyword OVERRIDE order guard) → tier hit:true', async () => {
+        const ws = makeWorkspace({ pendings: [] });
+        // Pesan ini punya order verb (mau/pesan) TAPI juga kata katalog ("jual apa").
+        // Kata katalog harus MENANG supaya B sampai ke tryCatalog (listing lengkap),
+        // bukan diswigi oleh guard order-intent.
+        const result = await tryFastPath('Saya mau pesan, kamu jual apa saja', ws, CATALOG, makeStubFallback(ResponseSource.CATALOG));
+        assert.equal(result.hit, true);
+        if (result.hit) {
+            assert.equal(result.outcome, 'tier');
+            assert.ok('source' in result.payload);
+        }
+    });
     it('multi-produk TANPA order verb → tier tetap jalan', async () => {
         const ws = makeWorkspace({ pendings: [] });
         // Ada 2+ nama produk ("wortel","kentang") tapi tidak ada kata

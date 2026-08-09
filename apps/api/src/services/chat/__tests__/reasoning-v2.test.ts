@@ -416,3 +416,91 @@ describe('understand — side effects & konversi (FASE B4)', () => {
     }
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TASK 8 regression — 3 kasus produksi yang membalas "Maaf kak, saya kurang paham"
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('understand — TASK 8 regression A/B/C (mock LLM)', () => {
+  it('A: "Halo kak" (greeting) → reasoned, acts kosong, reply_draft ramah, TIDAK ke "Maaf..."', async () => {
+    const ws = makeWorkspace({ pendings: [] });
+    mockResponses = [
+      JSON.stringify({
+        acts: [],
+        unmatched_mentions: [],
+        topic_switch: false,
+        draft_cart_ops: [],
+        reply_draft: 'Halo kak! Ada yang bisa saya bantu?',
+        confidence: { entities: 0, intent: 0.1, selection: 0, topic: 0.2 },
+        summary_update: 'Customer menyapa; bot membalas salam.',
+      }),
+    ];
+
+    const result = await understand('Halo kak', ws, CATALOG, [], makeStubFallback());
+
+    assert.equal(llmCalls, 1);
+    assert.equal(result.outcome, 'reasoned');
+    if (result.outcome === 'reasoned') {
+      assert.equal(result.plannedActs.length, 0);
+      const r = result.result as InterpreterResultV2;
+      assert.ok(r.reply_draft && r.reply_draft.trim().length > 0, 'reply_draft tidak boleh kosong');
+      assert.ok(!r.reply_draft.includes('kurang paham'), 'jangan balas "kurang paham" untuk greeting');
+    }
+  });
+
+  it('B: "Saya mau pesan, kamu jual apa saja" → fast path tier (katalog), 0 LLM', async () => {
+    const ws = makeWorkspace({ pendings: [] });
+    mockResponses = [JSON.stringify(makeValidResult())];
+
+    const result = await understand(
+      'Saya mau pesan, kamu jual apa saja',
+      ws,
+      CATALOG,
+      [],
+      makeStubFallback(ResponseSource.CATALOG) // stub tier katalog = hit
+    );
+
+    assert.equal(llmCalls, 0);
+    assert.equal(result.outcome, 'tier');
+  });
+
+  it('C: "Eh beras ga jadi" (cancel) → LLM intent cancel, plannedActs berisi cancel act', async () => {
+    const ws = makeWorkspace({ pendings: [] });
+    mockResponses = [
+      JSON.stringify({
+        acts: [
+          {
+            act_id: 'act_cancel_beras',
+            intent: 'cancel',
+            entities: [{ type: 'product', value: 'Beras', confidence: 0.9 }],
+            qty: null,
+            qty_source: 'default',
+            confidence: 0.9,
+            supersedes: null,
+          },
+        ],
+        unmatched_mentions: [],
+        topic_switch: false,
+        draft_cart_ops: [],
+        reply_draft: 'Oke, beras sudah saya batalkan.',
+        confidence: { entities: 0.9, intent: 0.95, selection: 0.9, topic: 0.6 },
+        summary_update: 'Customer membatalkan beras.',
+      }),
+    ];
+
+    const result = await understand('Eh beras ga jadi', ws, CATALOG, [], makeStubFallback());
+
+    assert.equal(llmCalls, 1);
+    assert.equal(result.outcome, 'reasoned');
+    if (result.outcome === 'reasoned') {
+      assert.equal(result.result.acts[0].intent, 'cancel');
+      assert.ok(
+        result.plannedActs.some((a: any) =>
+          a.intent.toLowerCase().includes('cancel') ||
+          a.intent.toLowerCase().includes('remove')
+        ),
+        'plannedActs harus berisi act pembatalan'
+      );
+    }
+  });
+});

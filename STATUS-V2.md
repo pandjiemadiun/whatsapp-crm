@@ -55,3 +55,11 @@ Canary engine v3.2 di toko store-f7140b5c. Tujuan: buktikan 3 bug asli fix
 - Bonus: M1-M3 = test harness gratis pengganti Fonnte.
 - CATATAN: uid map ke conversationId existing (store:<nomor>); channel WA/WEB
   field terpisah, JANGAN timpa field source.
+
+## UPDATE 9/8 10:45 — BUG FLAGSHIP (MULTI-ADD) CLOSED
+1. fast-path: guard multi-produk+order-verb -> hit:false, ke LLM.
+2. validator-v2 defensif + reasoning.ts try/catch; silent fallback v1 hilang.
+3. executor: intent order/buy diterima + iterasi SEMUA entity per act.
+4. composer-v2: reply tidak pernah kosong.
+Acceptance lulus; Halo/katalog/total tanpa regresi.
+NEXT: golden dataset I8-I15 + test WA kondisi nyata.

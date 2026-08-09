@@ -129,8 +129,8 @@ describe('buildUserPrompt (FASE B1)', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('FEW_SHOTS (FASE B1)', () => {
-  it('FEW_SHOTS.length === 6', () => {
-    assert.equal(FEW_SHOTS.length, 6);
+  it('FEW_SHOTS.length === 8', () => {
+    assert.equal(FEW_SHOTS.length, 8);
   });
 
   it('setiap few-shot punya struktur {user_message, context_description, expected_json}', () => {
@@ -171,5 +171,25 @@ describe('FEW_SHOTS (FASE B1)', () => {
     const c5 = JSON.parse(FEW_SHOTS[4].expected_json) as { clarification?: unknown; quantifier?: { resolution_type: string } };
     assert.equal(c5.quantifier?.resolution_type, 'ambiguous');
     assert.equal(typeof c5.clarification, 'object');
+  });
+
+  it('case-7 (greeting) → acts kosong + reply_draft ramah (TASK 8 regression A)', () => {
+    const fs = FEW_SHOTS[6];
+    const parsed = JSON.parse(fs.expected_json) as {
+      acts: unknown[];
+      reply_draft?: string;
+    };
+    assert.equal(parsed.acts.length, 0);
+    assert.ok(parsed.reply_draft && parsed.reply_draft.trim().length > 0, 'greeting harus punya reply_draft ramah');
+  });
+
+  it('case-8 (cancel) → intent cancel + entity produk (TASK 8 regression C)', () => {
+    const fs = FEW_SHOTS[7];
+    const parsed = JSON.parse(fs.expected_json) as {
+      acts: Array<{ intent: string; entities: Array<{ type: string; value: string }> }>;
+    };
+    assert.equal(parsed.acts.length, 1);
+    assert.equal(parsed.acts[0].intent, 'cancel');
+    assert.equal(parsed.acts[0].entities[0].type, 'product');
   });
 });

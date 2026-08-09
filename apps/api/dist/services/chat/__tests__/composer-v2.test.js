@@ -115,5 +115,43 @@ describe('composer-v2', () => {
         });
         assert.match(reply, /Oh ya Kak, tadi masih lanjut pesan/);
     });
+    it('A: greeting (plannedActs kosong) + reply_draft ramah → tidak balas "kurang paham"', () => {
+        const result = {
+            acts: [],
+            unmatched_mentions: [],
+            topic_switch: false,
+            draft_cart_ops: [],
+            confidence: { entities: 0, intent: 0.1, selection: 0, topic: 0.2 },
+            reply_draft: 'Halo kak! Ada yang bisa saya bantu?',
+        };
+        const reply = composeReply({
+            plannedActs: [],
+            reasoningResult: result,
+            workspace: mockWorkspace,
+            catalog: [],
+            clarificationAttempt: 0
+        });
+        assert.equal(reply, 'Halo kak! Ada yang bisa saya bantu?');
+        assert.ok(!reply.includes('kurang paham'));
+    });
+    it('C: plannedActs cancel act (tanpa draft_cart_ops) → dirender "Dihapus dari keranjang"', () => {
+        const result = {
+            acts: [{ act_id: 'c1', intent: 'cancel', entities: [{ type: 'product', value: 'Wortel', confidence: 0.9 }], qty_source: 'default', confidence: 1, supersedes: null }],
+            unmatched_mentions: [],
+            topic_switch: false,
+            draft_cart_ops: [],
+            confidence: { entities: 1, intent: 1, selection: 1, topic: 0.6 },
+            reply_draft: 'Oke, wortel sudah saya batalkan.',
+        };
+        const reply = composeReply({
+            plannedActs: [{ act_id: 'c1', intent: 'cancel', entities: [{ type: 'product', value: 'Wortel', confidence: 0.9 }], qty_source: 'default', confidence: 1, supersedes: null }],
+            reasoningResult: result,
+            workspace: mockWorkspace,
+            catalog: [],
+            clarificationAttempt: 0
+        });
+        assert.match(reply, /Dihapus dari keranjang: Wortel/);
+        assert.ok(!reply.includes('kurang paham'));
+    });
 });
 //# sourceMappingURL=composer-v2.test.js.map
