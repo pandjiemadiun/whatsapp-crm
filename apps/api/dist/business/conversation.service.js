@@ -9,7 +9,7 @@ import { runOneCall, validateCartOps, truncateTo2Sentences } from '../services/c
 import { getStoreEngine } from '../services/chat/engine-config.js';
 import { understand } from '../services/chat/reasoning.js';
 import { loadWorkspace, saveWorkspace, incrementDeferredTurns, shouldAutoDrop, dropPending } from '../services/chat/workspace.js';
-import { composeReply } from '../services/chat/composer-v2.js';
+import { composeReply, composeEscalateReply, escalateStatusUpdate } from '../services/chat/composer-v2.js';
 import { resolvePending } from '../services/chat/pendingClarification.js';
 import { shouldRunShadow } from '../services/chat/shadow-config.js';
 import { buildShadowEntry, logShadowEntry } from '../services/chat/shadow-logger.js';
@@ -320,11 +320,20 @@ export class ConversationService {
             });
             if (resolved.action === 'ESCALATE') {
                 finalIntent = 'escalate';
+                // TASK C1 (Stage 2): perubahan status DB + balasan jujur.
+                // Escalate hanya dijalankan ketika clarification sudah gagal berulang
+                // (retry_count >= 1 / resolvePending ESCALATE). Pada titik ini AI sudah
+                // tidak bisa melanjutkan — tandai conversation butuh perhatian manusia
+                // pakai konvensi yang SUDAH ADA (human_takeover + humanTakeoverAt,
+                // lihat routes/conversations.ts:88) sehingga owner terlihat di dashboard
+                // (admin/stores.ts:547 filter humanTakeoverAt != null).
+                await this.markHumanTakeover(conversationId);
+                const escalateReply = composeEscalateReply();
                 await this.saveMessage({
                     id: crypto.randomUUID(),
                     conversationId,
                     sender: 'assistant',
-                    content: 'Saya akan hubungkan ke pemilik toko.',
+                    content: escalateReply,
                     source: ResponseSource.HUMAN,
                     createdAt: new Date(),
                 });
@@ -332,7 +341,7 @@ export class ConversationService {
                 this.logPipelineAudit(conversationId, stagesReached, llmCallCount, finalIntent, cartOpsExecuted);
                 return this.buildResult(conversationId, {
                     source: ResponseSource.HUMAN,
-                    content: 'Saya akan hubungkan ke pemilik toko.',
+                    content: escalateReply,
                     confidence: 0.9,
                     cost: 0,
                     metadata: { reason: 'escalation_clarification_retry_exceeded' },
@@ -403,11 +412,16 @@ export class ConversationService {
             const exceeded = await conversationContextService.incrementClarificationRetry(conversationId);
             if (exceeded) {
                 finalIntent = 'escalate';
+                // TASK C1 (Stage 2): tandai human_takeover agar owner dapat alert di
+                // dashboard (human_takeoverAt != null) + balasan jujur ke customer.
+                // (Bukan generic "kurang paham".)
+                await this.markHumanTakeover(conversationId);
+                const escalateReply = composeEscalateReply();
                 await this.saveMessage({
                     id: crypto.randomUUID(),
                     conversationId,
                     sender: 'assistant',
-                    content: 'Saya akan hubungkan ke pemilik toko.',
+                    content: escalateReply,
                     source: ResponseSource.HUMAN,
                     createdAt: new Date(),
                 });
@@ -415,7 +429,7 @@ export class ConversationService {
                 this.logPipelineAudit(conversationId, stagesReached, llmCallCount, finalIntent, cartOpsExecuted);
                 return this.buildResult(conversationId, {
                     source: ResponseSource.HUMAN,
-                    content: 'Saya akan hubungkan ke pemilik toko.',
+                    content: escalateReply,
                     confidence: 0.9,
                     cost: 0,
                     metadata: { reason: 'escalation_clarification_retry_exceeded' },
@@ -868,6 +882,37 @@ export class ConversationService {
         }
         catch {
             adapters.logger.warn('Failed to update conversation stats');
+        }
+    }
+    /**
+     * TASK C1 (Stage 2): tandai conversation butuh perhatian manusia pada titik
+     * ESCALATE/terminal (clarification retry terbatasi). Reuses konvensi existing:
+     * status='human_takeover' + humanTakeoverAt (routes/conversations.ts:88,
+     * circuit-breaker message-processor.service.ts:491).
+     *
+     * Alasan aman (tidak menimbonloop): cabang ESCALATE/terminal di panggil di
+     * akhir turn dan tidak pernah memicu LLM lagi di turn yang sama; serta guard
+     * di line 80 akan me-skip semua balasan AI sampai owner reset status lewat
+     * PUT /api/conversations/:id/status. Jadi tidak ada retry otomatis ke dalam
+     * loop ini. (Catatan line ~1051 tentang "jangan auto-set pada AI failure
+     * biasa" tetap berlaku untuk jalur non-escalate.)
+     */
+    async markHumanTakeover(conversationId) {
+        try {
+            await prisma.conversation.update({
+                where: { id: conversationId },
+                data: escalateStatusUpdate(),
+            });
+            adapters.logger.info('Escalation: conversation marked for human takeover', {
+                conversationId,
+                status: 'human_takeover',
+            });
+        }
+        catch (err) {
+            adapters.logger.warn('Failed to mark human_takeover for escalation', {
+                conversationId,
+                error: err instanceof Error ? err.message : String(err),
+            });
         }
     }
     // ============================================================
