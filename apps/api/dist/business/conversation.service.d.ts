@@ -53,6 +53,20 @@ export declare class ConversationService {
     private saveMessage;
     private updateConversationStats;
     /**
+     * TASK C1 (Stage 2): tandai conversation butuh perhatian manusia pada titik
+     * ESCALATE/terminal (clarification retry terbatasi). Reuses konvensi existing:
+     * status='human_takeover' + humanTakeoverAt (routes/conversations.ts:88,
+     * circuit-breaker message-processor.service.ts:491).
+     *
+     * Alasan aman (tidak menimbonloop): cabang ESCALATE/terminal di panggil di
+     * akhir turn dan tidak pernah memicu LLM lagi di turn yang sama; serta guard
+     * di line 80 akan me-skip semua balasan AI sampai owner reset status lewat
+     * PUT /api/conversations/:id/status. Jadi tidak ada retry otomatis ke dalam
+     * loop ini. (Catatan line ~1051 tentang "jangan auto-set pada AI failure
+     * biasa" tetap berlaku untuk jalur non-escalate.)
+     */
+    private markHumanTakeover;
+    /**
      * Ambil percakapan lengkap termasuk context dan orders (dengan items).
      */
     getConversationWithContext(conversationId: string): Promise<ConversationWithContext | null>;
