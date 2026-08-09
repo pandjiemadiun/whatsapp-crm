@@ -173,7 +173,24 @@ export async function understand(message, workspace, catalog, history, fallbackS
     convertPositionalSupersedes(attempt1.result);
     // Validate
     const validatorCtx = buildValidatorContext(workspace, catalog);
-    const validation1 = validate(attempt1.result, validatorCtx);
+    let validation1;
+    try {
+        validation1 = validate(attempt1.result, validatorCtx);
+    }
+    catch (err) {
+        // Validator crash (misal LLM output malformed) — JANGAN biarkan engine crash.
+        const msg = err instanceof Error ? err.message : String(err);
+        const stack = err instanceof Error ? err.stack : undefined;
+        // eslint-disable-next-line no-console
+        console.error('[validator-v2] validate() attempt 1 threw:', { message: msg, stack });
+        add(trace, 'validator_crash', { attempt: 1, error: msg });
+        return {
+            outcome: 'fallback_reasoning_failed',
+            error: `validator error: ${msg}`,
+            llmCalls: stats.calls,
+            trace,
+        };
+    }
     add(trace, 'validator_ok', {
         ok: validation1.ok,
         retryable: validation1.retryable,
@@ -233,7 +250,24 @@ export async function understand(message, workspace, catalog, history, fallbackS
         };
     }
     convertPositionalSupersedes(attempt2.result);
-    const validation2 = validate(attempt2.result, validatorCtx);
+    let validation2;
+    try {
+        validation2 = validate(attempt2.result, validatorCtx);
+    }
+    catch (err) {
+        // Validator crash (misal LLM output malformed) — JANGAN biarkan engine crash.
+        const msg = err instanceof Error ? err.message : String(err);
+        const stack = err instanceof Error ? err.stack : undefined;
+        // eslint-disable-next-line no-console
+        console.error('[validator-v2] validate() attempt 2 threw:', { message: msg, stack });
+        add(trace, 'validator_crash', { attempt: 2, error: msg });
+        return {
+            outcome: 'fallback_reasoning_failed',
+            error: `validator error: ${msg}`,
+            llmCalls: stats.calls,
+            trace,
+        };
+    }
     add(trace, 'validator_ok', {
         ok: validation2.ok,
         attempt: 2,

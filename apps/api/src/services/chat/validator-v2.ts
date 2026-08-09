@@ -68,7 +68,9 @@ function isCartAct(act: ActV2): boolean {
 
 /** Nama produk target dari act (entitas pertama bertipe 'product'). */
 function targetProduct(act: ActV2): string | undefined {
-  return act.entities.find((e) => e.type === 'product')?.value;
+  return (Array.isArray(act.entities) ? act.entities : []).find(
+    (e) => e.type === 'product'
+  )?.value;
 }
 
 /**
@@ -111,13 +113,19 @@ export function validate(
   let terminal = false; // I-V2-4 / I-V2-6 -> retryable FALSE (eskalasi / clarify)
 
   // Defensif pada batas boundary JSON (LLM output bisa omit field).
-  const acts = result.acts ?? [];
-  const unmatched = result.unmatched_mentions ?? [];
+  const acts = Array.isArray(result.acts) ? result.acts : [];
+  const unmatched = Array.isArray(result.unmatched_mentions)
+    ? result.unmatched_mentions
+    : [];
   const N = ctx.optionsPresented.length;
   const catalog = ctx.catalog;
 
   const catalogNames = new Set(catalog.map((c) => c.name.toLowerCase()));
-  const unmatchedSet = new Set(unmatched.map((u) => u.toLowerCase()));
+  // Defensif: LLM bisa meng-omit/malformed isi unmatched_mentions — jangan crash.
+  const unmatchedStrings = unmatched.filter(
+    (u): u is string => typeof u === 'string'
+  );
+  const unmatchedSet = new Set(unmatchedStrings.map((u) => u.toLowerCase()));
   const resultIds = new Set(acts.map((a) => a.act_id));
 
   // ── I-V2-9: qty ada tapi qty_source absent (runtime LLM omission guard) ──
@@ -129,14 +137,26 @@ export function validate(
     }
   }
 
-  // ── I-V2-1: no entity left behind (product mentions) ──
+  // ── I-V2-1: no product value left behind (product mentions) ──
   for (const a of acts) {
-    for (const e of a.entities) {
-      if (e.type !== 'product') continue; // hanya mention produk dicek katalog
-      const v = e.value.toLowerCase();
-      if (!catalogNames.has(v) && !unmatchedSet.has(v)) {
+    for (const e of Array.isArray(a.entities) ? a.entities : []) {
+      if (e.type !== 'product') continue; // hanya concern case dicek katalog
+
+      // Defensif: LLM output bisa meng-omit value product entity.
+      // JANGAN throw — tandai entity invalid (retryable agar LLM perbaiki).
+      const v = e.value;
+      if (typeof v !== 'string' || v.trim().length === 0) {
         reasons.push(
-          `I-V2-1: mention "${e.value}" (act ${a.act_id}) tidak di catalog dan tidak di unmatched_mentions`
+          `I-V2-1-invalid: entity product (act ${a.act_id}) punya value kosong/absent`
+        );
+        retryable = true;
+        continue;
+      }
+
+      const vLower = v.toLowerCase();
+      if (!catalogNames.has(vLower) && !unmatchedSet.has(vLower)) {
+        reasons.push(
+          `I-V2-1: mention "${v}" (act ${a.act_id}) tidak di catalog dan tidak di unmatched_mentions`
         );
         retryable = true;
       }
@@ -159,8 +179,18 @@ export function validate(
   // ── I-V2-3: kardinalitas + mismatch reason ──
   if (result.quantifier) {
     const q = result.quantifier;
+    const indices = Array.isArray(q.resolved_indices)
+      ? q.resolved_indices
+      : [];
+    // Defensif: LLM bisa omit/format aneh resolved_indices — jangan crash.
+    if (!Array.isArray(q.resolved_indices)) {
+      reasons.push(
+        'I-V2-3-invalid: quantifier.resolved_indices bukan array (LLM omit/malformed)'
+      );
+      retryable = true;
+    }
     // hitung ulang N dari optionsPresented; cek setiap resolved index dalam range
-    for (const idx of q.resolved_indices) {
+    for (const idx of indices) {
       if (idx < 0 || idx >= N) {
         reasons.push(
           `I-V2-3: kardinalitas mismatch — resolved index ${idx} di luar range [0,${N})`
@@ -243,11 +273,11 @@ export function validate(
   }
 
   // ── I-V2-7: unmatched non-kosong wajib clarification ATAU disebut di reply_draft ──
-  if (unmatched.length > 0) {
+  if (unmatchedStrings.length > 0) {
     const hasClar = !!result.clarification;
     const mentionedInReply =
       !!result.reply_draft &&
-      unmatched.some((u) =>
+      unmatchedStrings.some((u) =>
         result.reply_draft!.toLowerCase().includes(u.toLowerCase())
       );
     if (!hasClar && !mentionedInReply) {

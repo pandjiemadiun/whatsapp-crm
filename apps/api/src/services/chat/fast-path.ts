@@ -62,6 +62,18 @@ const ORDER_INTENT_KEYWORDS: readonly string[] = [
   'cancel',
 ];
 
+/** Kata order untuk guard multi-produk (narrow). */
+const MULTI_PRODUCT_ORDER_VERBS: readonly string[] = [
+  'mau',
+  'beli',
+  'pesan',
+  'tambah',
+  'ambil',
+];
+
+/** Jumlah minimal nama produk agar dianggap order multi-produk. */
+const MULTI_PRODUCT_MIN_COUNT = 2;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Result types
 // ─────────────────────────────────────────────────────────────────────────────
@@ -117,6 +129,29 @@ function isOrderIntent(message: string, catalog: CatalogItem[]): boolean {
     message.includes(c.name.toLowerCase())
   );
   return mentionsProduct && /\d/.test(message);
+}
+
+/**
+ * Cek apakah pesan adalah order MULTI-PRODUK (>= 2 nama produk katalog
+ * terdeteksi) disertai kata order (mau/beli/pesan/tambah/ambil).
+ *
+ * Guard ini SEMPIT dan eksplisit: hanya mem-block tier saat kondisi
+ * multi-produk terpenuhi. Di luar itu (greeting, katalog, total) tier
+ * tetap berjalan normal. Nama produk dicocokkan substring terhadap
+ * pesan ternormalisasi; jumlah unik dihitung.
+ */
+function isMultiProductOrder(message: string, catalog: CatalogItem[]): boolean {
+  if (!MULTI_PRODUCT_ORDER_VERBS.some((v) => message.includes(v))) {
+    return false;
+  }
+  const mentioned = new Set<string>();
+  for (const item of catalog) {
+    const name = item.name.trim().toLowerCase();
+    if (name.length > 0 && message.includes(name)) {
+      mentioned.add(name);
+    }
+  }
+  return mentioned.size >= MULTI_PRODUCT_MIN_COUNT;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -388,6 +423,14 @@ export async function tryFastPath(
     return { hit: false, pendingParked: false, topicSwitch: false };
   }
 
+  // ── A3. MULTI-PRODUCT ORDER GUARD (narrow) ─────────────────────────────
+  // Pesan order multi-produk (>=2 nama produk + kata order) skip tier —
+  // biarkan LLM yang menghitung kuantitas & menyusun cart ops. Di luar
+  // kondisi ini tier berjalan normal (greeting, katalog, total tetap hit).
+  if (isMultiProductOrder(normalizedMsg, catalog)) {
+    return { hit: false, pendingParked: false, topicSwitch: false };
+  }
+
   // ── B. CEK TIER DETERMINISTIK (READ-ONLY) ──────────────────────────────
   // Baru cek tier setelah konfirmasi tidak ada pending active
   const ctx = buildMinimalContext(workspace, catalog, storeId, conversationId);
@@ -396,13 +439,8 @@ export async function tryFastPath(
     ctx
   );
 
-  // Jika bukan HUMAN → ada jawaban deterministik.
-  // FIX A: klarifikasi produk ambigu (PRODUCT) dianggap miss — tier hanya
-  // menyodorkan list produk, biarkan LLM reasoning yang menuntas jalur beli.
+  // Jika bukan HUMAN → ada jawaban deterministik
   if (tierResult && tierResult.source !== ResponseSource.HUMAN) {
-    if (tierResult.source === ResponseSource.PRODUCT) {
-      return { hit: false, pendingParked: false, topicSwitch: false };
-    }
     return { hit: true, outcome: 'tier', payload: tierResult };
   }
 

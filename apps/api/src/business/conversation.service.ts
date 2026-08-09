@@ -248,21 +248,24 @@ export class ConversationService {
 
           const cartActs = (reasoningOutcome as any).plannedActs.filter((a: any) => {
             const intent = ((a?.intent) || '').toLowerCase();
-            return intent.includes('cart') || intent.includes('remove') || intent.includes('hapus') || intent.includes('cancel') || intent.includes('delete') || intent.includes('batal');
+            return intent.includes('cart') || intent.includes('order') || intent.includes('buy') || intent.includes('remove') || intent.includes('hapus') || intent.includes('cancel') || intent.includes('delete') || intent.includes('batal');
           });
           for (const act of cartActs) {
-            if (act.entities && act.entities.length > 0) {
-              const productEntity = act.entities.find((e: any) => e.type === 'product');
-              if (productEntity) {
+            const actEntities = Array.isArray(act.entities) ? act.entities : [];
+            if (actEntities.length > 0) {
+              const productEntities = actEntities.filter((e: any) => e?.type === 'product' && typeof e.value === 'string' && e.value.trim().length > 0);
+              if (productEntities.length > 0) {
                 const intent = ((act.intent) || '').toLowerCase();
                 const isRemove = intent.includes('remove') || intent.includes('hapus') || intent.includes('cancel') || intent.includes('delete') || intent.includes('batal');
-                // Panggil executeCartOps existing dengan harga dari DB (I13), bukan LLM
-                await this.executeCartOps([{
+                const qtyPerEntity = act.qty && productEntities.length === 1 ? act.qty : 1;
+                const ops = productEntities.map((e: any) => ({
                   type: isRemove ? 'remove' : 'add',
-                  product: productEntity.value,
-                  qty: act.qty || 1,
-                  price: isRemove ? 0 : (priceMap.get(String(productEntity.value).toLowerCase()) ?? 0),
-                }], {
+                  product: e.value,
+                  qty: qtyPerEntity,
+                  price: isRemove ? 0 : (priceMap.get(String(e.value).toLowerCase()) ?? 0),
+                }) as const);
+                // Panggil executeCartOps existing dengan harga dari DB (I13), bukan LLM
+                await this.executeCartOps(ops, {
                     conversationId,
                     storeId,
                     customerId,
@@ -291,7 +294,7 @@ export class ConversationService {
         const result = this.buildResult(conversationId, {
           source: ResponseSource.AI,
           content: reply,
-          confidence: (reasoningOutcome as any).result?.confidence.selection || 0.8,
+          confidence: (reasoningOutcome as any).result?.confidence?.selection || 0.8,
           cost: 0,
           metadata: { engine: 'v2', outcome: reasoningOutcome.outcome, llmCalls: reasoningOutcome.llmCalls },
         });
