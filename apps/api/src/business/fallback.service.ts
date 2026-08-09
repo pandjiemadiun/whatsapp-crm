@@ -19,6 +19,9 @@ import {
 import { isDeadEnd } from '../services/message-queue.service.js';
 // TASK B1 — pure product-name match scoring (extracted to keep chat tests hermetic).
 import { shouldAnswerSingleProduct } from '../services/chat/product-match.js';
+// TASK B3 — pure total/payment intent classification (disambiguate "bayar <produk>"
+// dari harga vs total/keranjang, dan metode bayar vs pertanyaan harga).
+import { isTotalTrigger, isTotalIntent, isPaymentIntent } from '../services/chat/tier-match.js';
 
 // In-memory cache for store profiles (TTL: 10 minutes)
 const storeProfileCache = new Map<string, { profile: string; expiresAt: number }>();
@@ -372,19 +375,17 @@ async getResponse(
   private async tryPayment(context: ConversationContext, query: string): Promise<ResponseOption | null> {
     const lower = query.trim().toLowerCase();
 
-    // Quick keyword gate — if no payment keyword present, bail immediately
-    const paymentKeywords = [
-      'bayar', 'pembayaran', 'transfer', 'rekening', 'qris',
-      'cod', 'cash on delivery', 'bisa cod', 'metode pembayaran',
-      'via apa', 'cara bayar', 'mau bayar', 'pembayarannya',
-      'pake apa', 'pakai apa', 'bisa bayar', 'pakai bank',
-      'transfer ke', 'nomor rekening', 'norek', 'atm',
-      'debit', 'kredit', 'virtual account', 'va', 'ovo', 'gopay', 'dana',
-    ];
-    const hasPaymentKeyword = paymentKeywords.some(kw => lower.includes(kw));
-    if (!hasPaymentKeyword) return null;
-
+    // TASK B3 (P1 lanjutan): tryPayment boleh jawab HANYA bila pertanyaan
+    // secara EKSPLISIT soal cara/metode bayar. Kata "bayar" saja (atau
+    // "berapa bayar <produk>") TANPA kata metode eksplisit (transfer/qris/
+    // cod/...) berarti tanya HARGA — harus MISS ke tryProduct, bukan balas
+    // daftar metode pembayaran. Lihat tier-match.ts.
     try {
+      const catalogNames = (await productService.listActiveProducts(context.storeId)).map((p) =>
+        p.name.toLowerCase()
+      );
+      if (!isPaymentIntent(lower, catalogNames)) return null;
+
       const store = await prisma.store.findUnique({
         where: { id: context.storeId },
         select: {
@@ -394,7 +395,6 @@ async getResponse(
           qrisImageUrl: true,
         },
       });
-
       if (!store) return null;
 
       // None configured → let AI/Human handle it
@@ -593,15 +593,21 @@ async getResponse(
   private async tryTotal(context: ConversationContext, query: string, customerCity: string | null = null): Promise<ResponseOption | null> {
     const lower = query.trim().toLowerCase();
 
-    const totalKeywords = [
-      'total', 'totalnya', 'total saya', 'berapa semua', 'semuanya berapa',
-      'jumlahnya', 'grand total', 'gtotal', 'tagihannya', 'bayar berapa',
-    ];
-
-    const matched = totalKeywords.some((kw) => lower.includes(kw));
-    if (!matched) return null;
+    // TASK B3 (P1 lanjutan): tryTotal boleh jawab HANYA bila sinyal kuat
+    // total/keranjang/order. Kata 'bayar berapa' disengaja DIHAPUS dari
+    // trigger karena bisa tanya harga produk (contoh "berapa bayar kangkung"),
+    // yang harus diteruskan ke tryProduct. Lihat tier-match.ts.
+    if (!isTotalTrigger(lower)) return null;
 
     try {
+      // Bedakan "total keranjang" vs "harga satuan produk" pakai daftar nama
+      // produk toko (pola sama seperti tryProduct/tryProductNotFound yang
+      // juga panggil productService.listActiveProducts).
+      const catalogNames = (await productService.listActiveProducts(context.storeId)).map((p) =>
+        p.name.toLowerCase()
+      );
+      if (!isTotalIntent(lower, catalogNames)) return null;
+
       const ctxRow = await prisma.conversationContext.findUnique({
         where: { conversationId: context.conversationId },
         select: { extractedEntities: true },

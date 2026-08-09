@@ -25,6 +25,7 @@ import { conversationContextService } from '../business/conversation-context.ser
 import { groqAdapter } from '../adapters/ai/groq.adapter.js';
 import { adapters } from '../adapters/container.js';
 import { normalize } from '../services/chat/normalizer.js';
+import { ResponseSource } from '../domain/types.js';
 // ──────────────────────────────────────────────────────────
 // Constants
 // ──────────────────────────────────────────────────────────
@@ -474,5 +475,80 @@ test('Case 10: interpreter — harga dari DB via cart_ops, not customer "50rb" (
     assert.match(result.message.content, /Rp\s*12[.,]000/);
     assert.ok(!result.message.content.includes('50.000'), 'customer-stated price "50rb" must NOT appear in response (I13)');
     assert.ok(!result.message.content.includes('50rb'), 'customer-stated price "50rb" must NOT appear in response (I13)');
+});
+// ─────────────────────────────────────────────────────────────────────────────
+// TASK B3 — tryTotal / tryPayment "bayar" overlap
+// Skenario: "berapa bayar kangkung" seharusnya KE tryProduct (harga Kangkung),
+// bukan terkurung oleh tryTotal ("keranjang kosong") atau tryPayment (daftar
+// metode bayar). Harness ini pakai store-golden-test (produk: beras) + menambah
+// sementara kangkung agar tryProduct bisa match. groq mock tetap (cannedContent)
+// hanya dipakai kalau sampai interpreter.
+// ─────────────────────────────────────────────────────────────────────────────
+// Helper kecil: upsert + hapus satu product untuk satu test (FK-safe).
+async function withProduct(id, name, price, stock, fn) {
+    await prisma.product.upsert({
+        where: { id },
+        update: { storeId: STORE_ID, name, price, stock, isActive: true, deletedAt: null, currency: 'IDR' },
+        create: { id, storeId: STORE_ID, name, price, stock, isActive: true, currency: 'IDR' },
+    });
+    try {
+        await fn();
+    }
+    finally {
+        await prisma.product.delete({ where: { id } }).catch(() => { });
+    }
+}
+test('Case B3-a: "total berapa" (regresi) tetap di-jawab tryTotal (0 LLM)', async () => {
+    const convId = 'conv-b3a';
+    await createConv(convId, 'cust-b3a');
+    try {
+        const { result, audit, llmCalls: calls } = await processMsg(convId, 'cust-b3a', 'toralin brp');
+        assert.ok(result, 'must return a response');
+        assert.equal(calls, 0, '0 LLM — tryTotal fast path');
+        assert.equal(audit.stagesReached[0], 'normalizer');
+        assert.equal(audit.stagesReached[1], 'tier3');
+        assert.equal(audit.finalIntent, 'fastpath');
+        assert.equal(result.source, ResponseSource.TOTAL, 'harus dari tryTotal (TOTAL)');
+    }
+    finally {
+        await prisma.conversation.delete({ where: { id: convId } }).catch(() => { });
+    }
+});
+test('Case B3-b: "berapa bayar kangkung" -> tryProduct (harga), BUKAN tryTotal/tryPayment', async () => {
+    const convId = 'conv-b3b';
+    await createConv(convId, 'cust-b3b');
+    await withProduct('prod-kangkung-b3', 'kangkung', 8000, 100, async () => {
+        const { result, audit, llmCalls: calls } = await processMsg(convId, 'cust-b3b', 'berapa bayar kangkung');
+        assert.ok(result, 'must return a response');
+        // Harus dari tryProduct (PRODUCT), BUKAN tryTotal (TOTAL) atau tryPayment (PAYMENT)
+        assert.equal(result.source, ResponseSource.PRODUCT, `expected tryProduct, got ${result.source}`);
+        assert.match(result.message.content, /kangkung/i, 'harus sebut kangkung');
+        assert.match(result.message.content, /8\.?000|8000/, 'harus sebut harga 8000');
+        assert.equal(calls, 0, '0 LLM — tryProduct fast path (bukan interpreter)');
+        assert.equal(audit.stagesReached, ['normalizer', 'tier3']);
+        assert.equal(audit.finalIntent, 'fastpath');
+        // Bukti: TIDAK pernah menyentuh tryTotal/tryPayment (content bukan keranjang-bayar)
+        assert.ok(!result.message.content.includes('keranjang belanja Kakak masih kosong'), 'must not be tryTotal empty-cart reply');
+        assert.ok(!result.message.content.includes('metode pembayaran'), 'must not be tryPayment reply');
+    });
+    await prisma.conversation.delete({ where: { id: convId } }).catch(() => { });
+});
+test('Case B3-c: "bisa cod ga?" -> tryPayment masih jawab (regression)', async () => {
+    const convId = 'conv-b3c';
+    await createConv(convId, 'cust-b3c');
+    // canary-style: butuh acceptsCod supaya tryPayment menjawab
+    await prisma.store.update({ where: { id: STORE_ID }, data: { acceptsCod: true } });
+    try {
+        const { result, audit, llmCalls: calls } = await processMsg(convId, 'cust-b3c', 'bisa cod ga?');
+        assert.ok(result);
+        assert.equal(result.source, ResponseSource.PAYMENT, `expected tryPayment, got ${result.source}`);
+        assert.match(result.message.content, /cod|COD|metode pembayaran/i);
+        assert.equal(calls, 0, '0 LLM');
+        assert.equal(audit.finalIntent, 'fastpath');
+    }
+    finally {
+        await prisma.store.update({ where: { id: STORE_ID }, data: { acceptsCod: false } }).catch(() => { });
+        await prisma.conversation.delete({ where: { id: convId } }).catch(() => { });
+    }
 });
 //# sourceMappingURL=golden-dataset.test.js.map
