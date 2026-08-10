@@ -5,7 +5,7 @@
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { isTotalTrigger, isTotalIntent, isPaymentIntent, TOTAL_TRIGGERS, PAYMENT_EXPLICIT_METHODS, } from '../tier-match.js';
+import { isTotalTrigger, isTotalIntent, isPaymentIntent, isOrderStatusIntent, TOTAL_TRIGGERS, PAYMENT_EXPLICIT_METHODS, } from '../tier-match.js';
 // Canary store-f7140b5c product names (lowercase) — used as catalogNames.
 const CATALOG = ['ayam', 'es teh manis', 'es jeruk manis', 'brambang', 'kentang', 'wortel', 'kangkung'];
 const noDB = []; // empty catalog (some cases have no product match)
@@ -90,6 +90,22 @@ describe('TASK B3 — tryPayment intent gate (explicit method only)', () => {
     it('"bayar" bukan kata metode eksplisit', () => {
         assert.equal(PAYMENT_EXPLICIT_METHODS.includes('bayar'), false);
         assert.equal(isPaymentIntent('bayar', noDB), false);
+    });
+});
+describe('TASK B4.1 — tryOrderStatus intent gate (stok vs status order overlap)', () => {
+    it('(1) "sudah dikirim pesanan saya?" → true (regresi, harus tetap benar)', () => {
+        const q = 'sudah dikirim pesanan saya?';
+        assert.equal(isOrderStatusIntent(q, CATALOG), true, 'track order — regresi must hold');
+    });
+    it('(2) "sampai mana kangkung tersedia?" (catalog ada Kangkung) → false (bug lama, sekarang miss)', () => {
+        const q = 'sampai mana kangkung tersedia?';
+        // 'sampai mana' ada (keyword status) tapi ada nama produk + tidak ada
+        // sinyal order eksplisit → ini pertanyaan stok/ketersediaan, bukan order.
+        assert.equal(isOrderStatusIntent(q, CATALOG), false, 'product name present + no explicit order signal → stock question, not order');
+    });
+    it('(3) "pesanan saya sampai mana?" (ada kata pesanan saya + tidak ada nama produk) → true', () => {
+        const q = 'pesanan saya sampai mana?';
+        assert.equal(isOrderStatusIntent(q, CATALOG), true, 'explicit order signal → true even without product name');
     });
 });
 //# sourceMappingURL=tier-match.test.js.map

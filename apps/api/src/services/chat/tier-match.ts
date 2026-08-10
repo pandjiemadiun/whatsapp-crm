@@ -156,3 +156,64 @@ export function isPaymentIntent(lower: string, catalogNames: readonly string[]):
   }
   return true;
 }
+
+// ── tryOrderStatus: kata kunci sinyal status / track pesanan ──────────────
+// Dipertanyakan sebagai order inquiry HANYA ketika tidak ada nama produk
+// toko dalam query — kecuali ada sinyal order eksplisit (lihat di bawah),
+// yang tetap memicu meski ada nama produk karena jelas soal order bukan stok.
+export const ORDER_STATUS_KEYWORDS: readonly string[] = [
+  'sudah dikirim',
+  'kapan dikirim',
+  'sampai mana',
+  'udah sampai',
+  'udah sampe',
+  'mana pesanan',
+  // sinyal order eksplisit — boleh trigger meski ada nama produk
+  'status pesanan',
+  'status order',
+  'pesanan saya',
+  'order saya',
+];
+
+// Subset ORDER_STATUS_KEYWORDS yang merupakan sinyal order eksplisit:
+// mengandung "pesanan"/"order" + kepemilikan ("saya"), sehingga jelas
+// soal order tracking — tidak akan tumpang tindih dengan pertanyaan stok
+// (mis. "sampai mana kangkung tersedia?" tidak mengandung sinyal ini).
+const ORDER_EXPLICIT_SIGNALS: readonly string[] = [
+  'pesanan saya',
+  'order saya',
+  'status pesanan',
+  'status order',
+];
+
+/**
+ * tryOrderStatus boleh menjawab HANYA bila query benar-benar soal
+ * status / track order, BUKAN pertanyaan ketersediaan/stok produk
+ * yang sekadar mengandung keyword seperti "sampai mana".
+ *
+ * Aturan:
+ * - true HANYA bila ada status keyword DAN TIDAK ada nama produk katalog,
+ *   kecuali ada sinyal order eksplisit ('pesanan saya'/'order saya'/
+ *   'status pesanan'/'status order') yang boleh trigger meski ada nama
+ *   produk karena jelas soal order bukan stok.
+ *
+ * Contoh: "sampai mana kangkung tersedia?" → false (stok, bukan order).
+ *         "sudah dikirim pesanan saya?"  → true  (track order, regresi).
+ *         "pesanan saya sampai mana?"     → true  (track order eksplisit).
+ *
+ * @param lower         query yang sudah trim().toLowerCase()
+ * @param catalogNames  nama produk toko (lowercase)
+ */
+export function isOrderStatusIntent(lower: string, catalogNames: readonly string[]): boolean {
+  // Gate cepat: tidak ada keyword status sama sekali → miss (tanpa DB).
+  if (!ORDER_STATUS_KEYWORDS.some((k) => lower.includes(k))) return false;
+
+  // Sinyal order eksplisit → jelas soal order, meski ada nama produk.
+  if (ORDER_EXPLICIT_SIGNALS.some((k) => lower.includes(k))) return true;
+
+  // Tidak eksplisit — jika ada nama produk toko, anggap pertanyaan stok/
+  // ketersediaan, bukan status order → MISS ke tryProduct.
+  if (hasProductName(lower, catalogNames)) return false;
+
+  return true;
+}
