@@ -18,6 +18,7 @@ export declare function runOneCall(normalizedText: string, ctx: PipelineContext)
 export declare function validateCartOpsAgainstDb(cartOps: CartOp[], storeId: string): Promise<{
     valid: CartOp[];
     invalid: CartOp[];
+    missing: string[];
 }>;
 /**
  * validateCartOps — validasi cart_ops terhadap katalog produk di memori (storeProducts).

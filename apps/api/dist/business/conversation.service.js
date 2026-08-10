@@ -5,7 +5,7 @@ import { conversationContextService } from './conversation-context.service.js';
 import { prisma } from '../infrastructure/prisma.js';
 import { productService } from './product.service.js';
 import { normalize } from '../services/chat/normalizer.js';
-import { runOneCall, validateCartOps, truncateTo2Sentences } from '../services/chat/interpreter.js';
+import { runOneCall, validateCartOpsAgainstDb, truncateTo2Sentences } from '../services/chat/interpreter.js';
 import { getStoreEngine } from '../services/chat/engine-config.js';
 import { understand } from '../services/chat/reasoning.js';
 import { loadWorkspace, saveWorkspace, incrementDeferredTurns, shouldAutoDrop, dropPending } from '../services/chat/workspace.js';
@@ -136,11 +136,13 @@ export class ConversationService {
                         pending.status = 'resolved';
                     }
                     // EXECUTE: turunkan cart ops dari pending + resolvedIndices/matchedNames,
-                    // lalu eksekusi via executeCartOps yang sama (harga dari catalog/DB).
+                    // lalu validasi harga dari DB (I13/P2) sebelum mutasi — produk tidak ada
+                    // di DB (priceMap fallback 0) tidak dieksekusi.
                     if (payload.action === 'EXECUTE' && pending) {
                         const ops = this.deriveResolvedCartOps(pending, payload, catalog);
-                        if (ops.length > 0) {
-                            await this.executeCartOps(ops, {
+                        const { valid: dbValid } = await validateCartOpsAgainstDb(ops, storeId);
+                        if (dbValid.length > 0) {
+                            await this.executeCartOps(dbValid, {
                                 conversationId,
                                 storeId,
                                 customerId,
@@ -354,7 +356,11 @@ export class ConversationService {
                 finalIntent = 'execute_pending';
                 // Execute pending cart ops (0 LLM) — fix I13: harga dari DB via modifyCart
                 if (resolved.ops && resolved.ops.length > 0) {
-                    for (const op of resolved.ops) {
+                    // I13+P2: validasi harga pending cart_ops terhadap DB — ganti harga
+                    // LLM (disimpan di pending options) dengan harga DB sebelum mutasi.
+                    // Produk tidak ada di DB → tidak dieksekusi (bukan reject transaksi total).
+                    const { valid: dbValid } = await validateCartOpsAgainstDb(resolved.ops, storeId);
+                    for (const op of dbValid) {
                         await conversationContextService.modifyCart(conversationId, 'add', {
                             addedProduct: op.product,
                             qty: op.qty,
@@ -483,9 +489,11 @@ export class ConversationService {
             if (llmResult) {
                 finalIntent = llmResult.intent ?? 'llm';
                 let executedAdd = false;
-                // I15: validateCartOps dipanggil sebelum executeCartOps.
+                // I15 + P2: validateCartOpsAgainstDb — harga SELALU dari DB (bukan
+                // LLM). Produk tidak ada di DB → masuk `missing` (lapor ke customer),
+                // tidak dieksekusi (bukan reject transaksi total).
                 if (llmResult.cart_ops && llmResult.cart_ops.length > 0) {
-                    const { valid, missing } = validateCartOps(llmResult.cart_ops, storeProducts);
+                    const { valid, missing } = await validateCartOpsAgainstDb(llmResult.cart_ops, storeId);
                     if (valid.length > 0) {
                         await this.executeCartOps(valid, pipelineCtx, normalizedMsg);
                         executedAdd = valid.some((o) => o.type === 'add');

@@ -144,7 +144,7 @@ Schema:\n${INTERPRETER_SCHEMA}\n]` +
 export async function validateCartOpsAgainstDb(
   cartOps: CartOp[],
   storeId: string
-): Promise<{ valid: CartOp[]; invalid: CartOp[] }> {
+): Promise<{ valid: CartOp[]; invalid: CartOp[]; missing: string[] }> {
   const products = await prisma.product.findMany({
     where: { storeId, deletedAt: null, isActive: true },
     select: { name: true, price: true, stock: true },
@@ -157,11 +157,15 @@ export async function validateCartOpsAgainstDb(
 
   const valid: CartOp[] = [];
   const invalid: CartOp[] = [];
+  const missing: string[] = [];
 
   for (const op of cartOps) {
     const dbProduct = productMap.get(op.product.toLowerCase().trim());
     if (!dbProduct) {
+      // Produk tidak ada di DB -> laporkan sebagai `missing` (biar reply
+      // bisa tanya ketersediaan) dan JANGAN dieksekusi. Harga tetap dari DB.
       invalid.push(op);
+      missing.push(op.product);
       continue;
     }
     if (typeof op.qty !== 'number' || op.qty < 1) {
@@ -175,7 +179,7 @@ export async function validateCartOpsAgainstDb(
     });
   }
 
-  return { valid, invalid };
+  return { valid, invalid, missing };
 }
 
 /**

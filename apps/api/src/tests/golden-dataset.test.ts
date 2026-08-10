@@ -749,3 +749,36 @@ test('Case B3-c: "bisa cod ga?" -> tryPayment masih jawab (regression)', async (
     await prisma.conversation.delete({ where: { id: convId } }).catch(() => {});
   }
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TASK P2 — I13 truth boundary (permanent regression): harga cart wajib dari DB,
+// bukan dari pending-option yang mensimulasikan output LLM (price salah).
+// Seed pending clarification dengan cartOp WRONG price (99999) untuk 'beras'
+// (DB=12000), resolve "dua duanya" → resolver-EXECUTE memakai
+// validateCartOpsAgainstDb → modifyCart dengan harga DB. Readback mentah
+// confirmed_items membuktikan price=12000 (bukan 99999).
+// ─────────────────────────────────────────────────────────────────────────────
+test('Case P2-I13: wrong price in pending (sim LLM) -> DB price in cart (raw readback)', async () => {
+  const convId = 'conv-p2-throwaway';
+  await createConv(convId, 'cust-p2');
+  await setPendingInDb(convId, 'beli beras?', [
+    { id: 'opt-yes', label: 'iya', cartOps: [{ type: 'add', product: 'beras', qty: 1, price: 99999 }] },
+  ]);
+  const { result, audit, llmCalls: calls } = await processMsg(convId, 'cust-p2', 'dua duanya');
+  // RAW DB readback (query DB mentah)
+  const ctxRow = await prisma.conversationContext.findUnique({
+    where: { conversationId: convId },
+    select: { extractedEntities: true },
+  });
+  const confirmedItems = ((ctxRow?.extractedEntities as any)?.confirmedItems) || [];
+  console.log('P2_RAW_CONFIRMED_ITEMS:', JSON.stringify(confirmedItems));
+  console.log('P2_RAW_LLM_CALLS:', calls, 'finalIntent:', audit.finalIntent, 'cartOpsExecuted:', audit.cartOpsExecuted);
+  const berasItem = confirmedItems.find((i: any) => String(i.product || i.name || '').toLowerCase().includes('beras'));
+  assert.ok(result, 'must respond');
+  assert.equal(calls, 0, '0 LLM (resolver path)');
+  assert.ok(berasItem, 'beras must be in cart');
+  assert.equal(berasItem.price, 12000, `expected DB price 12000, got ${berasItem.price}`);
+  assert.notEqual(berasItem.price, 99999, 'LLM wrong price 99999 must NOT survive');
+  assert.ok(result!.message.content.includes('beras'));
+  await prisma.conversation.delete({ where: { id: convId } }).catch(() => {});
+});
