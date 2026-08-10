@@ -307,3 +307,13 @@ Catatan deviasi acceptance #4 (`git diff --stat`):
   orphan dist di commit 5f502d1).
 - `logs/*.log` tidak di-commit (RAILS §1.160, risiko data WA customer).
 - `p4-verify.ts` (temp harness) dihapus sebelum commit.
+
+## UPDATE 10/8 — P4 (REMOVE SECOND BRAIN) CLOSED
+extractAndSaveOrder (interpreter LLM ketiga/Gemini, tanpa validasi DB)
+dihapus total. DB proof: 2 baris (draft+phantom pending) -> 1 baris.
+Commit 0db56bf. Test baseline tetap 2 failed/1 failed.
+ANTRIAN BARU (bukan bug P4, ditemukan saat kerja): activeOrder/tryTotal
+tidak diskriminasi draft vs pending order - createOrder masih bisa
+hasilkan pending yang kepilih jadi order aktif. Perlu TASK terpisah
+sebelum atau sejalan P5.
+NEXT: P5 - Response naturalness (composer-v2).
