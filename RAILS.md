@@ -599,3 +599,28 @@ sama) BELUM digarap, tidak masuk P3.4 (di luar scope RMW utama). appendMessage
 antrian terpisah, dicatat robot di laporan P3.4 §6.
 Siapa yang setuju: owner (Panji), Claude - berdasarkan commit log +
 race test + test suite mentah, cross-check live.
+
+### 10 Agu 2026 — P4 selesai: extractAndSaveOrder (second-brain) dihapus
+Konteks: Audit P4.0 konfirmasi extractAndSaveOrder() adalah interpreter LLM
+ketiga (Gemini, beda provider/config dari v1/v2 Groq) yang parse ulang pesan
+customer TANPA validateCartOpsAgainstDb, nulis baris orders 'pending' phantom
+(totalPrice null) ke tabel yang sama dipakai v1/v2. Bisa kepilih jadi
+activeOrder di turn berikutnya, ganggu SEMUA tenant produksi (bukan cuma
+canary, karena jalur v1 default).
+Fix: dihapus total (bukan dipertahankan persist-only) - order.service.ts
+(-144 baris: EXTRACTION_PROMPT/RETRY_PROMPT/attemptExtraction/
+extractAndSaveOrder), call-site conversation.service.ts:769, mock no-op
+golden-dataset.test.ts. createOrder/syncCartStateToDraftOrder/
+addConfirmedItemToOrder TIDAK disentuh (jalur v1/v2 benar).
+Bukti DB before/after (harness in-process, dev DB, bukan curl WA live -
+demi keamanan data customer riil): 2 baris (draft@36000 + phantom
+pending@null) -> 1 baris (draft@36000, qty dari DB). Simbol
+extractAndSaveOrder dikonfirmasi hilang dari source DAN dist/ (grep -c = 0).
+tsc 0 error, build sukses, test baseline tetap 2 failed suites/1 failed
+test (golden-dataset tetap pass setelah mock dihapus). Commit 0db56bf.
+Temuan luar-scope BELUM ditangani (masuk antrian terpisah, BUKAN bagian
+P4): activeOrder (conversation.service.ts:829) dan tryTotal/lastOrder-
+fallback (fallback.service.ts:649-661) tidak diskriminatif draft vs
+pending - createOrder (:393) masih bisa hasilkan baris pending yang
+kepilih jadi order aktif meski bukan dari extractAndSaveOrder lagi.
+**P4 RESMI SELESAI 10 Agu 2026.**
