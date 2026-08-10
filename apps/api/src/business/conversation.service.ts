@@ -10,13 +10,13 @@ import { getStoreEngine } from '../services/chat/engine-config.js';
 import { understand } from '../services/chat/reasoning.js';
 import { planActs } from '../services/chat/planner.js';
 import { validate } from '../services/chat/validator-v2.js';
-import { loadWorkspace, saveWorkspace, incrementDeferredTurns, shouldAutoDrop, dropPending } from '../services/chat/workspace.js';
+import { loadWorkspace, saveWorkspace, incrementDeferredTurns, shouldAutoDrop, dropPending, mapLegacyEntitiesToWorkspace, hasLegacyState } from '../services/chat/workspace.js';
 import { composeReply, composeEscalateReply, escalateStatusUpdate } from '../services/chat/composer-v2.js';
 import { resolvePending } from '../services/chat/pendingClarification.js';
 import { shouldRunShadow } from '../services/chat/shadow-config.js';
 import { buildShadowEntry, logShadowEntry } from '../services/chat/shadow-logger.js';
 import type { ResolvedPayload } from '../services/chat/fast-path.js';
-import type { PendingV2 } from '../services/chat/types-v2.js';
+import type { WorkspaceV2, PendingV2 } from '../services/chat/types-v2.js';
 
 
 import {
@@ -129,15 +129,32 @@ export class ConversationService {
       };
 
       try {
-         // 1. Load workspace dari kolom baru `workspace_v2` (T1 fix P3.1)
-         const ctxRow = await prisma.conversationContext.findUnique({
-             where: { conversationId },
-             select: { workspace_v2: true }
-         });
-         
-         // Data di DB (JSON) sudah diparse otomatis oleh Prisma menjadi object
-         // loadWorkspace (workspace.ts) defensif: kolom kosong/null -> WorkspaceV2 default kosong
-         const workspace = loadWorkspace(JSON.stringify(ctxRow?.workspace_v2 || {}));
+        // 1. Load workspace — sumber kebenaran: kolom `workspace_v2` (P3.1).
+        //    T3 fix (P3.2): bila conversation baru saja switch v1->v2 dan
+        //    workspace_v2 masih kosong, migrasi SEKALI dari legacy
+        //    `extractedEntities` lalu persist ke workspace_v2 agar turn
+        //    berikutnya pakai workspace_v2 (tidak re-map legacy lagi).
+        const ctxRow = await prisma.conversationContext.findUnique({
+            where: { conversationId },
+            select: { workspace_v2: true, extractedEntities: true }
+        });
+
+        let workspace: WorkspaceV2;
+        if (ctxRow?.workspace_v2) {
+            // Source of truth terisi (setelah P3.1) -> pakai langsung.
+            workspace = loadWorkspace(JSON.stringify(ctxRow.workspace_v2));
+        } else {
+            // workspace_v2 kosong: cek legacy extractedEntities (v1 state).
+            const legacy = conversationContextService.parseExtractedEntities(ctxRow?.extractedEntities);
+            if (hasLegacyState(legacy)) {
+                workspace = mapLegacyEntitiesToWorkspace(legacy);
+                // Persist migrasi ke workspace_v2 jadi sumber kebenaran per-sementara.
+                await conversationContextService.updateWorkspaceV2(conversationId, workspace);
+            } else {
+                // Kolom kosong & legacy pun kosong -> WorkspaceV2 default (conversation baru).
+                workspace = loadWorkspace('{}');
+            }
+        }
         
         // 2. Auto-drop deferred pending
         for (const pending of workspace.pendings) {
