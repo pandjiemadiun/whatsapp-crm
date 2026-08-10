@@ -267,4 +267,55 @@ export function isSopRetourIntent(lower, catalogNames) {
     // 'ganti' sendirian / 'ganti' dengan <1 produk → bukan sinyal retur kuat
     return false;
 }
+// ── tryShipping: kata kunci shipping ───────────────────────────────────────
+// TASK B4.3 — perketat tryShipping vs intent order. Bug (laporan-taskB2.md,
+// risiko SEDANG): "ambil sendiri"/"pickup" ambigu dengan intent order.
+// "mau pesan kangkung" (produk + kata order) tidak boleh trigger tryShipping
+// — itu order, bukan tanya ongkir. Tidak ada contoh false-positive kritis di
+// canary, tetap perketat sebagai pencegahan.
+/** Kata order eksplisit: menandakan niat memesan, bukan tanya ongkir. */
+const ORDER_EXPLICIT_WORDS = [
+    'mau', 'pesan', 'order',
+];
+/**
+ * Kata kirim/ongkir eksplisit: override gate order. Jika ada di query,
+ * berarti memang tanya ongkir/kirim (bukan order biasa) meski ada nama
+ * produk + kata order. Termasuk nama jasa kirim.
+ */
+const SHIPPING_EXPLICIT_SIGNALS = [
+    'ongkir', 'kirim', 'ekspedisi', 'kurir',
+    'jne', 'j&t', 'sicepat', 'anteraja', 'gosend', 'grab',
+];
+/** Keyword shipping asli — tetap berlaku sebagai fallback di isShippingIntent. */
+export const SHIPPING_KEYWORDS = [
+    'ongkir', 'kirim', 'pengiriman', 'ekspedisi', 'biaya kirim',
+    'berapa ongkos', 'ambil sendiri', 'pickup', 'dikirim', 'ongkos kirim',
+    'kurir', 'jne', 'j&t', 'sicepat', 'anteraja', 'gosend', 'grab',
+    'bisa diantar', 'diantar', 'pengirimannya',
+];
+/**
+ * TASK B4.3 — Gate cerdas untuk tryShipping.
+ *
+ * Aturan:
+ * - Jika query mengandung nama produk katalog + kata order eksplisit
+ *   ('mau'/'pesan'/'order') TANPA kata kirim/ongkir eksplisit
+ *   ('ongkir'/'kirim'/'ekspedisi'/'kurir'/nama jasa kirim) → return false
+ *   (ini order, bukan tanya ongkir).
+ * - Selain itu, keyword shipping asli tetap berlaku seperti sebelumnya.
+ *
+ * @param lower         query yang sudah trim().toLowerCase()
+ * @param catalogNames  nama produk toko (lowercase)
+ */
+export function isShippingIntent(lower, catalogNames) {
+    const product = hasProductName(lower, catalogNames);
+    const hasOrderWord = ORDER_EXPLICIT_WORDS.some((w) => lower.includes(w));
+    const hasShippingExplicit = SHIPPING_EXPLICIT_SIGNALS.some((w) => lower.includes(w));
+    // Produk + kata order ('mau'/'pesan'/'order'), TANPA kata kirim/ongkir
+    // eksplisit → ini order, bukan tanya ongkir → false.
+    if (product && hasOrderWord && !hasShippingExplicit) {
+        return false;
+    }
+    // Selain itu, keyword shipping asli tetap berlaku.
+    return SHIPPING_KEYWORDS.some((kw) => lower.includes(kw));
+}
 //# sourceMappingURL=tier-match.js.map

@@ -5,7 +5,7 @@
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { isTotalTrigger, isTotalIntent, isPaymentIntent, isOrderStatusIntent, isSopRetourIntent, TOTAL_TRIGGERS, PAYMENT_EXPLICIT_METHODS, SOP_RETUR_KEYWORDS, } from '../tier-match.js';
+import { isTotalTrigger, isTotalIntent, isPaymentIntent, isOrderStatusIntent, isSopRetourIntent, isShippingIntent, TOTAL_TRIGGERS, PAYMENT_EXPLICIT_METHODS, SOP_RETUR_KEYWORDS, SHIPPING_KEYWORDS, } from '../tier-match.js';
 // Canary store-f7140b5c product names (lowercase) — used as catalogNames.
 const CATALOG = ['ayam', 'es teh manis', 'es jeruk manis', 'brambang', 'kentang', 'wortel', 'kangkung'];
 const noDB = []; // empty catalog (some cases have no product match)
@@ -149,6 +149,46 @@ describe('TASK B4.2 — isSopRetourIntent gate (ganti X ke Y vs retur)', () => {
         assert.equal(SOP_RETUR_KEYWORDS.includes('ganti'), true);
         assert.equal(SOP_RETUR_KEYWORDS.includes('rusak'), true);
         assert.equal(SOP_RETUR_KEYWORDS.includes('refund'), true);
+    });
+});
+describe('TASK B4.3 — isShippingIntent gate (produk + order vs ongkir)', () => {
+    it('(1) "berapa ongkir ke Jaksel?" → true (regresi)', () => {
+        const q = 'berapa ongkir ke Jaksel?';
+        assert.equal(isShippingIntent(q, noDB), true, '"ongkir" is a strong shipping signal');
+    });
+    it('(2) "kurier pakai JNE ya?" → true (regresi)', () => {
+        const q = 'kurier pakai JNE ya?';
+        assert.equal(isShippingIntent(q, noDB), true, '"kurir" + "jne" are explicit shipping signals');
+    });
+    it('(3) "mau pesan kangkung" (produk + kata order, TANPA kata kirim) → false (pencegahan)', () => {
+        const q = 'mau pesan kangkung';
+        assert.equal(isShippingIntent(q, CATALOG), false, 'product + order word, no shipping signal → order, not shipping');
+    });
+    it('(4) "berapa ongkir kangkung?" (produk + ongkir, tidak ada order word) → true', () => {
+        const q = 'berapa ongkir kangkung';
+        assert.equal(isShippingIntent(q, CATALOG), true, '"ongkir" present → shipping question despite product name');
+    });
+    it('(5) "mau pesan kangkung, berapa ongkir?" (order + ongkir) → true', () => {
+        const q = 'mau pesan kangkung, berapa ongkir?';
+        assert.equal(isShippingIntent(q, CATALOG), true, '"ongkir" present → shipping question despite order word + product');
+    });
+    it('(6) "mau ambil sendiri kangkung" (produk + order, hanya "ambil sendiri" yg bukan eksplisit) → false', () => {
+        const q = 'mau ambil sendiri kangkung';
+        assert.equal(isShippingIntent(q, CATALOG), false, '"ambil sendiri" is not an explicit shipping signal; product + "mau" → order');
+    });
+    it('(7) "ambil sendiri" saja (tanpa produk/order) → true (regresi keyword)', () => {
+        const q = 'ambil sendiri';
+        assert.equal(isShippingIntent(q, noDB), true, '"ambil sendiri" is still a shipping keyword when no order intent');
+    });
+    it('(8) "mau order kangkung via jne" (order + ekspedisi eksplisit) → true', () => {
+        const q = 'mau order kangkung via jne';
+        assert.equal(isShippingIntent(q, CATALOG), true, '"jne" is an explicit shipping signal → not blocked by order gate');
+    });
+    it('sanity: SHIPPING_KEYWORDS mengandung ongkir, kirim, jne, ambil sendiri', () => {
+        assert.equal(SHIPPING_KEYWORDS.includes('ongkir'), true);
+        assert.equal(SHIPPING_KEYWORDS.includes('kirim'), true);
+        assert.equal(SHIPPING_KEYWORDS.includes('jne'), true);
+        assert.equal(SHIPPING_KEYWORDS.includes('ambil sendiri'), true);
     });
 });
 //# sourceMappingURL=tier-match.test.js.map
