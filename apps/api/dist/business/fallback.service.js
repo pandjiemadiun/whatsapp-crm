@@ -3,6 +3,7 @@ import { faqService } from './faq.service.js';
 import { knowledgeService } from './knowledge.service.js';
 import { productService } from './product.service.js';
 import { prisma } from '../infrastructure/prisma.js';
+import { conversationContextService } from './conversation-context.service.js';
 import { ResponseSource, } from '../domain/types.js';
 import { isDeadEnd } from '../services/message-queue.service.js';
 // TASK B1 — pure product-name match scoring (extracted to keep chat tests hermetic).
@@ -345,7 +346,7 @@ export class FallbackService {
                     where: { conversationId: context.conversationId },
                     select: { extractedEntities: true },
                 });
-                const entities = this.parseEntities(ctxRow?.extractedEntities);
+                const entities = conversationContextService.parseExtractedEntities(ctxRow?.extractedEntities);
                 const cartTokens = entities.confirmedItems.map(c => (c.product || '').toLowerCase()).filter(Boolean);
                 if (askedWords.some(w => cartTokens.some(ct => ct.includes(w))))
                     return null;
@@ -579,7 +580,7 @@ export class FallbackService {
                 where: { conversationId: context.conversationId },
                 select: { extractedEntities: true },
             });
-            const entities = this.parseEntities(ctxRow?.extractedEntities);
+            const entities = conversationContextService.parseExtractedEntities(ctxRow?.extractedEntities);
             const cartItems = entities.confirmedItems || [];
             let items = [...cartItems];
             if (items.length === 0) {
@@ -818,20 +819,7 @@ export class FallbackService {
                 where: { conversationId },
                 select: { extractedEntities: true, sessionKey: true, sessionExpireAt: true },
             });
-            let existing = {
-                discussedItems: [],
-                confirmedItems: [],
-                lastAmbiguousPrompt: null,
-            };
-            const raw = current?.extractedEntities;
-            if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
-                const parsed = raw;
-                existing = {
-                    discussedItems: Array.isArray(parsed.discussedItems) ? parsed.discussedItems : [],
-                    confirmedItems: Array.isArray(parsed.confirmedItems) ? parsed.confirmedItems : [],
-                    lastAmbiguousPrompt: typeof parsed.lastAmbiguousPrompt === 'string' ? parsed.lastAmbiguousPrompt : null,
-                };
-            }
+            const existing = conversationContextService.parseExtractedEntities(current?.extractedEntities);
             // Fix BUG-7: Dedup new items against existing discussedItems by product name
             const existingProductNames = new Set(existing.discussedItems.map(d => d.product.toLowerCase()));
             const dedupedNew = newItems.filter(n => !existingProductNames.has(n.product.toLowerCase()));
@@ -850,8 +838,8 @@ export class FallbackService {
                 where: { conversationId },
                 update: {
                     extractedEntities: {
+                        ...existing,
                         discussedItems: mergedDiscussedItems,
-                        confirmedItems: existing.confirmedItems,
                         lastAmbiguousPrompt: newLastAmbiguous,
                     },
                 },
@@ -881,45 +869,6 @@ export class FallbackService {
         }
     }
     // ── Helpers ──
-    parseEntities(raw) {
-        if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
-            const parsed = raw;
-            return {
-                discussedItems: Array.isArray(parsed.discussedItems) ? parsed.discussedItems : [],
-                confirmedItems: Array.isArray(parsed.confirmedItems) ? parsed.confirmedItems : [],
-                lastAmbiguousPrompt: typeof parsed.lastAmbiguousPrompt === 'string' ? parsed.lastAmbiguousPrompt : null,
-                recipientName: typeof parsed.recipientName === 'string' ? parsed.recipientName : null,
-                shippingAddress: typeof parsed.shippingAddress === 'string' ? parsed.shippingAddress : null,
-            };
-        }
-        return { discussedItems: [], confirmedItems: [], lastAmbiguousPrompt: null };
-    }
-    async upsertExtractedEntities(conversationId, entities) {
-        try {
-            const current = await prisma.conversationContext.findUnique({
-                where: { conversationId },
-                select: { sessionKey: true, sessionExpireAt: true },
-            });
-            await prisma.conversationContext.upsert({
-                where: { conversationId },
-                update: { extractedEntities: entities },
-                create: {
-                    conversationId,
-                    lastMessages: '[]',
-                    sessionKey: current?.sessionKey ?? crypto.randomUUID(),
-                    sessionExpireAt: current?.sessionExpireAt ?? new Date(Date.now() + 3600000),
-                    extractedEntities: entities,
-                },
-            });
-            adapters.logger.debug('Extracted entities updated', { conversationId });
-        }
-        catch (err) {
-            adapters.logger.warn('Failed to upsert extracted entities', {
-                conversationId,
-                error: err.message,
-            });
-        }
-    }
     /**
      * Deteksi intent koreksi: message mengandng kata "bukan"/"salah"
      * dan menyebut nama produk di confirmedItems. Kembalikan nama produk yang disebut.
