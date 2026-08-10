@@ -200,3 +200,110 @@ Sisa belum digarap (di luar scope P3, item antrian): T5 fallback tier
 overlap (RENDAH), appendMessage lastMessages race (belum diklasifikasi).
 NEXT: P4 - Remove second brain (extractAndSaveOrder berhenti jadi
 interpreter kedua untuk pesan yang sudah diproses v2).
+
+## DITEMUKAN SAAT KERJA — TASK P4.0 (audit read-only, laporan laporan-taskP4-audit.md), belum ditangani
+Audit read-only P4 menemukan bug luar scope (RAILS §1.4: catat, jangan fix).
+Semua berkaitan dengan `orderService.extractAndSaveOrder()` (order.service.ts:101)
+yang masih berjalan sebagai interpreter kedua/ketiga di jalur v1.
+1. **I13 violation eksplisit**: baris `orders` yang dibuat `extractAndSaveOrder`
+   (order.service.ts:128-139) tidak ada `unitPrice`/`totalPrice`, items
+   `[{product, quantity}]` tidak divalidasi DB (kontras interpreter.ts:144 /
+   conversation.service.ts:628). price=null di schema.prisma:214. → TASK terpisah.
+2. **Provider/config drift**: extractAndSaveOrder pake `adapters.ai.generate`
+   → `aiProviderManager` primary=**Gemini** (container.ts:30, manager.ts:63/34),
+   temp 0.1, maxTokens 300, **tanpa jsonMode** (order.service.ts:77); sedangkan
+   v1/v2 pakai `groqAdapter.generate` langsung, temp 0.2, maxTokens 250,
+   jsonMode:true (interpreter.ts:88, reasoning.ts:115; groq.adapter.ts:104).
+   Berarti Gemini bisa terpakai tiap turn hanya untuk ekstraksi order + output
+   parse sering non-JSON → relayang via cleanJsonString/extractJsonFromText
+   (order.service.ts:38-98) yang berbeda mekanisme v1/v2. → TASK terpisah.
+3. **I8 accounting gap**: LLM ke-3 (`adapters.ai.generate` di extractAndSaveOrder)
+   tidak increment `llmCallCount` (conversation.service.ts:402/616) dan tidak
+   push ke `stagesReached` — cost/kuota tidak terukur. → TASK terpisah.
+4. **`activeOrder`/`tryTotal` tidak diskriminatif** antara order `draft`
+   (operasional, harga dari DB) vs `pending` (ekstraksi palsu, tidak ada harga):
+   conversation.service.ts:829 (orderBy createdAt desc, notIn
+   shipped/delivered/cancelled) dan fallback.service.ts:649-661 (lastOrder
+   fallback) dapat memilih baris `pending` palsu sebagai order aktif. → TASK terpisah.
+5. **Tidak ada test real** untuk `extractAndSaveOrder` — golden-dataset.test.ts:253
+   mem-mock-nya ke no-op (komentar :15 "prevents real LLM in order extraction").
+   Blind spot eksistensi. → TASK terpisah.
+
+## UPDATE — TASK P4.1 CLOSED (hapus extractAndSaveOrder second-brain interpreter), 10 Agu 2026
+Fix real (bukan audit saja). Menghapus seluruh jalur interpreter LLM ketiga
+(Gemini, via `adapters.ai.generate`) yang menulis baris `orders` tanpa
+`validateCartOpsAgainstDb`:
+
+- `conversation.service.ts` — hapus call-site `void orderService.extractAndSaveOrder(...)`
+  + komentar `// Non-blocking order extraction` di sekitarnya. (`orderService`
+  import tetap dipakai `detectDoneOrdering`/`finalizeDraftOrder`.)
+- `order.service.ts` — hapus: method `extractAndSaveOrder`, `attemptExtraction`,
+  konstan `EXTRACTION_PROMPT`/`RETRY_PROMPT`, helper `extractJsonFromText`,
+  `cleanJsonString`, `validateParsedOrder`, interface `ParsedOrder`.
+  JANGAN disentuh: `createOrder`, `syncCartStateToDraftOrder`,
+  `addConfirmedItemToOrder` (jalur v1/v2 yang benar).
+- `golden-dataset.test.ts` — hapus no-op mock `OrderProto.extractAndSaveOrder`
+  (setup lama :253, restore :271, `originalExtractOrder` :60, komentar :15).
+  Mock `detectDoneOrdering` (yang masih dipakai) DIPERBOKAN.
+
+Verification (acceptance P4.1):
+- `tsc --noEmit` → 0 error. (`npx tsc` dari repo-root gagal karena typescript
+  bukan dependency root; pakai binary lokal `apps/api/node_modules/.bin/tsc`.)
+- `npm run build` → exit 0.
+- `npm run test:chat` (full, 23 suites) → `2 failed, 21 passed, 23 total` /
+  `1 failed, 246 passed, 247 total` = **BASELINE** (reasoning-v2 test +
+  engine-config-v2 suite-init, pre-existing; lihat STATUS-V2.md:137-139 /
+  RAILS.md:137-139). Bukan regresi. `golden-dataset.test.ts` tetap PASS
+  setelah mock-nya dihapus.
+- `pm2 restart api` → `online`, tidak crash-loop, `garuda-api-error.log` kosong
+  pasca-restart.
+- Proof DB (harness in-process `p4-verify.ts`: mock LLM, DB `garuda_dev`,
+  **tidak** sentuh webhook WA real / customer riil): untuk pesan
+  `"mau 3 ayam goreng"` (conv `conv-p4-verify`, store `store-p4-verify`,
+  produk `ayam goreng` @12000):
+  - BEFORE: 2 baris — 1 `draft` @ totalPrice 36000 (qty 3, price dari DB) +
+    1 phantom `pending` @ totalPrice **null** (qty 1, price tidak ada).
+  - AFTER: 1 baris — `{"orderStatus":"draft","totalPrice":36000,"items":[{"qty":3,"price":12000,"product":"ayam goreng",...}]}`,
+    0 phantom `pending`. `orderService.extractAndSaveOrder exists: false`.
+    Satu-satunya LLM call = interpreter v1 (Groq) → `cartOpsExecuted:1,
+    llmCallCount:1`; `adapters.ai.generate` (Gemini) tidak pernah terpanggil.
+  Query readback mentah: `SELECT orderStatus,totalPrice,items FROM "Order"
+  WHERE "conversationId"='conv-p4-verify' ORDER BY "createdAt" ASC` → **1 row**
+  `draft`@36000.
+
+Catatan deviasi acceptance #6: tidak `curl` webhook WA langsung (bisa kirim pesan
+ke customer/store riil lewat GOWA — ditolak karena grounds safety RAILS §3);
+ganti dengan harness in-process yang sama pers invariant DB-nya, mock kedua LLM.
+
+RILIEU / DITEMUKAN SAAT KERJA — penutupan TASK P4.1 atas entry audit §4
+(laporan-taskP4-audit.md):
+1. **I13 violation** (price null, items tak tervalidasi DB) di extractAndSaveOrder →
+   **RESOLVED** (fungsi dihapus; tidak ada lagi kode interpreter yang menulis
+   baris order tanpa harga DB).
+2. **Provider/config drift** (Gemini vs Groq, tanpa jsonMode, temp/maxToken berbeda) →
+   **RESOLVED** (fungsi dihapus).
+3. **I8 accounting gap** (`llmCallCount`/`stagesReached` tidak increment untuk LLM
+   ke-3) → **RESOLVED** (fungsi dihapus; cost/kuota lagi akurat).
+5. **Tidak ada test real** untuk extractAndSaveOrder (hanya no-op mock) →
+   **RESOLVED** (fungsi & mock-nya dihapus; golden tetap pass).
+4. **`activeOrder`/`tryTotal` tidak diskriminatif** antara `draft` vs `pending` →
+   **BELUM / TERBUKA** (masih relevan setelah penghapusan). `createOrder`
+   (order.service.ts:393) masih menulis baris `orderStatus: 'pending'`, dan
+   `activeOrder` (conversation.service.ts:829, orderBy createdAt desc,
+   notIn shipped/delivered/cancelled) + `lastOrder`/`tryTotal` fallback
+   (fallback.service.ts:649-661) tetap dapat memilih baris `pending` (bukan
+   `draft`) sebagai order aktif. Perlu diskriminasi `draft` eksplisit di
+   activeOrder/tryTotal agar tidak tertukar dengan baris `pending` sembarangan.
+   → TASK terpisah (di luar scope penghapusan P4.1).
+
+Catatan deviasi acceptance #4 (`git diff --stat`):
+- SOURCE diff = tepat 3 file (`conversation.service.ts`, `order.service.ts`,
+  `golden-dataset.test.ts`) — scope kode terpenuhi.
+- `dist/` (8 file) REBUILD & DI-COMMIT: pm2 menjalankan `dist/index.js`
+  (ecosystem.config.js:6) dan deploy produksi bergantukan `dist/` yang ter-commit
+  tanpa build otomatis (RAILS §1.158). Membiarkan `dist` stale =
+  `extractAndSaveOrder` tetap ter-compile → bug kembali setelah redeploy.
+  Rebuild justru memperbaiki "dist/ tertinggal" (pola sama seperti pembersihan
+  orphan dist di commit 5f502d1).
+- `logs/*.log` tidak di-commit (RAILS §1.160, risiko data WA customer).
+- `p4-verify.ts` (temp harness) dihapus sebelum commit.

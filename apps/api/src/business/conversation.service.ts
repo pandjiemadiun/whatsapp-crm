@@ -765,9 +765,6 @@ export class ConversationService {
     await conversationContextService.appendMessage(conversationId, result.message);
     await conversationContextService.refreshSession(conversationId);
     
-    // Non-blocking order extraction — fire and forget, errors caught silently
-    void orderService.extractAndSaveOrder(conversationId, customerId, storeId, normalizedMsg).catch(() => {});
-    
     // Done-ordering signal → finalize draft order to waiting_address
     if (orderService.detectDoneOrdering(normalizedMsg)) {
       await orderService.finalizeDraftOrder(conversationId);

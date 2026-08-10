@@ -12,7 +12,6 @@
  *
  * Mocks:
  *   - groqAdapter.generate → canned JSON (I8: max 1 LLM per turn)
- *   - orderService.extractAndSaveOrder → no-op (prevents real LLM in order extraction)
  *   - orderService.detectDoneOrdering → false (prevents finalizeDraftOrder side-effects)
  *   - adapters.logger.info → captures 'Pipeline audit' entries
  */

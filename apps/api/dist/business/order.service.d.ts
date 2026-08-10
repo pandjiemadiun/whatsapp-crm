@@ -1,14 +1,5 @@
 import type { OrderWithItems, OrderItemInput, ConfirmedItem } from '../domain/types.js';
-export interface ParsedOrder {
-    intent: 'buy' | 'inquiry';
-    items: Array<{
-        product: string;
-        quantity: number;
-    }>;
-    destination: string;
-}
 export declare class OrderService {
-    extractAndSaveOrder(conversationId: string, customerId: string, storeId: string, message: string): Promise<ParsedOrder | null>;
     private static readonly DONE_ORDERING_KEYWORDS;
     /**
      * Deteksi sinyal "selesai pesan".
