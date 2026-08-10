@@ -11,7 +11,7 @@ import { shouldAnswerSingleProduct } from '../services/chat/product-match.js';
 // dari harga vs total/keranjang, dan metode bayar vs pertanyaan harga).
 // TASK B4.1 — pure order-status intent classification (cegah "sampai mana <produk>"
 // disalahartikan sebagai status order).
-import { isTotalTrigger, isTotalIntent, isPaymentIntent, isOrderStatusIntent, ORDER_STATUS_KEYWORDS } from '../services/chat/tier-match.js';
+import { isTotalTrigger, isTotalIntent, isPaymentIntent, isOrderStatusIntent, ORDER_STATUS_KEYWORDS, isSopRetourIntent, SOP_RETUR_KEYWORDS } from '../services/chat/tier-match.js';
 // In-memory cache for store profiles (TTL: 10 minutes)
 const storeProfileCache = new Map();
 const STORE_PROFILE_TTL_MS = 10 * 60 * 1000;
@@ -632,7 +632,9 @@ export class FallbackService {
         // Map keywords to SOP categories — first wins
         const categoryMap = [
             [['komplain', 'keluhan', 'kecewa'], 'komplain'],
-            [['retur', 'kembalikan barang', 'tukar barang', 'barang rusak', 'rusak', 'pengembalian', 'refund'], 'retur'],
+            // TASK B4.2: 'ganti' termasuk keyword retur (lemah) — ditolak oleh
+            // isSopRetourIntent bila bukan sinyal retur kuat atau pola "ganti X ke Y".
+            [SOP_RETUR_KEYWORDS, 'retur'],
             [['garansi', 'warranty'], 'garansi'],
             [['stok habis', 'kosong', 'ready ga', 'ready kapan'], 'stok_habis'],
             [['cara order', 'cara pesan', 'gimana belinya'], 'order'],
@@ -648,6 +650,15 @@ export class FallbackService {
         if (!category)
             return null;
         try {
+            // TASK B4.2 — gate khusus kategori 'retur': 'ganti' sendirian bukan
+            // sinyal retur kuat. Butuh kata eksplisit ('rusak', 'refund', dsb.)
+            // atau pola "ganti X ke Y" dengan dua nama produk katalog → false
+            // (itu order-modification, bukan retur). Lihat tier-match.ts.
+            if (category === 'retur') {
+                const catalogNames = (await productService.listActiveProducts(context.storeId)).map((p) => p.name.toLowerCase());
+                if (!isSopRetourIntent(lower, catalogNames))
+                    return null;
+            }
             const sop = await prisma.sop.findUnique({
                 where: { storeId_category: { storeId: context.storeId, category } },
                 select: { content: true },

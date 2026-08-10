@@ -66,4 +66,20 @@ export declare const ORDER_STATUS_KEYWORDS: readonly string[];
  * @param catalogNames  nama produk toko (lowercase)
  */
 export declare function isOrderStatusIntent(lower: string, catalogNames: readonly string[]): boolean;
+/** Kata kunci kategori 'retur' — termasuk 'ganti' (sinyal lemah). */
+export declare const SOP_RETUR_KEYWORDS: readonly string[];
+/**
+ * TASK B4.2 — Gate cerdas untuk kategori SOP 'retur' di trySop.
+ *
+ * Aturan:
+ * - Kata retur non-'ganti' (rusak, refund, retur, dll.) → true (trigger normal).
+ * - 'ganti' + kata eksplisit ('rusak', 'refund', 'kecewa', 'komplain', dsb.) → true.
+ * - Pola "ganti X ke Y" di mana X & Y keduanya nama produk katalog → false
+ *   (itu order-modification, bukan retur).
+ * - 'ganti' sendirian / 'ganti' dengan <1 produk → false (bukan sinyal kuat).
+ *
+ * @param lower         query yang sudah trim().toLowerCase()
+ * @param catalogNames  nama produk toko (lowercase)
+ */
+export declare function isSopRetourIntent(lower: string, catalogNames: readonly string[]): boolean;
 //# sourceMappingURL=tier-match.d.ts.map
