@@ -111,8 +111,12 @@ bisa saja sudah ada sesi lain sesudah file ini terakhir ditulis.
 - [ ] **P2 — Truth boundary** (NEXT, belum mulai): executor menolak
       harga yang tidak sama dengan DB (bukan cuma "ambil dari catalog
       jika sempat"). Terkait I13 (non-negotiable, lihat §2).
-- [ ] **P3 — Context boundary**: WorkspaceV2 dan legacy
+- [x] **P3 — Context boundary**: WorkspaceV2 dan legacy
       ExtractedEntities dipisah bersih, tidak saling timpa diam-diam.
+      - [x] P3.1 — persist WorkspaceV2 ke kolom baru `workspace_v2` (T1). Commit `c164729`.
+      - [x] P3.2 — migrasi legacy `extractedEntities` → `workspace_v2` pada v1→v2 switch (T3). Commit `3780453`.
+      - [x] P3.3 — satukan shape kolom `extractedEntities` → OBJECT (T2). Commit `eb74929` (`3780453`), laporan `laporan-taskP3.3.md`.
+      - [x] P3.4 — atomic read-modify-write via optimistic lock `updatedAt` (T4). Commit `099967a`, laporan `laporan-taskP3.4.md`.
 - [ ] **P4 — Remove second brain**: `extractAndSaveOrder()` berhenti
       jadi interpreter kedua untuk pesan yang sudah diproses V2.
 - [ ] **P5 — Response naturalness**: composer-v2 dibedah untuk lebih
