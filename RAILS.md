@@ -558,3 +558,44 @@ laporan gabungan (tabel scope B4.4 sempat menyebut tier-match.test.ts
 ikut berubah, padahal laporan asli B4.4 dan angka test count
 membuktikan tidak — dicatat sebagai catatan minor, tidak mengubah
 verdict TASK B4 selesai).
+
+### 10 Agu 2026 — P3 (Context boundary) selesai: T1-T4 tertutup, T5 tetap RENDAH belum digarap
+Konteks: Audit read-only laporan-taskP3-audit.md konfirmasi klaim lama
+(RAILS §2): updateExtractedEntities jalur v2 NO-OP (WorkspaceV2 object
+dikirim ke fn yang ekspek array, `.length` undefined -> guard selalu true).
+Ditemukan juga T2 (TINGGI, kolom extractedEntities campur ARRAY/OBJECT
+tergantung penulis terakhir -> data hilang), T3 (SEDANG, v2 buta state v1
+lama), T4 (SEDANG, race condition read-modify-write tanpa lock).
+Keputusan: T1 fix pakai kolom baru `workspace_v2` (bukan reuse
+extractedEntities) - alasan: reuse kolom yang sama cuma nambah lapisan
+campuran baru, bukan menutup akar masalah (persis pola yang bikin T2
+muncul). Dipecah 4 sub-task, commit per unit sesuai §1.9:
+- P3.1 (c164729): migration kolom workspace_v2 + v2 persist ke sana,
+  bukan lewat updateExtractedEntities. Bukti before/after: pending status
+  "active" tetap "active" (NO-OP lama) vs jadi "resolved" & persisted
+  (kode baru), llmCalls:0.
+- P3.2 (3780453): loadWorkspace migrasi sekali dari legacy
+  extractedEntities -> workspace_v2 saat v1->v2 switch (mapLegacyEntitiesToWorkspace).
+  Bukti: tanpa mapper llmCalls:1 (minta ulang), dengan mapper llmCalls:0
+  (pending lama langsung resolve).
+- P3.3 (eb74929+105fe52): shape kanonik extractedEntities disatukan jadi
+  OBJECT (parseEntities/mergeEntities array dihapus). Re-audit pasca P3.1/
+  P3.2 konfirmasi tidak ada lagi penulis v2 ke kolom ini. Bukti round-trip:
+  trackedEntities + pendingClarification sama-sama preserved setelah fix
+  (sebelumnya saling timpa).
+- P3.4 (099967a): optimistic locking (atomicCas, updatedAt compare +
+  updateMany count-check, retry max 5x) pada semua RMW extractedEntities/
+  workspace_v2 - dipilih ketimbang prisma.$transaction karena butuh filter
+  non-unique (updatedAt) yang $transaction+update tidak dukung. Race test
+  10 iterasi: BEFORE bothSaved=0/cartLost=10, AFTER bothSaved=10/cartLost=0.
+Verifikasi gabungan: npm run test:chat baseline tetap 2 failed suites/
+1 failed test (tidak nambah) di P3.1-P3.4. tsc 0 error, build sukses,
+pm2 restart online tiap sub-task. dist di-rebuild ulang & commit terpisah
+(fd08ba3) setelah ketahuan tertinggal - pola sama seperti insiden B3/C1,
+kebiasaan cek git status menyeluruh terbukti perlu lagi.
+Sisa: T5 (RENDAH, fallback tier tryDiscussedItems overlap nulis kolom
+sama) BELUM digarap, tidak masuk P3.4 (di luar scope RMW utama). appendMessage
+(kolom lastMessages, race serupa T4 tapi beda kolom) BELUM digarap, item
+antrian terpisah, dicatat robot di laporan P3.4 §6.
+Siapa yang setuju: owner (Panji), Claude - berdasarkan commit log +
+race test + test suite mentah, cross-check live.
