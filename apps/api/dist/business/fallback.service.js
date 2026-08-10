@@ -9,7 +9,9 @@ import { isDeadEnd } from '../services/message-queue.service.js';
 import { shouldAnswerSingleProduct } from '../services/chat/product-match.js';
 // TASK B3 — pure total/payment intent classification (disambiguate "bayar <produk>"
 // dari harga vs total/keranjang, dan metode bayar vs pertanyaan harga).
-import { isTotalTrigger, isTotalIntent, isPaymentIntent } from '../services/chat/tier-match.js';
+// TASK B4.1 — pure order-status intent classification (cegah "sampai mana <produk>"
+// disalahartikan sebagai status order).
+import { isTotalTrigger, isTotalIntent, isPaymentIntent, isOrderStatusIntent, ORDER_STATUS_KEYWORDS } from '../services/chat/tier-match.js';
 // In-memory cache for store profiles (TTL: 10 minutes)
 const storeProfileCache = new Map();
 const STORE_PROFILE_TTL_MS = 10 * 60 * 1000;
@@ -472,15 +474,17 @@ export class FallbackService {
     }
     async tryOrderStatus(context, query) {
         const lower = query.trim().toLowerCase();
-        const statusKeywords = [
-            'sudah dikirim', 'kapan dikirim', 'status pesanan', 'status order',
-            'sampai mana', 'udah sampai', 'udah sampe', 'pesanan saya',
-            'order saya', 'mana pesanan',
-        ];
-        const matched = statusKeywords.some((kw) => lower.includes(kw));
+        // TASK B4.1 — gate keyword cepat pakai ORDER_STATUS_KEYWORDS (di tier-match.ts).
+        // 'sampai mana' dkk. tidak boleh merespon pertanyaan stok/ketersediaan
+        // produk (mis. "sampai mana kangkung tersedia?"). Logika penuh ada di
+        // isOrderStatusIntent(lower, catalogNames).
+        const matched = ORDER_STATUS_KEYWORDS.some((kw) => lower.includes(kw));
         if (!matched)
             return null;
         try {
+            const catalogNames = (await productService.listActiveProducts(context.storeId)).map((p) => p.name.toLowerCase());
+            if (!isOrderStatusIntent(lower, catalogNames))
+                return null;
             const lastOrder = await prisma.order.findFirst({
                 where: {
                     conversationId: context.conversationId,

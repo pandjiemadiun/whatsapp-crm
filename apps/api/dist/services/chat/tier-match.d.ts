@@ -46,4 +46,24 @@ export declare function isTotalIntent(lower: string, catalogNames: readonly stri
  *                      (mis. "kangkung cod berapa?" → tetap dianggap tanya harga).
  */
 export declare function isPaymentIntent(lower: string, catalogNames: readonly string[]): boolean;
+export declare const ORDER_STATUS_KEYWORDS: readonly string[];
+/**
+ * tryOrderStatus boleh menjawab HANYA bila query benar-benar soal
+ * status / track order, BUKAN pertanyaan ketersediaan/stok produk
+ * yang sekadar mengandung keyword seperti "sampai mana".
+ *
+ * Aturan:
+ * - true HANYA bila ada status keyword DAN TIDAK ada nama produk katalog,
+ *   kecuali ada sinyal order eksplisit ('pesanan saya'/'order saya'/
+ *   'status pesanan'/'status order') yang boleh trigger meski ada nama
+ *   produk karena jelas soal order bukan stok.
+ *
+ * Contoh: "sampai mana kangkung tersedia?" → false (stok, bukan order).
+ *         "sudah dikirim pesanan saya?"  → true  (track order, regresi).
+ *         "pesanan saya sampai mana?"     → true  (track order eksplisit).
+ *
+ * @param lower         query yang sudah trim().toLowerCase()
+ * @param catalogNames  nama produk toko (lowercase)
+ */
+export declare function isOrderStatusIntent(lower: string, catalogNames: readonly string[]): boolean;
 //# sourceMappingURL=tier-match.d.ts.map
