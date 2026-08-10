@@ -206,4 +206,65 @@ export function isOrderStatusIntent(lower, catalogNames) {
         return false;
     return true;
 }
+// ── trySop: aksenat klasifikasi kategori 'retur' ───────────────────────────
+// TASK B4.2: 'ganti' termasuk keyword retur (sinyal lemah). 'ganti' SENDIRIAN
+// bukan sinyal retur kuat — butuh kata eksplisit atau pola "ganti X ke Y"
+// dengan dua nama produk katalog (itu order-modification, bukan retur).
+//
+// Bug (laporan-taskB2.md): "ganti kangkung ke wortel" (maksud: tukar item di
+// order) salah jawab SOP retur ("Barang bisa diretur dalam 24 jam...").
+/** Kata kunci kategori 'retur' — termasuk 'ganti' (sinyal lemah). */
+export const SOP_RETUR_KEYWORDS = [
+    'retur',
+    'kembalikan barang',
+    'tukar barang',
+    'barang rusak',
+    'rusak',
+    'pengembalian',
+    'refund',
+    'ganti',
+];
+// Kata eksplisit (selain 'ganti') yang memperkuat sinyal retur → trigger normal.
+// 'kecewa' dan 'komplain' juga termasuk karena mengindikasikan keluhan nyata
+// yang berpotensi menggabungkan retur.
+const SOP_RETUR_EXPLICIT_SIGNALS = [
+    'rusak',
+    'barang rusak',
+    'kembalikan barang',
+    'tukar barang',
+    'pengembalian',
+    'refund',
+    'retur',
+    'kecewa',
+    'komplain',
+];
+/**
+ * TASK B4.2 — Gate cerdas untuk kategori SOP 'retur' di trySop.
+ *
+ * Aturan:
+ * - Kata retur non-'ganti' (rusak, refund, retur, dll.) → true (trigger normal).
+ * - 'ganti' + kata eksplisit ('rusak', 'refund', 'kecewa', 'komplain', dsb.) → true.
+ * - Pola "ganti X ke Y" di mana X & Y keduanya nama produk katalog → false
+ *   (itu order-modification, bukan retur).
+ * - 'ganti' sendirian / 'ganti' dengan <1 produk → false (bukan sinyal kuat).
+ *
+ * @param lower         query yang sudah trim().toLowerCase()
+ * @param catalogNames  nama produk toko (lowercase)
+ */
+export function isSopRetourIntent(lower, catalogNames) {
+    // Strong retur word (bukan 'ganti') → trigger normal
+    if (SOP_RETUR_EXPLICIT_SIGNALS.some((kw) => lower.includes(kw)))
+        return true;
+    // 'ganti' tidak ada → tidak ada intent retur dari kata 'ganti'
+    if (!lower.includes('ganti'))
+        return false;
+    // 'ganti' ada tapi tidak ada kata eksplisit:
+    // Pola "ganti X ke Y" di mana X & Y keduanya nama produk katalog →
+    // ini order-modification (tukar item), BUKAN retur → false.
+    const mentionedProducts = catalogNames.filter((p) => p.trim().length > 1 && lower.includes(p.trim()));
+    if (mentionedProducts.length >= 2)
+        return false;
+    // 'ganti' sendirian / 'ganti' dengan <1 produk → bukan sinyal retur kuat
+    return false;
+}
 //# sourceMappingURL=tier-match.js.map

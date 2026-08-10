@@ -5,7 +5,7 @@
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { isTotalTrigger, isTotalIntent, isPaymentIntent, isOrderStatusIntent, TOTAL_TRIGGERS, PAYMENT_EXPLICIT_METHODS, } from '../tier-match.js';
+import { isTotalTrigger, isTotalIntent, isPaymentIntent, isOrderStatusIntent, isSopRetourIntent, TOTAL_TRIGGERS, PAYMENT_EXPLICIT_METHODS, SOP_RETUR_KEYWORDS, } from '../tier-match.js';
 // Canary store-f7140b5c product names (lowercase) — used as catalogNames.
 const CATALOG = ['ayam', 'es teh manis', 'es jeruk manis', 'brambang', 'kentang', 'wortel', 'kangkung'];
 const noDB = []; // empty catalog (some cases have no product match)
@@ -106,6 +106,49 @@ describe('TASK B4.1 — tryOrderStatus intent gate (stok vs status order overlap
     it('(3) "pesanan saya sampai mana?" (ada kata pesanan saya + tidak ada nama produk) → true', () => {
         const q = 'pesanan saya sampai mana?';
         assert.equal(isOrderStatusIntent(q, CATALOG), true, 'explicit order signal → true even without product name');
+    });
+});
+describe('TASK B4.2 — isSopRetourIntent gate (ganti X ke Y vs retur)', () => {
+    it('(1) "barang saya rusak, mau retur" → true (regresi)', () => {
+        const q = 'barang saya rusak, mau retu';
+        assert.equal(isSopRetourIntent(q, CATALOG), true, '"rusak" is an explicit retur signal');
+    });
+    it('(2) "ganti kangkung ke wortel" (dua nama produk katalog) → false (bug lama)', () => {
+        const q = 'ganti kangkung ke wortel';
+        assert.equal(isSopRetourIntent(q, CATALOG), false, 'ganti X ke Y with two catalog products is order-modification, not retur');
+    });
+    it('(2-b) "ganti wortel ke kangkung" (urutan terbalik, tetap dua produk) → false', () => {
+        const q = 'ganti wortel ke kangkung';
+        assert.equal(isSopRetourIntent(q, CATALOG), false, 'order-independent: two catalog products → false');
+    });
+    it('(3) "ganti" saja tanpa konteks lain → false', () => {
+        const q = 'ganti';
+        assert.equal(isSopRetourIntent(q, CATALOG), false, '"ganti" alone is not a strong retur signal');
+    });
+    it('(3-b) "ganti kangkung" (ganti + satu produk, tidak ada kata eksplisit) → false', () => {
+        const q = 'ganti kangkung';
+        assert.equal(isSopRetourIntent(q, CATALOG), false, 'one product + ganti, no explicit word → not retur');
+    });
+    it('(4) "mau komplain, kecewa sama pelayanan" → true (kategori komplain, pastikan tidak ikut berubah)', () => {
+        const q = 'mau komplain, kecewa sama pelayanan';
+        assert.equal(isSopRetourIntent(q, CATALOG), true, 'kecewa/komplain are explicit complaint signals');
+    });
+    it('(regresi) "rusak" saja → true', () => {
+        assert.equal(isSopRetourIntent('barang rusak banget', CATALOG), true);
+    });
+    it('(regresi) "refund" saja → true', () => {
+        assert.equal(isSopRetourIntent('mau refund', CATALOG), true);
+    });
+    it('(regresi) "barang rusak mau retur" → true (dua kata retur kuat)', () => {
+        assert.equal(isSopRetourIntent('barang rusak mau retur', CATALOG), true);
+    });
+    it('(regresi) "pengembalian barang rusak" → true', () => {
+        assert.equal(isSopRetourIntent('pengembalian barang rusak', CATALOG), true);
+    });
+    it('sanity: SOP_RETUR_KEYWORDS termasuk ganti dan semua kata eksplisit', () => {
+        assert.equal(SOP_RETUR_KEYWORDS.includes('ganti'), true);
+        assert.equal(SOP_RETUR_KEYWORDS.includes('rusak'), true);
+        assert.equal(SOP_RETUR_KEYWORDS.includes('refund'), true);
     });
 });
 //# sourceMappingURL=tier-match.test.js.map
