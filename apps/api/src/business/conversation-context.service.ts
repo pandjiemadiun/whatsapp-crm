@@ -42,7 +42,7 @@ export class ConversationContextService {
         create: {
           conversationId: input.conversationId,
           lastMessages: [],
-          extractedEntities: [],
+          extractedEntities: {},
           sessionKey,
           sessionExpireAt,
         },
@@ -96,10 +96,16 @@ export class ConversationContextService {
 
   /**
    * Merge entitas baru ke extractedEntities yang sudah ada.
-   * Dedup berdasarkan type:value, entitas dengan confidence lebih tinggi menang.
+   * Shape kanonik P3.3: kolom `extractedEntities` SELALU berupa OBJECT
+   * (ExtractedEntities), bukan array. Entitas berupa token mentah
+   * (ExtractedEntity[], mis. product/order/quantity/destination dari
+   * order.service) digabungkan ke dalam field `trackedEntities` object
+   * — tidak lagi menulis array ke kolom yang sama dengan penulis object
+   * lain (modifyCart/setPendingClarification/fallback). Dedup by type:value,
+   * confidence lebih tinggi menang (semantik lama dipertahankan).
    */
   async updateExtractedEntities(conversationId: string, entities: ExtractedEntity[]): Promise<void> {
-    if (!entities.length) return;
+    if (!entities?.length) return;
     try {
       const raw = await prisma.conversationContext.findUnique({
         where: { conversationId },
@@ -109,14 +115,14 @@ export class ConversationContextService {
         return;
       }
 
-      const existing = this.parseEntities(raw.extractedEntities);
-      const merged = this.mergeEntities(existing, entities);
+      const existing = this.parseExtractedEntities(raw.extractedEntities);
+      const merged = this.mergeTrackedEntities(existing, entities);
 
       await prisma.conversationContext.update({
         where: { conversationId },
         data: { extractedEntities: merged as unknown as Prisma.InputJsonValue },
       });
-      adapters.logger.debug('Extracted entities updated', { conversationId, count: merged.length });
+      adapters.logger.debug('Extracted entities updated', { conversationId, tracked: merged.trackedEntities?.length ?? 0 });
     } catch (error) {
       adapters.logger.error('Failed to update extracted entities', error as Error, { conversationId });
     }
@@ -235,8 +241,12 @@ export class ConversationContextService {
 
   /**
    * Parse kolom JSON extractedEntities sebagai objek ExtractedEntities.
+   * Toleransi untuk legacy ARRAY (T2): bila kolom berupa array, kembalikan
+   * default kosong (array tidak lagi ditulis — P3.3 kanonik OBJECT).
+   * Membawa `trackedEntities` + `previousMutation` agar penulis object lain
+   * (modifyCart/setPendingClarification/fallback) tidak menimppadnya.
    */
-parseExtractedEntities(raw: unknown): ExtractedEntities {
+  parseExtractedEntities(raw: unknown): ExtractedEntities {
     if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
       const parsed = raw as Record<string, unknown>;
       return {
@@ -246,13 +256,19 @@ parseExtractedEntities(raw: unknown): ExtractedEntities {
         recipientName: typeof parsed.recipientName === 'string' ? parsed.recipientName : null,
         shippingAddress: typeof parsed.shippingAddress === 'string' ? parsed.shippingAddress : null,
         pendingClarification: (parsed.pendingClarification as PendingClarification) || null,
+        previousMutation: (parsed.previousMutation as { cartSnapshot: ConfirmedItem[]; message: string } | null) ?? null,
+        trackedEntities: Array.isArray(parsed.trackedEntities) ? (parsed.trackedEntities as ExtractedEntity[]) : [],
       };
     }
     return {
       discussedItems: [],
       confirmedItems: [],
       lastAmbiguousPrompt: null,
+      recipientName: null,
+      shippingAddress: null,
       pendingClarification: null,
+      previousMutation: null,
+      trackedEntities: [],
     };
   }
 
@@ -467,7 +483,7 @@ parseExtractedEntities(raw: unknown): ExtractedEntities {
       id: raw.id,
       conversationId: raw.conversationId,
       lastMessages: this.parseMessages(raw.lastMessages),
-      extractedEntities: this.parseEntities(raw.extractedEntities),
+      extractedEntities: this.parseExtractedEntities(raw.extractedEntities),
       userIntent: raw.userIntent ?? null,
       sessionKey: raw.sessionKey,
       sessionExpireAt: raw.sessionExpireAt,
@@ -482,20 +498,15 @@ parseExtractedEntities(raw: unknown): ExtractedEntities {
     return [];
   }
 
-  /** Parse kolom JSON extractedEntities dengan toleransi error */
-  private parseEntities(raw: unknown): ExtractedEntity[] {
-    if (Array.isArray(raw)) return raw as ExtractedEntity[];
-    return [];
-  }
-
   /**
-   * Merge entitas lama + baru:
-   * - Dedup berdasarkan type:value
-   * - Entitas dengan confidence lebih tinggi menang
+   * Merge token entitas mentah (ExtractedEntity[]) ke dalam field
+   * `trackedEntities` object ExtractedEntities — semantik dedup per type:value
+   * & confidence-wins dipertahankan, tapi ditulis sebagai OBJECT (kanonik P3.3)
+   * sehingga tidak menimpa/kosongkan field lain (confirmedItems/pendingClarification).
    */
-  private mergeEntities(existing: ExtractedEntity[], incoming: ExtractedEntity[]): ExtractedEntity[] {
+  private mergeTrackedEntities(existing: ExtractedEntities, incoming: ExtractedEntity[]): ExtractedEntities {
     const map = new Map<string, ExtractedEntity>();
-    for (const e of existing) map.set(`${e.type}:${e.value}`, e);
+    for (const e of existing.trackedEntities ?? []) map.set(`${e.type}:${e.value}`, e);
     for (const e of incoming) {
       const key = `${e.type}:${e.value}`;
       const current = map.get(key);
@@ -503,7 +514,7 @@ parseExtractedEntities(raw: unknown): ExtractedEntities {
         map.set(key, e);
       }
     }
-    return Array.from(map.values());
+    return { ...existing, trackedEntities: Array.from(map.values()) };
   }
 }
 

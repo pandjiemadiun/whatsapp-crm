@@ -4,6 +4,7 @@ import { knowledgeService } from './knowledge.service.js';
 import { productService } from './product.service.js';
 import { prisma } from '../infrastructure/prisma.js';
 import { Prisma } from '@prisma/client';
+import { conversationContextService } from './conversation-context.service.js';
 
 import {
   ResponseSource,
@@ -13,7 +14,6 @@ import {
   ConversationMessage,
   DiscussedItem,
   ConfirmedItem,
-  ExtractedEntities,
   PipelineContext,
 } from '../domain/types.js';
 import { isDeadEnd } from '../services/message-queue.service.js';
@@ -382,7 +382,7 @@ async getResponse(
           where: { conversationId: context.conversationId },
           select: { extractedEntities: true },
         });
-        const entities = this.parseEntities(ctxRow?.extractedEntities);
+        const entities = conversationContextService.parseExtractedEntities(ctxRow?.extractedEntities);
         const cartTokens = entities.confirmedItems.map(c => (c.product || '').toLowerCase()).filter(Boolean);
         if (askedWords.some(w => cartTokens.some(ct => ct.includes(w)))) return null;
       } catch {}
@@ -640,7 +640,7 @@ async getResponse(
         where: { conversationId: context.conversationId },
         select: { extractedEntities: true },
       });
-      const entities = this.parseEntities(ctxRow?.extractedEntities);
+      const entities = conversationContextService.parseExtractedEntities(ctxRow?.extractedEntities);
       const cartItems = entities.confirmedItems || [];
 
       let items: ConfirmedItem[] = [...cartItems];
@@ -896,20 +896,7 @@ async getResponse(
         select: { extractedEntities: true, sessionKey: true, sessionExpireAt: true },
       });
 
-let existing: ExtractedEntities = {
-        discussedItems: [],
-        confirmedItems: [],
-        lastAmbiguousPrompt: null,
-      };
-      const raw = current?.extractedEntities;
-      if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
-        const parsed = raw as Record<string, unknown>;
-        existing = {
-          discussedItems: Array.isArray(parsed.discussedItems) ? (parsed.discussedItems as DiscussedItem[]) : [],
-          confirmedItems: Array.isArray(parsed.confirmedItems) ? (parsed.confirmedItems as ConfirmedItem[]) : [],
-          lastAmbiguousPrompt: typeof parsed.lastAmbiguousPrompt === 'string' ? parsed.lastAmbiguousPrompt : null,
-        };
-      }
+      const existing = conversationContextService.parseExtractedEntities(current?.extractedEntities);
 
       // Fix BUG-7: Dedup new items against existing discussedItems by product name
       const existingProductNames = new Set(
@@ -936,8 +923,8 @@ let existing: ExtractedEntities = {
         where: { conversationId },
         update: {
           extractedEntities: {
+            ...existing,
             discussedItems: mergedDiscussedItems,
-            confirmedItems: existing.confirmedItems,
             lastAmbiguousPrompt: newLastAmbiguous,
           } as unknown as Prisma.InputJsonValue,
         },
@@ -967,51 +954,6 @@ let existing: ExtractedEntities = {
     }
   }
   // ── Helpers ──
-
-  private parseEntities(raw: unknown): ExtractedEntities {
-    if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
-      const parsed = raw as Record<string, unknown>;
-      return {
-        discussedItems: Array.isArray(parsed.discussedItems) ? (parsed.discussedItems as DiscussedItem[]) : [],
-        confirmedItems: Array.isArray(parsed.confirmedItems) ? (parsed.confirmedItems as ConfirmedItem[]) : [],
-        lastAmbiguousPrompt: typeof parsed.lastAmbiguousPrompt === 'string' ? parsed.lastAmbiguousPrompt : null,
-        recipientName: typeof parsed.recipientName === 'string' ? parsed.recipientName : null,
-        shippingAddress: typeof parsed.shippingAddress === 'string' ? parsed.shippingAddress : null,
-      };
-    }
-    return { discussedItems: [], confirmedItems: [], lastAmbiguousPrompt: null };
-  }
-
-  private async upsertExtractedEntities(
-    conversationId: string,
-    entities: ExtractedEntities
-  ): Promise<void> {
-    try {
-      const current = await prisma.conversationContext.findUnique({
-        where: { conversationId },
-        select: { sessionKey: true, sessionExpireAt: true },
-      });
-
-      await prisma.conversationContext.upsert({
-        where: { conversationId },
-        update: { extractedEntities: entities as unknown as Prisma.InputJsonValue },
-        create: {
-          conversationId,
-          lastMessages: '[]',
-          sessionKey: current?.sessionKey ?? crypto.randomUUID(),
-          sessionExpireAt: current?.sessionExpireAt ?? new Date(Date.now() + 3_600_000),
-          extractedEntities: entities as unknown as Prisma.InputJsonValue,
-        },
-      });
-
-      adapters.logger.debug('Extracted entities updated', { conversationId });
-    } catch (err) {
-      adapters.logger.warn('Failed to upsert extracted entities', {
-        conversationId,
-        error: (err as Error).message,
-      });
-    }
-  }
 
   /**
    * Deteksi intent koreksi: message mengandng kata "bukan"/"salah"
