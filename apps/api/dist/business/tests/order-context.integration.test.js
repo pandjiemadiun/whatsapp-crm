@@ -66,7 +66,16 @@ test('1. Initialize conversation context', async () => {
     assert.equal(ctx.conversationId, conversationId);
     assert.match(ctx.sessionKey, /^[a-f0-9]{64}$/); // SHA256 hex
     assert.ok(ctx.sessionExpireAt > new Date());
-    assert.deepEqual(ctx.extractedEntities, []);
+    assert.deepEqual(ctx.extractedEntities, {
+        discussedItems: [],
+        confirmedItems: [],
+        lastAmbiguousPrompt: null,
+        recipientName: null,
+        shippingAddress: null,
+        pendingClarification: null,
+        previousMutation: null,
+        trackedEntities: [],
+    });
     assert.deepEqual(ctx.lastMessages, []);
 });
 test('2. Append messages to context (trim to 10)', async () => {
@@ -98,8 +107,8 @@ test('3. Track extracted entities (merge + dedup, confidence wins)', async () =>
     ]);
     const ctx = await conversationContextService.getContext(conversationId);
     assert.ok(ctx);
-    assert.equal(ctx.extractedEntities.length, 3); // dedup product
-    const teh = ctx.extractedEntities.find((e) => e.type === 'product' && e.value === 'Es Teh');
+    assert.equal(ctx.extractedEntities.trackedEntities.length, 3); // dedup product
+    const teh = ctx.extractedEntities.trackedEntities.find((e) => e.type === 'product' && e.value === 'Es Teh');
     assert.equal(teh?.confidence, 0.95); // confidence tertinggi tersimpan
 });
 test('4. Update user intent', async () => {
@@ -144,8 +153,28 @@ test('7. Create order with items (validates stock)', async () => {
     // Context entity harus ter-update
     const ctx = await conversationContextService.getContext(conversationId);
     assert.ok(ctx);
-    assert.ok(ctx.extractedEntities.some((e) => e.type === 'order' && e.value === order.id));
-    assert.ok(ctx.extractedEntities.some((e) => e.type === 'product' && e.value === 'Es Teh'));
+    assert.ok(ctx.extractedEntities.trackedEntities.some((e) => e.type === 'order' && e.value === order.id));
+    assert.ok(ctx.extractedEntities.trackedEntities.some((e) => e.type === 'product' && e.value === 'Es Teh'));
+});
+test('T2. Shape consistency: updateExtractedEntities (object) + setPendingClarification (object) → parseExtractedEntities readback preserves both', async () => {
+    await conversationContextService.initializeContext({ storeId, customerId: `${TEST_PREFIX}-cust`, conversationId });
+    // Penulis 1: updateExtractedEntities → trackedEntities (object shape)
+    await conversationContextService.updateExtractedEntities(conversationId, [
+        { type: 'product', value: 'Es Teh', confidence: 0.95 },
+        { type: 'quantity', value: '2', confidence: 0.9 },
+    ]);
+    // Penulis 2: setPendingClarification → pendingClarification (object shape)
+    await conversationContextService.setPendingClarification(conversationId, {
+        question: 'Berapa banyak?',
+        options: [{ id: '2', label: '2' }, { id: '3', label: '3' }],
+        expected_type: 'choice',
+    });
+    // Baca lewat parseExtractedEntities (object) — data TIDAK boleh hilang
+    const ctx = await conversationContextService.getContext(conversationId);
+    assert.ok(ctx);
+    assert.ok(ctx.extractedEntities.trackedEntities.length >= 2); // token tidak hilang
+    assert.ok(ctx.extractedEntities.pendingClarification); // pendingClarification tidak hilang
+    assert.equal(ctx.extractedEntities.pendingClarification?.question, 'Berapa banyak?');
 });
 test('8. Reject order when stock insufficient', async () => {
     await assert.rejects(() => orderService.createOrder(storeId, conversationId, `${TEST_PREFIX}-cust`, [

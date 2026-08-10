@@ -21,8 +21,6 @@ export declare class FallbackService {
      * Caps last 10 entries (drop oldest), gunakan upsert untuk race-safe.
      */
     private saveDiscussedItems;
-    private parseEntities;
-    private upsertExtractedEntities;
     /**
      * Deteksi intent koreksi: message mengandng kata "bukan"/"salah"
      * dan menyebut nama produk di confirmedItems. Kembalikan nama produk yang disebut.

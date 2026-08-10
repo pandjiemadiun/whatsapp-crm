@@ -7,6 +7,10 @@ import { ErrorCodes } from '../constants/errorCodes.js';
 const MAX_CONTEXT_MESSAGES = 10;
 /** Durasi sesi default (menit) */
 const DEFAULT_SESSION_MINUTES = 60;
+/** Maksimal percobaan optimistic lock sebelum memberi up (T4 fix P3.4). */
+const ATOMIC_MAX_ATTEMPTS = 5;
+/** Backoff ms per attempt (jitter sederhana). */
+const ATOMIC_BACKOFF_MS = [0, 25, 50, 100, 200];
 export class ConversationContextService {
     /**
      * Inisialisasi (upsert) context percakapan di tabel conversation_context.
@@ -26,7 +30,7 @@ export class ConversationContextService {
                 create: {
                     conversationId: input.conversationId,
                     lastMessages: [],
-                    extractedEntities: [],
+                    extractedEntities: {},
                     sessionKey,
                     sessionExpireAt,
                 },
@@ -78,30 +82,52 @@ export class ConversationContextService {
     }
     /**
      * Merge entitas baru ke extractedEntities yang sudah ada.
-     * Dedup berdasarkan type:value, entitas dengan confidence lebih tinggi menang.
+     * Shape kanonik P3.3: kolom `extractedEntities` SELALU berupa OBJECT
+     * (ExtractedEntities), bukan array. Entitas berupa token mentah
+     * (ExtractedEntity[], mis. product/order/quantity/destination dari
+     * order.service) digabungkan ke dalam field `trackedEntities` object
+     * — tidak lagi menulis array ke kolom yang sama dengan penulis object
+     * lain (modifyCart/setPendingClarification/fallback). Dedup by type:value,
+     * confidence lebih tinggi menang (semantik lama dipertahankan).
+     * Write dilakukan via atomicCas (optimistic lock @updatedAt, T4 fix) — tidak
+     * akan menimpa field lain penulis sekaligus (modifyCart/
+     * setPendingClarification/fallback) sekaligus karena tidak last-write-wins.
      */
     async updateExtractedEntities(conversationId, entities) {
-        if (!entities.length)
+        if (!entities?.length)
             return;
-        try {
-            const raw = await prisma.conversationContext.findUnique({
-                where: { conversationId },
-            });
-            if (!raw) {
-                adapters.logger.debug('Context not found, skipping entity update', { conversationId });
-                return;
-            }
-            const existing = this.parseEntities(raw.extractedEntities);
-            const merged = this.mergeEntities(existing, entities);
-            await prisma.conversationContext.update({
-                where: { conversationId },
+        const persisted = await this.atomicCas(conversationId, 'updateExtractedEntities', async (row) => {
+            const existing = this.parseExtractedEntities(row.extractedEntities);
+            const merged = this.mergeTrackedEntities(existing, entities);
+            const result = await prisma.conversationContext.updateMany({
+                where: { conversationId, updatedAt: row.updatedAt },
                 data: { extractedEntities: merged },
             });
-            adapters.logger.debug('Extracted entities updated', { conversationId, count: merged.length });
+            return { count: result.count, value: merged };
+        });
+        if (persisted) {
+            adapters.logger.debug('Extracted entities updated', { conversationId, tracked: persisted.trackedEntities?.length ?? 0 });
         }
-        catch (error) {
-            adapters.logger.error('Failed to update extracted entities', error, { conversationId });
-        }
+    }
+    /**
+     * Persist WorkspaceV2 (v3.2) ke kolom terpisah `workspace_v2` (JSON nullable).
+     * T1 fix (P3.1): workspace v2 tidak pernah tersimpan sebelumnya — semua "persist"
+     * lewat updateExtractedEntities yang NO-OP karena type mismatch (WorkspaceV2
+     * object tidak punya .length, sehingga guard `if (!entities.length) return`
+     * langsung return). Kolom baru memutuskan v2 dari legacy extractedEntities.
+     *
+     * T4 fix (P3.4): write lewat atomicCas (optimistic lock @updatedAt) sehingga
+     * dua turn v2 yang hampir bersamaan tidak saling menimpa diam-diam.
+     */
+    async updateWorkspaceV2(conversationId, workspace) {
+        await this.atomicCas(conversationId, 'updateWorkspaceV2', async (row) => {
+            const result = await prisma.conversationContext.updateMany({
+                where: { conversationId, updatedAt: row.updatedAt },
+                data: { workspace_v2: workspace },
+            });
+            return { count: result.count, value: null };
+        });
+        adapters.logger.debug('Workspace v2 persisted', { conversationId });
     }
     /**
      * Set intent pengguna pada context.
@@ -159,31 +185,32 @@ export class ConversationContextService {
     }
     /**
      * Update info pengiriman (nama penerima & alamat) di extractedEntities.
+     * Via atomicCas (T4 fix) — tidak menimpa field lain (confirmedItems/
+     * pendingClarification/trackedEntities).
      */
     async updateShippingInfo(conversationId, recipientName, shippingAddress) {
-        try {
-            const raw = await prisma.conversationContext.findUnique({
-                where: { conversationId },
-            });
-            if (!raw)
-                return;
-            const entities = this.parseExtractedEntities(raw.extractedEntities);
+        const updated = await this.atomicCas(conversationId, 'updateShippingInfo', async (row) => {
+            const entities = this.parseExtractedEntities(row.extractedEntities);
             if (recipientName !== undefined && recipientName !== null)
                 entities.recipientName = recipientName;
             if (shippingAddress !== undefined && shippingAddress !== null)
                 entities.shippingAddress = shippingAddress;
-            await prisma.conversationContext.update({
-                where: { conversationId },
+            const result = await prisma.conversationContext.updateMany({
+                where: { conversationId, updatedAt: row.updatedAt },
                 data: { extractedEntities: entities },
             });
+            return { count: result.count, value: result.count > 0 };
+        });
+        if (updated) {
             adapters.logger.debug('Shipping info updated in context', { conversationId, recipientName, shippingAddress });
-        }
-        catch (error) {
-            adapters.logger.error('Failed to update shipping info in context', error, { conversationId });
         }
     }
     /**
      * Parse kolom JSON extractedEntities sebagai objek ExtractedEntities.
+     * Toleransi untuk legacy ARRAY (T2): bila kolom berupa array, kembalikan
+     * default kosong (array tidak lagi ditulis — P3.3 kanonik OBJECT).
+     * Membawa `trackedEntities` + `previousMutation` agar penulis object lain
+     * (modifyCart/setPendingClarification/fallback) tidak menimppadnya.
      */
     parseExtractedEntities(raw) {
         if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
@@ -195,13 +222,19 @@ export class ConversationContextService {
                 recipientName: typeof parsed.recipientName === 'string' ? parsed.recipientName : null,
                 shippingAddress: typeof parsed.shippingAddress === 'string' ? parsed.shippingAddress : null,
                 pendingClarification: parsed.pendingClarification || null,
+                previousMutation: parsed.previousMutation ?? null,
+                trackedEntities: Array.isArray(parsed.trackedEntities) ? parsed.trackedEntities : [],
             };
         }
         return {
             discussedItems: [],
             confirmedItems: [],
             lastAmbiguousPrompt: null,
+            recipientName: null,
+            shippingAddress: null,
             pendingClarification: null,
+            previousMutation: null,
+            trackedEntities: [],
         };
     }
     /**
@@ -228,14 +261,8 @@ export class ConversationContextService {
      * Mengembalikan list confirmedItems SETELAH modifikasi.
      */
     async modifyCart(conversationId, action, opts) {
-        try {
-            const raw = await prisma.conversationContext.findUnique({
-                where: { conversationId },
-                select: { extractedEntities: true },
-            });
-            if (!raw)
-                return [];
-            const entities = this.parseExtractedEntities(raw.extractedEntities);
+        const cart = await this.atomicCas(conversationId, 'modifyCart', async (row) => {
+            const entities = this.parseExtractedEntities(row.extractedEntities);
             let items = entities.confirmedItems ?? [];
             /** Fuzzy match: apakah nama item mengandung kata kunci target */
             const fuzzyMatch = (itemName, target) => {
@@ -280,26 +307,19 @@ export class ConversationContextService {
             }
             // Simpan hasil modifikasi
             entities.confirmedItems = items;
-            await prisma.conversationContext.update({
-                where: { conversationId },
+            adapters.logger.info('Cart modified via modifyCart()', { conversationId, action, itemCount: items.length });
+            const res = await prisma.conversationContext.updateMany({
+                where: { conversationId, updatedAt: row.updatedAt },
                 data: { extractedEntities: entities },
             });
-            adapters.logger.info('Cart modified via modifyCart()', { conversationId, action, itemCount: items.length });
-            return items;
-        }
-        catch (error) {
-            adapters.logger.error('Failed to modify cart', error, { conversationId });
-            return [];
-        }
+            return { count: res.count, value: items };
+        });
+        return cart ?? [];
     }
     /** BAGIAN 2.1 — Set pending clarification state, WAJIB sebelum kirim question */
     async setPendingClarification(conversationId, clarification) {
-        try {
-            const raw = await prisma.conversationContext.findUnique({
-                where: { conversationId },
-                select: { extractedEntities: true },
-            });
-            const entities = this.parseExtractedEntities(raw?.extractedEntities);
+        await this.atomicCas(conversationId, 'setPendingClarification', async (row) => {
+            const entities = this.parseExtractedEntities(row.extractedEntities);
             entities.pendingClarification = {
                 question: clarification.question,
                 options: clarification.options,
@@ -307,15 +327,13 @@ export class ConversationContextService {
                 asked_at: new Date().toISOString(),
                 retry_count: 0,
             };
-            await prisma.conversationContext.update({
-                where: { conversationId },
+            const res = await prisma.conversationContext.updateMany({
+                where: { conversationId, updatedAt: row.updatedAt },
                 data: { extractedEntities: entities },
             });
             adapters.logger.info('Pending clarification set', { conversationId, question: clarification.question });
-        }
-        catch (error) {
-            adapters.logger.error('Failed to set pending clarification', error, { conversationId });
-        }
+            return { count: res.count, value: null };
+        });
     }
     /** BAGIAN 2.2 — Get pending clarification (if any) */
     getPendingClarification(entities) {
@@ -323,72 +341,117 @@ export class ConversationContextService {
     }
     /** BAGIAN 2.3 — Clear pending clarification */
     async clearPendingClarification(conversationId) {
-        try {
-            const raw = await prisma.conversationContext.findUnique({
-                where: { conversationId },
-                select: { extractedEntities: true },
-            });
-            const entities = this.parseExtractedEntities(raw?.extractedEntities);
+        await this.atomicCas(conversationId, 'clearPendingClarification', async (row) => {
+            const entities = this.parseExtractedEntities(row.extractedEntities);
             entities.pendingClarification = null;
-            await prisma.conversationContext.update({
-                where: { conversationId },
+            const res = await prisma.conversationContext.updateMany({
+                where: { conversationId, updatedAt: row.updatedAt },
                 data: { extractedEntities: entities },
             });
             adapters.logger.info('Pending clarification cleared', { conversationId });
-        }
-        catch (error) {
-            adapters.logger.error('Failed to clear pending clarification', error, { conversationId });
-        }
+            return { count: res.count, value: null };
+        });
     }
     /** BAGIAN 2.4 — Increment retry_count; return true if exceeded (>1) */
     async incrementClarificationRetry(conversationId) {
-        try {
-            const raw = await prisma.conversationContext.findUnique({
-                where: { conversationId },
-                select: { extractedEntities: true },
-            });
-            const entities = this.parseExtractedEntities(raw?.extractedEntities);
+        const exceeded = await this.atomicCas(conversationId, 'incrementClarificationRetry', async (row) => {
+            const entities = this.parseExtractedEntities(row.extractedEntities);
             const pc = entities.pendingClarification;
+            // tidak ada pending → tidak perlu menulis (terminal, tidak retry)
             if (!pc)
-                return false;
+                return { count: null, value: false };
             pc.retry_count = (pc.retry_count ?? 0) + 1;
             entities.pendingClarification = pc;
-            await prisma.conversationContext.update({
-                where: { conversationId },
+            const res = await prisma.conversationContext.updateMany({
+                where: { conversationId, updatedAt: row.updatedAt },
                 data: { extractedEntities: entities },
             });
-            return pc.retry_count > 1;
-        }
-        catch {
-            return false;
-        }
+            return { count: res.count, value: pc.retry_count > 1 };
+        });
+        return exceeded ?? false;
     }
     /** BAGIAN 1.4 — Rollback: restore cart to a previous snapshot */
     async restoreCart(conversationId, snapshot) {
-        try {
-            const ctxRow = await prisma.conversationContext.findUnique({
-                where: { conversationId },
-                select: { extractedEntities: true },
-            });
-            const entities = this.parseExtractedEntities(ctxRow?.extractedEntities);
+        const restored = await this.atomicCas(conversationId, 'restoreCart', async (row) => {
+            const entities = this.parseExtractedEntities(row.extractedEntities);
             entities.confirmedItems = snapshot;
-            await prisma.conversationContext.update({
-                where: { conversationId },
-                data: {
-                    extractedEntities: entities,
-                },
+            const res = await prisma.conversationContext.updateMany({
+                where: { conversationId, updatedAt: row.updatedAt },
+                data: { extractedEntities: entities },
             });
             adapters.logger.info('Cart rolled back to snapshot', { conversationId, itemCount: snapshot.length });
-            return snapshot;
-        }
-        catch (error) {
-            adapters.logger.error('Failed to rollback cart', error, { conversationId });
-            return [];
-        }
+            return { count: res.count, value: snapshot };
+        });
+        return restored ?? [];
     }
     // ============================================================
     // Private helpers
     // ============================================================
+    /**
+     * Atomic read-modify-write (T4 fix). Optimistic locking via kolom `updatedAt`
+     * (@updatedAt otomatis *bump* tiap write di Prisma).
+     *
+     * Alur tiap attempt: baca `extractedEntities` + `updatedAt` → panggil `writer`
+     * yang melakukan parse+transform lalu `updateMany({ where: { conversationId,
+     * updatedAt } })` dan mengembalikan `{ count, value }`. UPDATE PostgreSQL
+     * bersifat atomik (compare-and-set): bila ada writer lain yang menyelesaikan
+     * dulu, `updatedAt` berubah → where tidak cocok → count 0 → retry dengan state
+     * yang sudah di-refresh. **Mencegah last-write-wins / data hilang tanpa memegang
+     * row lock** (tidak perlu `SELECT ... FOR UPDATE`, tidak blocking).
+     *
+     * `updateMany` dipilih karena `where` harus mengandung field non-unique
+     * `updatedAt` (`update` hanya boleh `WhereUniqueInput`). `writer` kembalikan
+     * `count: null` bila memang tidak perlu menulis (mis. tanpa
+     * pendingClarification) → berhenti tanpa retry. Pada Prisma 5.22 `updateMany`
+     * tetap me-*bump* `@updatedAt`, jadi optimistic clock tetap naik tiap commit.
+     *
+     * Konsistensi kontrak resilience: bila context tak ada / konflik tak selesai
+     * / error DB → log & kembalikan `null` (tidak throw — sama seperti method
+     * sejenis yang ada).
+     */
+    async atomicCas(conversationId, operation, writer) {
+        for (let attempt = 0; attempt <= ATOMIC_MAX_ATTEMPTS; attempt++) {
+            let row;
+            try {
+                row = await prisma.conversationContext.findUnique({
+                    where: { conversationId },
+                    select: { extractedEntities: true, updatedAt: true },
+                });
+            }
+            catch (error) {
+                adapters.logger.error('atomicCas read failed', error, { conversationId, operation });
+                return null;
+            }
+            if (!row) {
+                adapters.logger.debug('Context not found, skipping atomic update', { conversationId, operation });
+                return null;
+            }
+            let outcome;
+            try {
+                outcome = await writer(row);
+            }
+            catch (error) {
+                adapters.logger.error('atomicCas write failed', error, { conversationId, operation });
+                return null;
+            }
+            // count === null → writer memutuskan tidak perlu menulis (terminal)
+            if (outcome.count === null)
+                return outcome.value;
+            // count > 0 → committed
+            if (outcome.count > 0) {
+                adapters.logger.debug('Atomic update committed', { conversationId, operation, attempt });
+                return outcome.value;
+            }
+            // count === 0 → writer lain menang (updatedAt berubah) → retry
+            if (attempt < ATOMIC_MAX_ATTEMPTS) {
+                const wait = ATOMIC_BACKOFF_MS[attempt] ?? 200;
+                adapters.logger.warn('Optimistic lock conflict, retrying', { conversationId, operation, attempt, wait });
+                await new Promise((r) => setTimeout(r, wait));
+            }
+        }
+        adapters.logger.error('Optimistic lock conflict exhausted retries', { conversationId, operation });
+        return null;
+    }
     /** Generate session key deterministik per conversationId */
     generateSessionKey(conversationId) {
         return crypto.createHash('sha256').update(`${conversationId}:${Date.now()}`).digest('hex');
@@ -399,7 +462,7 @@ export class ConversationContextService {
             id: raw.id,
             conversationId: raw.conversationId,
             lastMessages: this.parseMessages(raw.lastMessages),
-            extractedEntities: this.parseEntities(raw.extractedEntities),
+            extractedEntities: this.parseExtractedEntities(raw.extractedEntities),
             userIntent: raw.userIntent ?? null,
             sessionKey: raw.sessionKey,
             sessionExpireAt: raw.sessionExpireAt,
@@ -413,20 +476,15 @@ export class ConversationContextService {
             return raw;
         return [];
     }
-    /** Parse kolom JSON extractedEntities dengan toleransi error */
-    parseEntities(raw) {
-        if (Array.isArray(raw))
-            return raw;
-        return [];
-    }
     /**
-     * Merge entitas lama + baru:
-     * - Dedup berdasarkan type:value
-     * - Entitas dengan confidence lebih tinggi menang
+     * Merge token entitas mentah (ExtractedEntity[]) ke dalam field
+     * `trackedEntities` object ExtractedEntities — semantik dedup per type:value
+     * & confidence-wins dipertahankan, tapi ditulis sebagai OBJECT (kanonik P3.3)
+     * sehingga tidak menimpa/kosongkan field lain (confirmedItems/pendingClarification).
      */
-    mergeEntities(existing, incoming) {
+    mergeTrackedEntities(existing, incoming) {
         const map = new Map();
-        for (const e of existing)
+        for (const e of existing.trackedEntities ?? [])
             map.set(`${e.type}:${e.value}`, e);
         for (const e of incoming) {
             const key = `${e.type}:${e.value}`;
@@ -435,7 +493,7 @@ export class ConversationContextService {
                 map.set(key, e);
             }
         }
-        return Array.from(map.values());
+        return { ...existing, trackedEntities: Array.from(map.values()) };
     }
 }
 export const conversationContextService = new ConversationContextService();

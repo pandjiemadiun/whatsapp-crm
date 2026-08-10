@@ -8,7 +8,7 @@ import { normalize } from '../services/chat/normalizer.js';
 import { runOneCall, validateCartOpsAgainstDb, truncateTo2Sentences } from '../services/chat/interpreter.js';
 import { getStoreEngine } from '../services/chat/engine-config.js';
 import { understand } from '../services/chat/reasoning.js';
-import { loadWorkspace, saveWorkspace, incrementDeferredTurns, shouldAutoDrop, dropPending } from '../services/chat/workspace.js';
+import { loadWorkspace, saveWorkspace, incrementDeferredTurns, shouldAutoDrop, dropPending, mapLegacyEntitiesToWorkspace, hasLegacyState } from '../services/chat/workspace.js';
 import { composeReply, composeEscalateReply, escalateStatusUpdate } from '../services/chat/composer-v2.js';
 import { resolvePending } from '../services/chat/pendingClarification.js';
 import { shouldRunShadow } from '../services/chat/shadow-config.js';
@@ -75,15 +75,33 @@ export class ConversationService {
                 });
             };
             try {
-                // 1. Load workspace dari DB (extractedEntities)
-                // Using context.extractedEntities, assuming getOrCreateContext returns context with extractedEntities directly or accessible via contextRow
-                // Let's use the context passed as a raw object (as seen in context definition)
+                // 1. Load workspace — sumber kebenaran: kolom `workspace_v2` (P3.1).
+                //    T3 fix (P3.2): bila conversation baru saja switch v1->v2 dan
+                //    workspace_v2 masih kosong, migrasi SEKALI dari legacy
+                //    `extractedEntities` lalu persist ke workspace_v2 agar turn
+                //    berikutnya pakai workspace_v2 (tidak re-map legacy lagi).
                 const ctxRow = await prisma.conversationContext.findUnique({
                     where: { conversationId },
-                    select: { extractedEntities: true }
+                    select: { workspace_v2: true, extractedEntities: true }
                 });
-                // Data di DB (JSON) sudah diparse otomatis oleh Prisma menjadi object
-                const workspace = loadWorkspace(JSON.stringify(ctxRow?.extractedEntities || {}));
+                let workspace;
+                if (ctxRow?.workspace_v2) {
+                    // Source of truth terisi (setelah P3.1) -> pakai langsung.
+                    workspace = loadWorkspace(JSON.stringify(ctxRow.workspace_v2));
+                }
+                else {
+                    // workspace_v2 kosong: cek legacy extractedEntities (v1 state).
+                    const legacy = conversationContextService.parseExtractedEntities(ctxRow?.extractedEntities);
+                    if (hasLegacyState(legacy)) {
+                        workspace = mapLegacyEntitiesToWorkspace(legacy);
+                        // Persist migrasi ke workspace_v2 jadi sumber kebenaran per-sementara.
+                        await conversationContextService.updateWorkspaceV2(conversationId, workspace);
+                    }
+                    else {
+                        // Kolom kosong & legacy pun kosong -> WorkspaceV2 default (conversation baru).
+                        workspace = loadWorkspace('{}');
+                    }
+                }
                 // 2. Auto-drop deferred pending
                 for (const pending of workspace.pendings) {
                     if (pending.status === 'deferred') {
@@ -154,9 +172,9 @@ export class ConversationService {
                         }
                     }
                     try {
-                        // Save workspace ke DB
-                        const resolvedContextEntities = saveWorkspace(workspace);
-                        await conversationContextService.updateExtractedEntities(conversationId, JSON.parse(resolvedContextEntities));
+                        // Save workspace ke kolom `workspace_v2` (T1 fix P3.1 — bukan lewat updateExtractedEntities yang NO-OP)
+                        const resolvedWs = saveWorkspace(workspace);
+                        await conversationContextService.updateWorkspaceV2(conversationId, JSON.parse(resolvedWs));
                         // Compose reply dengan total dari DB cart
                         const resolvedCart = await this.getCartFromDb(conversationId);
                         const resolvedSubtotal = resolvedCart.reduce((sum, i) => sum + (Number(i.price) * Number(i.qty || 1)), 0);
@@ -230,9 +248,9 @@ export class ConversationService {
                     }
                 }
                 try {
-                    // 5. Save workspace ke DB
-                    const updatedContextEntities = saveWorkspace(workspace);
-                    await conversationContextService.updateExtractedEntities(conversationId, JSON.parse(updatedContextEntities));
+                    // 5. Save workspace ke kolom `workspace_v2` (T1 fix P3.1 — bukan lewat updateExtractedEntities yang NO-OP)
+                    const updatedWorkspace = saveWorkspace(workspace);
+                    await conversationContextService.updateWorkspaceV2(conversationId, JSON.parse(updatedWorkspace));
                     // 6. Compose reply pakai composer-v2
                     const reply = composeReply({
                         plannedActs: reasoningOutcome.plannedActs || [],
