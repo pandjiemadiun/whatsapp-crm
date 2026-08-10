@@ -15,6 +15,7 @@ import type {
   PendingClarification,
   ResolvedAction,
 } from '../domain/types.js';
+import type { WorkspaceV2 } from '../services/chat/types-v2.js';
 
 /** Jumlah maksimal pesan yang disimpan di lastMessages */
 const MAX_CONTEXT_MESSAGES = 10;
@@ -118,6 +119,34 @@ export class ConversationContextService {
       adapters.logger.debug('Extracted entities updated', { conversationId, count: merged.length });
     } catch (error) {
       adapters.logger.error('Failed to update extracted entities', error as Error, { conversationId });
+    }
+  }
+
+  /**
+   * Persist WorkspaceV2 (v3.2) ke kolom terpisah `workspace_v2` (JSON nullable).
+   * T1 fix (P3.1): workspace v2 tidak pernah tersimpan sebelumnya — semua "persist"
+   * lewat updateExtractedEntities yang NO-OP karena type mismatch (WorkspaceV2
+   * object tidak punya .length, sehingga guard `if (!entities.length) return`
+   * langsung return). Kolom baru memutuskan v2 dari legacy extractedEntities.
+   */
+  async updateWorkspaceV2(conversationId: string, workspace: WorkspaceV2): Promise<void> {
+    try {
+      const ctxRow = await prisma.conversationContext.findUnique({
+        where: { conversationId },
+        select: { id: true },
+      });
+      if (!ctxRow) {
+        adapters.logger.debug('Context not found, skipping workspace_v2 update', { conversationId });
+        return;
+      }
+
+      await prisma.conversationContext.update({
+        where: { conversationId },
+        data: { workspace_v2: workspace as unknown as Prisma.InputJsonValue },
+      });
+      adapters.logger.debug('Workspace v2 persisted', { conversationId });
+    } catch (error) {
+      adapters.logger.error('Failed to update workspace_v2', error as Error, { conversationId });
     }
   }
 

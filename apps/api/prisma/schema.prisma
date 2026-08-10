@@ -194,6 +194,7 @@ model ConversationContext {
   conversationId        String   @unique
   lastMessages          Json
   extractedEntities     Json?
+  workspace_v2          Json?
   userIntent            String?
   sessionKey            String   @unique
   sessionExpireAt       DateTime
