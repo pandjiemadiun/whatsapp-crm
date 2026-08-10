@@ -129,3 +129,39 @@ Stage 2 (fix) — dilakukan sesuai scope TASK C1:
 VERIFIED STAGE 1: audit+laporan selesai sebelum kode disentuh. Gap jelas
 opsi (c) → diperbolehkan lanjut Stage 2 langsung per ketentuan TASK.
 
+## DITEMUKAN SAAT KERJA — TASK P2 (Truth boundary), belum ditangani
+1. `golden-dataset.test.ts` Case 1 (line 303): setelah TASK P2, resolver-EXECUTE
+   (`conversation.service.ts:462` `validateCartOpsAgainstDb`) melewatkan ops
+   untuk produk yang tidak ada di DB (`woltel`/`brambang` tidak terseed di
+   `store-golden-test`, hanya `beras` yang di-seed via BASE_PRODUCTS). Perilaku
+   P2 di sini TEPAT (skip produk tidak ada di DB, bukan reject transaksi total —
+   lihat kontrak P2). Case 1 SEBELUMNYA "pass" hanya karena bug lama I13 yang
+   mengeksekusi ops tanpa validasi harga DB. Test butuh `woltel`/`brambang`
+   ditambahkan ke seed (atau BASE_PRODUCTS) agar kontraknya valid di bawah
+   P2. DICATAT, belum diperbaiki — pemilikputuskan (owner flag, 10 Agu 2026).
+   Bukti: `git stash` source-only → Case 1 PASS di HEAD (bug lama) → `pop` → FAIL
+   (P2 benar). Bukan regresi kode; test-data issue yang terbuka semacamnya
+   ekspos oleh perbaikan P2.
+2. `golden-dataset.test.ts` Case B3-b (line 726): test bug — `assert.equal`
+   (strict ===) dipakai pada array `audit.stagesReached`, selalu gagal karena
+   reference inequality. PRE-EXISTING (ada di commit HEAD `2ab32ef`), bukan
+   produk TASK P2. Bukti sama: `git stash` source-only → masih FAIL di HEAD.
+   Routing tryProduct tetap benar (source=PRODUCT, content `kangkung`+harga,
+   llmCalls=0 semua pass); hanya asersi array yang bug. DICATAT, belum
+   diperbaiki per instruksi owner ("skip (b), jangan fix B3-b test bug").
+
+## UPDATE — TASK P2 (truth boundary) SELESAI, 10 Agu 2026
+- validateCartOpsAgainstDb dipasang di SEMUA titik eksekusi cart ops:
+  resolver-EXECUTE (line 462, sudah ada di seed), interpreter LLM path
+  (line 608, migrasi dari validateCartOps lama), v2 resolved-EXECUTE
+  (line 214, wrap baru). Harga cart SELALU dari DB; produk tidak ada di DB
+  tidak dieksekusi. `validateCartOpsAgainstDb` juga kini kembalikan
+  `missing: string[]` agar missing_info tetap terisi.
+- Bukti e2e (raw DB readback): pending cartOp `price:99999` (simulasi LLM)
+  → confirmed_items `price:12000` (DB), llmCalls=0.
+- tsc 0 error, build sukses, pm2 restart online (tidak crash-loop).
+- Test: jest `src/services/chat/__tests__` = 2 failed/1 failed (baseline
+  reasoning-v2 + engine-config-v2), TIDAK ada kegagalan baru. Golden suite
+  (tsx) ada 2 red yang DICATAT bukan bug kode P2: lihat entry di atas.
+- Lihat laporan-taskP2.md untuk seluruh acceptance verbatim.
+

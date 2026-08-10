@@ -129,10 +129,14 @@ export async function validateCartOpsAgainstDb(cartOps, storeId) {
     }
     const valid = [];
     const invalid = [];
+    const missing = [];
     for (const op of cartOps) {
         const dbProduct = productMap.get(op.product.toLowerCase().trim());
         if (!dbProduct) {
+            // Produk tidak ada di DB -> laporkan sebagai `missing` (biar reply
+            // bisa tanya ketersediaan) dan JANGAN dieksekusi. Harga tetap dari DB.
             invalid.push(op);
+            missing.push(op.product);
             continue;
         }
         if (typeof op.qty !== 'number' || op.qty < 1) {
@@ -145,7 +149,7 @@ export async function validateCartOpsAgainstDb(cartOps, storeId) {
             price: dbProduct.price,
         });
     }
-    return { valid, invalid };
+    return { valid, invalid, missing };
 }
 export function validateCartOps(cartOps, storeProducts) {
     const known = new Set(storeProducts.map((p) => p.name.toLowerCase().trim()));
