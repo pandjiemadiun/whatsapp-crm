@@ -165,3 +165,28 @@ opsi (c) → diperbolehkan lanjut Stage 2 langsung per ketentuan TASK.
   (tsx) ada 2 red yang DICATAT bukan bug kode P2: lihat entry di atas.
 - Lihat laporan-taskP2.md untuk seluruh acceptance verbatim.
 
+## DITEMUKAN SAAT KERJA — TASK P3.0 (audit read-only, context boundary), belum ditangani
+Audit read-only WorkspaceV2 vs legacy `ExtractedEntities`. Laporan penuh:
+`laporan-taskP3-audit.md`. Ringkas:
+1. **NO-OP v2 persist TERCONFIRM** (bukan dugaan): `saveWorkspace(workspace)`
+   → objek `WorkspaceV2` (tidak punya `.length`) → `updateExtractedEntities`
+   guard `if (!entities.length) return;` (conversation-context.service.ts:101)
+   → `WorkspaceV2.length === undefined` → return segera (NO-OP). Call site:
+   conversation.service.ts:232-233 (v2 resolved) & 316-317 (v2 reasoned).
+   WorkspaceV2 **tidak pernah ditulis**, load di 141 selalu dapat object kosong
+   → v2 kehilangan memori antar-turn. Klaim RAILS §2 benar. (RISIKO TINGGI)
+2. **Shape kolom `extractedEntities` tak konsisten**: `updateExtractedEntities`
+   pakai `parseEntities` (ARRAY, line 457) + `mergeEntities`, sementara
+   `setPendingClarification`(318)/`modifyCart`(1397)/`parseExtractedEntities`(210)
+   pakai bentuk OBJECT. Penulis array → parseExtractedEntities reset ke
+   `{discussedItems:[], confirmedItems:[]}` → data hilang. (RISIKO TINGGI)
+3. **Race last-write-wins**: kolom `extractedEntities` (1 row) ditulis v1 legacy,
+   v2-via-modifyCart, + fallback.service.ts:997/1003, semua findUnique→update
+   tanpa transaksi/lock. (RISIKO SEDANG — RAILS §2 sudah catat modifyCart
+   non-transaksional)
+4. v2 reasoned path tetap persist `confirmedItems` lewat `modifyCart` (1397),
+   tapi `pendings`/`draft_cart`/`resolved_facts` v2 HILANG tiap turn.
+   (RISIKO TINGGI — T1)
+Saran urutan fix di §7 laporan-taskP3-audit.md. **Belum diperbaiki** — task ini
+read-only saja per instruksi.
+
