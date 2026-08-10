@@ -17,6 +17,13 @@ import { isTotalTrigger, isTotalIntent, isPaymentIntent, isOrderStatusIntent, OR
 // In-memory cache for store profiles (TTL: 10 minutes)
 const storeProfileCache = new Map();
 const STORE_PROFILE_TTL_MS = 10 * 60 * 1000;
+// TASK B4.4 — confidence gate untuk tryFAQ/tryKnowledge.
+// [DUGAAN, threshold 0.5 belum divalidasi data nyata] — naik dari 0.3
+// karena risiko false-positive teoretis (lihat laporan-taskB2.md: "tidak
+// menemukan false-positive kritis yang pasti", tapi threshold 0.3 teoretis
+// longgar untuk toko dengan FAQ/knowledge banyak).
+const CONFIDENCE_THRESHOLD = 0.5;
+const CONFIDENCE_MARGIN = 0.15;
 function formatOperatingHours(operatingHours) {
     if (!operatingHours || typeof operatingHours !== 'object')
         return null;
@@ -136,7 +143,11 @@ export class FallbackService {
     async tryFAQ(context, query) {
         try {
             const results = await faqService.search(context.storeId, query);
-            if (results.length > 0 && results[0].confidence > 0.3) {
+            // TASK B4.4 — [DUGAAN, threshold 0.5 belum divalidasi data nyata]
+            // Naik dari 0.3; tambah margin: jika ≥2 hasil, #1 harus ≥0.15
+            // lebih tinggi dari #2 agar tidak jawab asal pada kandidat serba lemah.
+            if (results.length > 0 && results[0].confidence > CONFIDENCE_THRESHOLD &&
+                (results.length === 1 || results[0].confidence - results[1].confidence >= CONFIDENCE_MARGIN)) {
                 return {
                     source: ResponseSource.FAQ,
                     content: results[0].answer,
@@ -155,7 +166,11 @@ export class FallbackService {
     async tryKnowledge(context, query) {
         try {
             const results = await knowledgeService.search(context.storeId, query);
-            if (results.length > 0 && results[0].confidence > 0.3) {
+            // TASK B4.4 — [DUGAAN, threshold 0.5 belum divalidasi data nyata]
+            // Naik dari 0.3; tambah margin: jika ≥2 hasil, #1 harus ≥0.15
+            // lebih tinggi dari #2 agar tidak jawab asal pada kandidat serba lemah.
+            if (results.length > 0 && results[0].confidence > CONFIDENCE_THRESHOLD &&
+                (results.length === 1 || results[0].confidence - results[1].confidence >= CONFIDENCE_MARGIN)) {
                 return {
                     source: ResponseSource.KNOWLEDGE,
                     content: results[0].content,
