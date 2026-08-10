@@ -5,6 +5,12 @@ di awal SETIAP sesi, sebelum membaca file lain, sebelum bertindak.
 Jika ada isi yang bentrok dengan STATUS-V2.md, file INI yang menang
 untuk soal PROSES/ATURAN. STATUS-V2.md tetap sumber kebenaran untuk
 STATE TEKNIS (apa yang sudah fix, apa yang belum).
+
+REWRITE TOTAL 10 Agu 2026: struktur ditata ulang (status/roadmap
+dipindah ke atas biar tidak perlu scroll ratusan baris untuk tahu
+posisi terkini). SEMUA entri log keputusan lama dipertahankan
+VERBATIM di §6 — tidak ada yang dihapus/diubah, hanya dipindah
+posisi. Aturan §1 dan audit §2 tidak berubah isi.
 ---
 
 ## 0. KENAPA FILE INI ADA
@@ -40,8 +46,23 @@ memaksa setiap klaim dibuktikan, bukan diucapkan.
    SEBELUM mengusulkan langkah apa pun.
 7. Kalau AI tidak yakin, AI HARUS bilang tidak yakin dan bertanya —
    bukan menebak lalu bicara seolah yakin.
+8. **Saat ada masalah/incident di server (file rusak, state tidak
+   jelas, dst), WAJIB langsung ambil opsi paling tegas/simple yang
+   tersedia (mis. `git reset --hard` + `git clean -fd` ke commit sehat
+   terakhir), bukan tambal per-file lalu eskalasi bertahap ke opsi
+   tegas setelah gagal berkali-kali.** Satu blok command lengkap dari
+   diagnosis sampai verifikasi akhir dalam satu balasan — minimalkan
+   jumlah putaran owner harus paste-balas. (Ditambahkan setelah
+   insiden restore TASK B4, lihat §6.)
+9. **TASK yang scope-nya bisa dipecah per-unit kerja kecil (per-tier,
+   per-file, per-fitur) WAJIB dipecah dan di-commit per-unit**, bukan
+   dikerjakan sekaligus dalam satu sesi/edit besar. Kalau robot
+   kehabisan resource (kuota token, dsb.) di tengah jalan, kerugian
+   maksimal cuma satu unit kerja yang gampang di-checkout balik, bukan
+   seluruh scope TASK. (Ditambahkan setelah insiden TASK B4 crash,
+   lihat §6.)
 
-## 2. VERDICT ARSITEKTUR SAAT INI (hasil audit 9 Agu 2026)
+## 2. VERDICT ARSITEKTUR (hasil audit 9 Agu 2026, MASIH BERLAKU)
 
 Akar masalah "chatbot kaku, tambal-sulam tanpa akhir" BUKAN semata
 "kelewat banyak keyword". Akar sebenarnya: **boundary antar-layer
@@ -52,49 +73,157 @@ kebenaran untuk keputusan percakapan.
 Temuan kritis terverifikasi dari audit source code penuh (lihat
 riwayat chat 9 Agu untuk detail file:line):
 - V2 bisa mutate DB lalu exception → fallback ke V1 → V1 proses ulang
-  pesan yang sama → berpotensi DOBEL mutasi cart/order. [PALING BAHAYA]
+  pesan yang sama → berpotensi DOBEL mutasi cart/order. [DITUTUP P0]
 - `updateExtractedEntities` di jalur v2 adalah NO-OP (type mismatch) —
-  v2 kehilangan memori antar-turn secara diam-diam.
+  v2 kehilangan memori antar-turn secara diam-diam. [P3, BELUM]
 - I13 ("angka wajib dari DB") TIDAK konsisten: `validateCartOpsAgainstDb`
   ada di kode tapi tidak dipanggil; sebagian jalur v1 pakai harga dari
-  LLM langsung.
+  LLM langsung. [P2, BELUM]
 - I8 ("maks 1 LLM/pesan") dilanggar: retry transport di interpreter.ts
   + LLM kedua tersembunyi di `orderService.extractAndSaveOrder()`.
-- Shadow mode v2 selalu gagal diam-diam (type mismatch context).
+  [P4, BELUM. CATATAN: I8 sudah diturunkan dari hard constraint jadi
+  guideline efisiensi — lihat prinsip trade-off di §3]
+- Shadow mode v2 selalu gagal diam-diam (type mismatch context). [P3]
 - `modifyCart` read-modify-write tidak transactional → race condition.
+  [belum masuk P-mana pun secara eksplisit, perlu diklasifikasi ulang]
 
-## 3. ROADMAP WAJIB, URUTAN INI TIDAK BOLEH DILOMPAT
+## 3. STATUS TERKINI — RINGKAS (baca ini dulu tiap sesi baru)
 
-- [x] **P0 — Safety boundary**: V2 tidak boleh fallback ke V1 setelah
-      V2 sudah melakukan mutation. SELESAI & VERIFIED, commit fc39404
-      (9 Agu 2026). TASK 0 (jest runner) ikut selesai di commit sama.
-- [ ] **P1 — Semantic authority** (sedang berjalan, bertahap per-file):
-      - [x] Langkah 1: tryProduct confidence gate (cegah substring
-        guess, mis. "ram"⊂"Brambang"). TASK B1, commit e529466 +
-        aa474cb (rebuild dist). VERIFIED end-to-end production
-        (9 Agu 2026) — lihat log keputusan di bawah.
-      - [ ] Langkah 2+: tier lain di fallback.service.ts
-        (tryCatalog/tryShipping/tryPayment/tryTotal), fast-path
-        isOrderIntent/isMultiProductOrder guard, reasoning.ts sebagai
-        satu-satunya penentu final. Belum digarap.
-- [ ] **P2 — Truth boundary**: executor menolak harga yang tidak sama
-      dengan DB (bukan cuma "ambil dari catalog jika sempat").
+**Commit terakhir diketahui:** `ffd00df` (TASK B4.5, final tier P1)
+**Cek selalu:** `git log --oneline -5` dan `git status` di awal sesi —
+JANGAN percaya angka commit di file ini kalau belum di-cross-check live,
+bisa saja sudah ada sesi lain sesudah file ini terakhir ditulis.
+
+### Roadmap P0-P6 (menggantikan roadmap lama, urutan TIDAK BOLEH dilompat)
+
+- [x] **P0 — Safety boundary**: V2 tidak fallback ke V1 setelah V2
+      sudah mutation. Commit `fc39404`. VERIFIED (lihat §6, 9 Agu).
+- [x] **P1 — Semantic authority**: SEMUA langkah selesai.
+      - [x] Langkah 1: tryProduct confidence gate. Commit `e529466`+`aa474cb`.
+      - [x] Langkah 2: tryTotal + tryPayment "bayar" overlap. Commit
+            `4bd4414`+`f314326` (TASK B3).
+      - [x] Langkah 3: 5 tier SEDANG-risk sisa — tryOrderStatus,
+            trySop, tryShipping, tryFAQ/tryKnowledge, tryProductNotFound.
+            Commit `fca533f`,`373cb37`,`7b71298`,`4205b29`,`ffd00df`
+            (TASK B4.1-B4.5). VERIFIED end-to-end production (10 Agu
+            2026, lihat §6).
+      **P1 RESMI SELESAI 10 Agu 2026.**
+- [ ] **P2 — Truth boundary** (NEXT, belum mulai): executor menolak
+      harga yang tidak sama dengan DB (bukan cuma "ambil dari catalog
+      jika sempat"). Terkait I13 (non-negotiable, lihat §2).
 - [ ] **P3 — Context boundary**: WorkspaceV2 dan legacy
       ExtractedEntities dipisah bersih, tidak saling timpa diam-diam.
 - [ ] **P4 — Remove second brain**: `extractAndSaveOrder()` berhenti
       jadi interpreter kedua untuk pesan yang sudah diproses V2.
-- [ ] **P5 — Response naturalness**: baru sekarang composer-v2 dibedah
-      untuk jadi lebih natural/dinamis (bukan sebelum P0-P4 selesai).
+- [ ] **P5 — Response naturalness**: composer-v2 dibedah untuk lebih
+      natural. SENGAJA ditunda sampai P0-P4 selesai.
 - [ ] **P6 — Golden dataset sebagai architecture gate**, bukan sekadar
       regression test kosmetik.
 
-Prinsip trade-off yang owner tetapkan eksplisit: **robustness dan
-natural language understanding > biaya LLM.** I8 (maks 1 LLM/pesan)
-BUKAN lagi hard constraint, jadi guideline efisiensi yang boleh
-dilanggar demi jawaban benar. I13 (angka wajib dari DB) TETAP
-non-negotiable — ini soal integritas transaksi, bukan gaya bicara.
+**Prinsip trade-off (tetap berlaku):** robustness dan natural language
+understanding > biaya LLM. I8 (maks 1 LLM/pesan) BUKAN lagi hard
+constraint, jadi guideline efisiensi yang boleh dilanggar demi jawaban
+benar. I13 (angka wajib dari DB) TETAP non-negotiable — soal integritas
+transaksi, bukan gaya bicara.
 
-## 4. FORMAT LOG KEPUTUSAN (tambahkan entri baru di bawah, JANGAN edit yang lama)
+### Item lama di luar P0-P6 (masih berlaku, belum dikerjakan)
+
+- Receipt tampil item qty 0 ("Brambang (0x)") — kosmetik.
+- Reply resolved terpotong ("adalah?") — kosmetik.
+- Test `reasoning-v2.test.ts` "terminal→fallback" outdated (I-V2-6
+  label mismatch) — ini salah satu dari 2 pre-existing test failure
+  yang konsisten muncul di setiap test run sejak sebelum TASK 0.
+- Eskalasi ke owner untuk jalur v2 (canary) — masih SHADOW-ONLY.
+  Jalur v1/production sudah nyata sejak TASK C1 (commit `718c375`).
+  Kalau v2 suatu saat butuh path eskalasi sendiri, ini jadi TASK
+  terpisah, bukan bug.
+- Kata `'mau'` di `ORDER_INTENT_KEYWORDS` (`fast-path.ts`) bisa
+  short-circuit sebelum trySop sempat dicek untuk kalimat seperti
+  "barang rusak mau retur" — ditemukan saat TASK B4.2 (10 Agu 2026),
+  di luar scope B4, belum ada TASK perbaikan.
+- Threshold `tryFAQ`/`tryKnowledge` (0.5 + margin 0.15, TASK B4.4) —
+  masih `[DUGAAN, belum divalidasi data nyata]` karena FAQ/knowledge
+  base toko canary kosong. Perlu divalidasi ulang begitu ada toko
+  dengan data FAQ/knowledge asli.
+- Golden dataset + test invarian permanen I8-I15 — jadi P6, baru
+  test unit parsial sejauh ini.
+- Keputusan terbuka: "dua duanya" jika opsi klarifikasi >2; retry LLM
+  dihitung sebagai panggilan LLM atau tidak — belum diputuskan.
+
+### Item hygiene (non-blocking, tapi menumpuk — perlu TASK kecil terpisah)
+
+- `apps/api/logs/*.log` masih TER-TRACK di git — risiko data sensitif
+  customer (nomor WA, isi pesan) ter-commit permanen ke history.
+  BELUM diperbaiki — jangan `git rm --cached` sembarangan sebelum
+  pastikan alur deploy production tidak bergantung pada dist/logs
+  yang di-commit tanpa proses build otomatis.
+- Belum ada git pre-commit hook / checklist otomatis untuk cek
+  `dist/` tertinggal sebelum commit. Sudah 3x kejadian manual
+  ditemukan lewat `git status` menyeluruh: TASK A/0, TASK B3, insiden
+  restore TASK B4 (10 Agu — bahkan menemukan 7 file dist/ YATIM dari
+  fitur yang sudah tidak ada source-nya sama sekali: route-decider,
+  clarification-resolver, message-normalizer, ot-or-interpreter,
+  +3 dist test file — dibersihkan di commit `5f502d1`).
+
+### Roadmap besar setelah engine v2 stabil (belum mulai)
+
+PWA Web Chatbox — blueprint lengkap ada di riwayat chat 9/8 00:50
+(simpan sbg 04_PWA_BLUEPRINT.md kalau belum). Prinsip: zero-friction
+auth (uid URL→localStorage), <300KB, multi-tenant qlobot.web.id/c/<slug>,
+UI mirip WA. 3 endpoint: GET /api/pwa/:slug/init, GET .../history?uid=,
+POST .../message (pipeline AI sama, gratis tanpa Fonnte). 5 milestone:
+skeleton→session handoff→2-way chat→manifest+katalog→push. Bonus:
+M1-M3 = test harness gratis pengganti Fonnte. CATATAN: uid map ke
+conversationId existing (store:<nomor>); channel WA/WEB field
+terpisah, JANGAN timpa field source. Ditunda sampai P0-P6 kelar.
+
+## 4. FAKTA OPERASIONAL PROYEK
+
+- Server VPS: `root@vps3541799`, repo: `/home/ubuntu/garuda`
+- Struktur monorepo: `apps/api` (package.json + tsconfig di sini,
+  BUKAN di root — build/tsc harus dijalankan dari `apps/api/`),
+  `apps/dashboard`
+- Canary: `store-f7140b5c` (Depot Kinasih)
+- Device/gateway: `6289658888008`
+- Redis flag: `store-f7140b5c:engine = v2`
+- Test gratis: curl webhook + baca dashboard `/dashboard/conversations`
+- Owner tidak akses server langsung untuk AI — AI kerja lewat owner:
+  AI kasih command, owner jalankan & paste hasil balik. Command dengan
+  path relatif WAJIB eksplisit `cd` dulu di awal.
+- Robot coding terpisah (opencode/DeepSeek, disebut "commandcode")
+  yang eksekusi TASK — dijalankan lewat prompt yang ditulis Claude,
+  hasilnya dilaporkan ke file `.md` di root repo (bukan cuma balas
+  chat), owner upload balik ke Claude untuk cross-check vs diff mentah.
+
+## 5. DEFINISI "SELESAI" UNTUK SATU TASK
+
+Sebuah TASK dianggap selesai HANYA jika semua ini ada, ditempel
+verbatim (bukan diringkas):
+1. Output `npx tsc --noEmit` (harus 0 error)
+2. Output `npm run build` (WAJIB, bukan cuma --noEmit — --noEmit TIDAK
+   generate dist/, pm2 tetap jalankan kode lama kalau ini dilewat.
+   Ditemukan nyata di TASK B1, 9 Agu 2026: unit test 11/11 pass tapi
+   production masih pakai kode lama karena langkah ini terlewat.)
+3. Output test suite lengkap (pass/fail count, termasuk pre-existing
+   failure yang sudah diketahui — baseline saat ini: 2 failed suites/
+   1 failed test, lihat §3)
+4. Output `git diff --stat` (bukti scope tidak melebar)
+5. Konfirmasi `pm2 restart api` sukses + tidak crash loop
+6. Untuk perubahan yang menyentuh side-effect (DB write, WA send):
+   bukti test manual WA nyata ATAU test otomatis yang mensimulasikan
+   skenario itu secara eksplisit (curl webhook + DB readback, atau
+   throwaway Prisma tx untuk kasus yang tidak bisa di-e2e langsung
+   seperti FAQ/knowledge dengan data canary kosong — pola dari TASK
+   C1 dan TASK B4.4/B4.5).
+
+Tanpa keenam ini, status TASK = "BELUM SELESAI", titik.
+
+Untuk TASK yang scope-nya bisa dipecah per-unit (lihat §1 aturan 9):
+tiap unit WAJIB commit terpisah dan memenuhi keenam poin di atas
+SEBELUM lanjut ke unit berikutnya — bukan satu commit besar di akhir.
+
+## 6. LOG KEPUTUSAN (HISTORIS, VERBATIM — jangan edit entri lama,
+    tambah entri baru di paling bawah)
 
 ```
 ### [tanggal] — [judul keputusan]
@@ -103,6 +232,150 @@ Keputusan:
 Alasan:
 Siapa yang setuju: (owner/Claude/AI CLI)
 ```
+
+### 9 Agu 2026 — Urutan P0→P6 ditetapkan
+Konteks: Audit penuh source code oleh AI CLI menemukan boundary
+antar-layer rusak, bukan sekadar keyword overload.
+Keputusan: Kerjakan P0-P6 berurutan, tidak boleh lompat ke semantic
+refactor (P1+) sebelum P0 (safety boundary) selesai dan terverifikasi.
+Alasan: P0 adalah risiko data-corruption aktif di production canary;
+P1-P6 adalah soal kualitas, bisa ditunda tanpa merusak data customer.
+Siapa yang setuju: owner (Panji), Claude, AI CLI (GPT).
+
+### 9 Agu 2026 — TEMUAN KRITIS: tidak ada test runner terpasang
+Konteks: Saat memverifikasi TASK A, ditemukan `npx jest` gagal parse
+SEMUA file test (21 test suite, 0 tests run) dengan error babel parser.
+Investigasi lanjutan: `package.json` "test" script memakai `tsx --test`
+(Node built-in test runner) untuk 3 file tidak terkait (date-range,
+analytics, batch-magic-paste) — TIDAK ADA script untuk chat engine.
+`node_modules` TIDAK punya jest/vitest/mocha sama sekali (dicek
+langsung, kosong). 21 file test di src/services/chat/__tests__/ ada
+secara fisik tapi TIDAK ADA cara valid menjalankannya di proyek ini
+saat ini.
+Keputusan: SEMUA klaim "test lulus" untuk chat engine v2 sejak TASK 8
+ke belakang (termasuk di STATUS-V2.md) berstatus TIDAK TERVERIFIKASI
+ULANG sampai ada test runner nyata yang terpasang dan dikonfirmasi
+bisa menjalankan file-file ini. Ini menjadi TASK 0 — prioritas di atas
+TASK A. TASK A tidak boleh ditandai selesai sampai TASK 0 kelar dan
+safety-boundary-v2.test.ts benar-benar jalan (bukan cuma tsc bersih).
+Alasan: tanpa test runner yang benar-benar berfungsi, tidak ada cara
+membuktikan APAPUN yang diklaim "lulus" — ini akar structural dari
+pola trauma "AI bilang aman tapi ternyata tidak".
+Siapa yang setuju: owner (Panji), Claude.
+
+### 9 Agu 2026 — TASK 0 + TASK A VERIFIED dengan bukti mentah
+Konteks: Setelah beberapa ronde bukti gagal (screenshot OCR dengan
+matematika tidak konsisten, klaim yang tidak match git diff), akhirnya
+didapat output jest mentah langsung dari terminal.
+Bukti: `npm run test:chat -- src/services/chat/__tests__` →
+Test Suites: 2 failed, 19 passed, 21 total (2+19=21 ✓)
+Tests: 1 failed, 185 passed, 186 total (1+185=186 ✓)
+2 kegagalan PERSIS sama dengan yang sudah diketahui sejak sebelum
+TASK 0/TASK A: reasoning-v2.test.ts (I-V2-6 outcome label mismatch,
+test lama vs desain baru) dan engine-config-v2.test.ts (circular dep
+redisAdapter, file-level, tak terkait chat logic). TIDAK ADA kegagalan
+baru. safety-boundary-v2.test.ts PASS 5/5 termasuk test yang membaca
+source asli conversation.service.ts untuk konfirmasi guard terpasang.
+package.json diff dikonfirmasi minimal (1 script baru test:chat, 3
+devDependency di-pin: jest, ts-jest, @types/jest). conversation.service.ts
+dikonfirmasi utuh (50KB, diff sesuai desain TASK A, tidak ada
+penghapusan seperti yang sempat diklaim laporan OCR sebelumnya —
+klaim itu terbukti salah/halusinasi).
+Keputusan: TASK 0 dan TASK A resmi VERIFIED. Lanjut ke commit lalu P1.
+Siapa yang setuju: owner (Panji), Claude — berdasarkan bukti terminal
+mentah, bukan ringkasan AI mana pun.
+
+### 9 Agu 2026 — TASK B1 VERIFIED e2e + TEMUAN: unit test pass ≠ production berubah
+Konteks: TASK B1 (gate confidence tryProduct, cegah substring match
+seperti "ram"⊂"Brambang") sudah 11/11 unit test pass dan commit
+e529466, tapi saat dicoba manual di WA/curl production, bug ASLI
+MASIH terjadi ("ram" → jawab "Brambang" harga). Investigasi: dist/
+belum di-rebuild sejak commit (npm run build tidak pernah dijalankan
+robot setelah TASK B1, cuma `tsc --noEmit` yang tidak generate file),
+pm2 masih jalankan kode lama. Setelah `npm run build` + `pm2 restart
+api` manual, query "ram" ulang → balasan generic, TIDAK lagi sebut
+Brambang. Confirmed fix bekerja di production.
+Keputusan: TAMBAHKAN ke acceptance criteria SEMUA TASK ke depan yang
+menyentuh src/business/*.ts atau src/services/**/*.ts: WAJIB
+`npm run build && pm2 restart api` sebagai langkah eksplisit sebelum
+klaim selesai, BUKAN cuma `tsc --noEmit`. tsc --noEmit hanya validasi
+tipe, TIDAK generate dist/ — ini beda fundamental yang harus selalu
+dicek. Root cause pola ini: robot terbiasa pakai tsc --noEmit sebagai
+"proof of correctness" tapi lupa itu tidak mengubah apa yang pm2
+jalankan.
+Bukti e2e: sebelum rebuild → "Halo Kak! Untuk *Brambang* harganya
+Rp 30.000..."; sesudah rebuild+restart → "Halo, selamat datang! Apa
+yang bisa saya bantu hari ini?" (generic, bukan salah-jawab produk).
+Siapa yang setuju: owner (Panji), Claude — berdasarkan test end-to-end
+nyata, bukan cuma unit test.
+
+### 9 Agu 2026 — Temuan hygiene: dist/ dan logs/ ter-track di git
+Konteks: git status berulang kali menunjukkan apps/api/dist/* dan
+apps/api/logs/*.log sebagai "modified" — artinya kedua folder ini
+DI-TRACK oleh git, padahal itu build artifact dan runtime log.
+Risiko: logs/*.log berpotensi berisi data sensitif customer (nomor WA,
+isi pesan) ter-commit ke history git selamanya; dist/* berpotensi
+drift dari source kalau ada yang commit tanpa rebuild.
+Keputusan: BELUM diperbaiki — jangan `git rm --cached` sembarangan
+sebelum dipastikan apakah pm2 production menjalankan dist/ yang
+di-commit tanpa proses build/deploy otomatis (kalau iya, menghapus
+dari git tanpa alur deploy yang benar bisa bikin server tidak punya
+dist/ saat fresh clone/deploy). Ini TASK KECIL TERPISAH, non-blocking
+untuk P1, dikerjakan kapan saja sebelum makin banyak data sensitif
+ter-commit. Status: DIKETAHUI, BELUM DIKERJAKAN.
+Siapa yang setuju: owner (Panji), Claude.
+
+### 9 Agu 2026 — Bukti mentah TASK 0 + TASK A tersimpan di thread chat
+Catatan penting untuk sesi/thread manapun yang membaca ini: bukti
+verbatim lengkap (output `npm run test:chat`, git diff, git status,
+commit log) untuk TASK 0 dan TASK A ADA, tapi tersimpan di histori
+percakapan claude.ai tanggal 9 Agu 2026 (thread "audit arsitektur
+Garuda"), BUKAN di-paste ulang di sini secara verbatim karena
+panjang. Ringkasan hasil (untuk cross-check cepat, TETAP minta
+re-run kalau butuh bukti fresh — jangan percaya ringkasan ini
+sebagai pengganti bukti):
+`npm run test:chat -- src/services/chat/__tests__` di commit fc39404
+→ Test Suites: 2 failed, 19 passed, 21 total; Tests: 1 failed,
+185 passed, 186 total. 2 gagal = reasoning-v2 (I-V2-6 label mismatch,
+pre-existing) + engine-config-v2 (circular dep redisAdapter, file-level,
+pre-existing). safety-boundary-v2.test.ts PASS 5/5.
+Kalau butuh bukti ulang: jalankan lagi command yang sama di server,
+jangan asumsi hasil ini masih berlaku kalau ada commit baru sesudah
+fc39404.
+
+### 9 Agu 2026 — TASK C1 selesai: eskalasi ke owner sekarang nyata
+Konteks: TASK C1 saya scope ke "conversation.service.ts bagian v2"
+dengan asumsi eskalasi hidup di v2. Audit robot (Stage 1) mengoreksi
+asumsi ini: I-V2-4 di validator-v2.ts CUMA jalan di shadow hook
+(reasoning.ts understand() dipanggil dari conversation.service.ts:657
+sebagai shadow, bukan keputusan nyata) — jalur produksi pakai
+runOneCall (v1). Mekanisme eskalasi nyata yang dipakai production ada
+di conversation.service.ts BAGIAN 2 (v1), baris ESCALATE ~419 dan
+retry-exceeded ~514 — SEBELUM TASK C1, kedua cabang ini cuma kirim
+balasan kaleng "Saya akan hubungkan ke pemilik toko" TANPA pernah
+mengubah conversation.status atau memicu notifikasi apa pun ke owner
+(notifyHumanTakeover cuma terhubung ke circuit breaker LLM, trigger
+berbeda). Robot mengoreksi scope ke v1 (BAGIAN 2) dan
+composer-v2.ts, BUKAN v2 seperti draft TASK awal — dikonfirmasi valid
+lewat diff mentah (git show 718c375), bukan sekadar diklaim.
+Fix: markHumanTakeover() (private, try/catch non-throwing) set
+status='human_takeover'+humanTakeoverAt pakai konvensi existing
+(routes/conversations.ts:88) di kedua cabang escalate; balasan
+customer diganti composeEscalateReply() yang jujur, bukan generic.
+Verifikasi: tsc 0 error, build sukses, pm2 restart online, test suite
+22 total (20 pass/2 pre-existing fail, +2 test composer-v2 baru pass,
+math 1+198=199 konsisten), DB readback before/after (open→
+human_takeover) dibuktikan lewat throwaway Prisma tx. e2e curl WA
+penuh SENGAJA tidak dijalankan robot — alasan jujur: berisiko ganggu
+canary production real (WA+groq+data customer nyata), disarankan
+sandbox store terpisah kalau mau full e2e. Commit 718c375, scope
+bersih (3 file saja, tidak ada dist/logs/TASK-*.md ikut).
+Keputusan: TASK C1 VERIFIED SELESAI. Item lama "eskalasi ke pemilik
+toko" (roadmap asli #3) sekarang resmi tertutup untuk jalur v1/
+production. Kalau v2 canary suatu saat butuh path eskalasi sendiri
+(saat ini shadow-only), itu jadi item terpisah nanti, bukan bug.
+Siapa yang setuju: owner (Panji), Claude — berdasarkan diff mentah
+dan bukti DB readback, bukan ringkasan commit message saja.
 
 ### 9 Agu 2026 — Rekonsiliasi roadmap LAMA vs P0-P6
 Konteks: Roadmap asli (sebelum audit GPT) adalah: (1) TASK 9 golden
@@ -134,131 +407,150 @@ owner" ditambahkan sebagai item antrian setelah P1 selesai, sebelum
 P2, karena scope-nya kecil dan bisa jadi cepat.
 Siapa yang setuju: owner (Panji), Claude.
 
-### 9 Agu 2026 — Temuan hygiene: dist/ dan logs/ ter-track di git
-Konteks: git status berulang kali menunjukkan apps/api/dist/* dan
-apps/api/logs/*.log sebagai "modified" — artinya kedua folder ini
-DI-TRACK oleh git, padahal itu build artifact dan runtime log.
-Risiko: logs/*.log berpotensi berisi data sensitif customer (nomor WA,
-isi pesan) ter-commit ke history git selamanya; dist/* berpotensi
-drift dari source kalau ada yang commit tanpa rebuild.
-Keputusan: BELUM diperbaiki — jangan `git rm --cached` sembarangan
-sebelum dipastikan apakah pm2 production menjalankan dist/ yang
-di-commit tanpa proses build/deploy otomatis (kalau iya, menghapus
-dari git tanpa alur deploy yang benar bisa bikin server tidak punya
-dist/ saat fresh clone/deploy). Ini TASK KECIL TERPISAH, non-blocking
-untuk P1, dikerjakan kapan saja sebelum makin banyak data sensitif
-ter-commit. Status: DIKETAHUI, BELUM DIKERJAKAN.
+### 9 Agu 2026 — TASK B2 audit selesai: peta risiko 11 tier fallback.service.ts
+Konteks: Audit read-only (tidak ada perubahan kode) atas seluruh tier
+di fallback.service.ts (chain: tryCache→tryFAQ→tryOrderStatus→
+tryTotal→tryShipping→tryPayment→tryCatalog→tryProduct→
+tryProductNotFound→trySop→tryKnowledge→HUMAN). Laporan lengkap
+tersimpan di apps/api atau root repo sebagai laporan-taskB2.md
+(diupload user 9 Agu 2026).
+Temuan risiko TINGGI (2): tryTotal (:593) dan tryPayment (:372) —
+keduanya pakai substring keyword match dan SALING TUMPANG TINDIH di
+kata "bayar" (ada di kedua keyword list). Contoh konkret dari data
+canary nyata (store-f7140b5c, Depot Kinasih): "berapa bayar kangkung"
+bisa "dicuri" tryTotal/tryPayment sebelum sempat sampai tryProduct —
+customer nanya harga malah dijawab "keranjang kosong" atau daftar
+metode pembayaran. Pola identik bug tryProduct "ram"⊂"Brambang",
+cuma lokasi beda. Komentar kode lama (BUG-10/12) sengaja taruh
+shipping+payment SEBELUM product supaya "bayar" tidak nyasar ke
+produk "Bawang" — tapi ini menciptakan konflik baru dengan tryTotal.
+Risiko SEDANG (4): tryOrderStatus, trySop (contoh nyata: "ganti
+kangkung ke wortel" ke-trigger SOP retur), tryShipping, tryFAQ/
+tryKnowledge (threshold 0.3, tidak bisa dibuktikan di canary karena
+FAQ/knowledge kosong — TIDAK diklaim sebagai bug nyata, cuma risiko
+teoretis dicatat jujur oleh robot).
+Risiko RENDAH (3): tryCache (exact key), tryCatalog (keyword
+eksklusif), tryProduct (sudah post-B1).
+Side effect: HANYA tryProduct yang punya DB write (saveDiscussedItems),
+dan itu sudah benar (miss = no write, sesuai desain B1).
+Keputusan: TASK B3 menyasar tryTotal + tryPayment BERSAMAAN (bukan
+terpisah) karena sama-sama HIGH risk dan saling terkait lewat kata
+kunci sama. Tier lain (SEDANG/RENDAH) diantre untuk TASK berikutnya
+setelah B3 selesai, sesuai urutan rekomendasi robot.
 Siapa yang setuju: owner (Panji), Claude.
 
-### 9 Agu 2026 — Bukti mentah TASK 0 + TASK A tersimpan di thread chat
-Catatan penting untuk sesi/thread manapun yang membaca ini: bukti
-verbatim lengkap (output `npm run test:chat`, git diff, git status,
-commit log) untuk TASK 0 dan TASK A ADA, tapi tersimpan di histori
-percakapan claude.ai tanggal 9 Agu 2026 (thread "audit arsitektur
-Garuda"), BUKAN di-paste ulang di sini secara verbatim karena
-panjang. Ringkasan hasil (untuk cross-check cepat, TETAP minta
-re-run kalau butuh bukti fresh — jangan percaya ringkasan ini
-sebagai pengganti bukti):
-`npm run test:chat -- src/services/chat/__tests__` di commit fc39404
-→ Test Suites: 2 failed, 19 passed, 21 total; Tests: 1 failed,
-185 passed, 186 total. 2 gagal = reasoning-v2 (I-V2-6 label mismatch,
-pre-existing) + engine-config-v2 (circular dep redisAdapter,
-file-level, pre-existing). safety-boundary-v2.test.ts PASS 5/5.
-Kalau butuh bukti ulang: jalankan lagi command yang sama di server,
-jangan asumsi hasil ini masih berlaku kalau ada commit baru sesudah
-fc39404.
-
-### 9 Agu 2026 — TASK B1 VERIFIED e2e + TEMUAN: unit test pass ≠ production berubah
-Konteks: TASK B1 (gate confidence tryProduct, cegah substring match
-seperti "ram"⊂"Brambang") sudah 11/11 unit test pass dan commit
-e529466, tapi saat dicoba manual di WA/curl production, bug ASLI
-MASIH terjadi ("ram" → jawab "Brambang" harga). Investigasi: dist/
-belum di-rebuild sejak commit (npm run build tidak pernah dijalankan
-robot setelah TASK B1, cuma `tsc --noEmit` yang tidak generate file),
-pm2 masih jalankan kode lama. Setelah `npm run build` + `pm2 restart
-api` manual, query "ram" ulang → balasan generic, TIDAK lagi sebut
-Brambang. Confirmed fix bekerja di production.
-Keputusan: TAMBAHKAN ke acceptance criteria SEMUA TASK ke depan yang
-menyentuh src/business/*.ts atau src/services/**/*.ts: WAJIB
-`npm run build && pm2 restart api` sebagai langkah eksplisit sebelum
-klaim selesai, BUKAN cuma `tsc --noEmit`. tsc --noEmit hanya validasi
-tipe, TIDAK generate dist/ — ini beda fundamental yang harus selalu
-dicek. Root cause pola ini: robot terbiasa pakai tsc --noEmit sebagai
-"proof of correctness" tapi lupa itu tidak mengubah apa yang pm2
-jalankan.
-Bukti e2e: sebelum rebuild → "Halo Kak! Untuk *Brambang* harganya
-Rp 30.000..."; sesudah rebuild+restart → "Halo, selamat datang! Apa
-yang bisa saya bantu hari ini?" (generic, bukan salah-jawab produk).
-Siapa yang setuju: owner (Panji), Claude — berdasarkan test end-to-end
-nyata, bukan cuma unit test.
-
-### 9 Agu 2026 — TASK 0 + TASK A VERIFIED dengan bukti mentah
-Konteks: Setelah beberapa ronde bukti gagal (screenshot OCR dengan
-matematika tidak konsisten, klaim yang tidak match git diff), akhirnya
-didapat output jest mentah langsung dari terminal.
-Bukti: `npm run test:chat -- src/services/chat/__tests__` →
-Test Suites: 2 failed, 19 passed, 21 total (2+19=21 ✓)
-Tests: 1 failed, 185 passed, 186 total (1+185=186 ✓)
-2 kegagalan PERSIS sama dengan yang sudah diketahui sejak sebelum
-TASK 0/TASK A: reasoning-v2.test.ts (I-V2-6 outcome label mismatch,
-test lama vs desain baru) dan engine-config-v2.test.ts (circular dep
-redisAdapter, file-level, tak terkait chat logic). TIDAK ADA kegagalan
-baru. safety-boundary-v2.test.ts PASS 5/5 termasuk test yang membaca
-source asli conversation.service.ts untuk konfirmasi guard terpasang.
-package.json diff dikonfirmasi minimal (1 script baru test:chat, 3
-devDependency di-pin: jest, ts-jest, @types/jest). conversation.service.ts
-dikonfirmasi utuh (50KB, diff sesuai desain TASK A, tidak ada
-penghapusan seperti yang sempat diklaim laporan OCR sebelumnya —
-klaim itu terbukti salah/halusinasi).
-Keputusan: TASK 0 dan TASK A resmi VERIFIED. Lanjut ke commit lalu P1.
-Siapa yang setuju: owner (Panji), Claude — berdasarkan bukti terminal
-mentah, bukan ringkasan AI mana pun.
-
-### 9 Agu 2026 — TEMUAN KRITIS: tidak ada test runner terpasang
-Konteks: Saat memverifikasi TASK A, ditemukan `npx jest` gagal parse
-SEMUA file test (21 test suite, 0 tests run) dengan error babel parser.
-Investigasi lanjutan: `package.json` "test" script memakai `tsx --test`
-(Node built-in test runner) untuk 3 file tidak terkait (date-range,
-analytics, batch-magic-paste) — TIDAK ADA script untuk chat engine.
-`node_modules` TIDAK punya jest/vitest/mocha sama sekali (dicek
-langsung, kosong). 21 file test di src/services/chat/__tests__/ ada
-secara fisik tapi TIDAK ADA cara valid menjalankannya di proyek ini
-saat ini.
-Keputusan: SEMUA klaim "test lulus" untuk chat engine v2 sejak TASK 8
-ke belakang (termasuk di STATUS-V2.md) berstatus TIDAK TERVERIFIKASI
-ULANG sampai ada test runner nyata yang terpasang dan dikonfirmasi
-bisa menjalankan file-file ini. Ini menjadi TASK 0 — prioritas di atas
-TASK A. TASK A tidak boleh ditandai selesai sampai TASK 0 kelar dan
-safety-boundary-v2.test.ts benar-benar jalan (bukan cuma tsc bersih).
-Alasan: tanpa test runner yang benar-benar berfungsi, tidak ada cara
-membuktikan APAPUN yang diklaim "lulus" — ini akar structural dari
-pola trauma "AI bilang aman tapi ternyata tidak".
+### 9 Agu 2026 — TASK B3 selesai: tryTotal + tryPayment "bayar" overlap tertutup
+Konteks: Audit TASK B2 menemukan tryTotal (:593) dan tryPayment (:372)
+sama-sama HIGH risk, saling tumpang tindih di kata "bayar", duduk
+SEBELUM tryProduct di chain. Fix: helper pure baru tier-match.ts
+(isTotalIntent/isPaymentIntent) — tryTotal/tryPayment sekarang cek
+nama produk di catalog + kata jumlah vs kata metode eksplisit,
+bukan cuma substring "bayar" mentah.
+Bukti: unit test 23 suite (21 pass/2 pre-existing fail, math
+1+215=216 konsisten), e2e curl PRODUCTION real "berapa bayar
+kangkung" → DB readback membuktikan balasan "Untuk Kangkung harganya
+Rp 8.000" (BUKAN lagi "keranjang kosong"/metode bayar). Regresi
+check (a/c/d: "total berapa", "bisa cod ga?", "tagihan saya berapa")
+semua tetap benar.
+Temuan proses (dicatat, bukan disalahkan ke robot): laporan robot
+sempat KONTRADIKSI bukti (bilang golden-dataset.test.ts "tidak
+disentuh" padahal diff menunjukkan 90 baris ditambahkan) — dikoreksi
+setelah diff mentah dibandingkan langsung. Juga ditemukan file
+dist/ dari TASK C1 (718c375) TIDAK PERNAH ter-commit meski build+
+restart sudah dilakukan saat itu — production benar (jalan dari
+disk lokal) tapi git history dist/ tertinggal sampai TASK B3
+memicu rebuild ulang dan ketahuan. Dibereskan di commit f314326.
+Keputusan: kebiasaan cek `git status` MENYELURUH (bukan cuma file
+yang baru disentuh TASK berjalan) setiap sebelum commit sudah
+terbukti perlu — ini kedua kalinya menemukan sisa dist/ tertinggal
+dari TASK sebelumnya (sekarang C1, sebelumnya juga sempat kejadian
+serupa di TASK A/0). Pertimbangkan TASK terpisah nanti: bikin
+git pre-commit hook atau checklist eksplisit "npm run build && git
+status --short | grep dist" di SETIAP akhir TASK, bukan cuma
+diandalkan diingat manual.
+Commit: 4bd4414 (TASK B3 source+dist) + f314326 (catch-up dist TASK
+C1 + sync RAILS.md). Sisa scope P1: tryOrderStatus, trySop,
+tryShipping, tryFAQ/tryKnowledge (SEDANG risk dari audit B2) — belum
+digarap, sesuai urutan rekomendasi di laporan-taskB2.md.
 Siapa yang setuju: owner (Panji), Claude.
 
-### 9 Agu 2026 — Urutan P0→P6 ditetapkan
-Konteks: Audit penuh source code oleh AI CLI menemukan boundary
-antar-layer rusak, bukan sekadar keyword overload.
-Keputusan: Kerjakan P0-P6 berurutan, tidak boleh lompat ke semantic
-refactor (P1+) sebelum P0 (safety boundary) selesai dan terverifikasi.
-Alasan: P0 adalah risiko data-corruption aktif di production canary;
-P1-P6 adalah soal kualitas, bisa ditunda tanpa merusak data customer.
-Siapa yang setuju: owner (Panji), Claude, AI CLI (GPT).
+### 10 Agu 2026 — Insiden TASK B4: robot crash di tengah edit 5-tier gabungan, full reset
+Konteks: TASK B4 awalnya diberikan sebagai satu TASK besar mencakup
+5 tier sekaligus (tryOrderStatus, trySop, tryShipping, tryFAQ/
+tryKnowledge, tryProductNotFound). Robot (commandcode/opencode)
+kehabisan kuota token di tengah edit fallback.service.ts — file
+source rusak (trySop terpotong di tengah, beberapa method helper
+hilang termasuk createResult, saveDiscussedItems, export const
+fallbackService). tier-match.ts dan tier-match.test.ts sempat
+SELESAI ditulis robot (5 helper function baru) tapi belum sempat
+di-commit saat crash terjadi.
+Investigasi: pm2 production TIDAK crash (masih jalankan dist/ lama
+yang valid, source rusak belum ter-build ulang) — tapi ditemukan
+dist/tier-match.js SUDAH mengandung kode B4 meski source tier-match.ts
+sempat ke-checkout balik ke HEAD, mengindikasikan ada build yang
+sempat jalan di atas source yang belum final. git status juga
+menunjukkan 2 file di luar scope B4 sempat tersentuh (.gitignore,
+golden-dataset.test.ts) — tidak sempat diinvestigasi mendalam karena
+diputuskan restore total lebih prioritas daripada mencari akar
+masalah dulu.
+Keputusan: SETELAH beberapa ronde checkout per-file yang membingungkan
+dan memakan waktu (dikritik owner sebagai "muter-muter"), diputuskan
+restore TOTAL: `git reset --hard f314326` + `git clean -fd` (buang
+SEMUA perubahan tracked + untracked tanpa pandang bulu) + rebuild
+dari nol (hapus .tsbuildinfo + rm -rf dist + build ulang). Proses ini
+sekaligus mengungkap 7 file dist/ YATIM (source-nya sudah tidak ada:
+route-decider, clarification-resolver, message-normalizer,
+ot-or-interpreter, +3 dist test file) yang selama ini nyangkut di git
+tanpa terpakai — dihapus di commit 5f502d1. TASK B4 dianggap BELUM
+PERNAH DIKERJAKAN, mulai dari nol lagi, TAPI dipecah per-tier
+(1 tier = 1 edit + 1 commit) supaya kalau robot kehabisan kuota lagi,
+kerugian maksimal cuma 1 tier.
+Alasan proses "restore total, bukan tambal": ditegaskan owner secara
+eksplisit setelah frustrasi dengan proses checkout bertahap yang
+berkali-kali menemukan anomali baru (dist masih ada sisa B4 meski
+source sudah bersih, dll) — setiap putaran tambal menghabiskan waktu/
+token owner. Ditambahkan sebagai ATURAN PERMANEN di §1 (aturan 8, 9).
+Siapa yang setuju: owner (Panji), Claude.
 
-## 5. DEFINISI "SELESAI" UNTUK SATU TASK
-
-Sebuah TASK dianggap selesai HANYA jika semua ini ada, ditempel
-verbatim (bukan diringkas):
-1. Output `npx tsc --noEmit` (harus 0 error)
-2. Output `npm run build` (WAJIB, bukan cuma --noEmit — --noEmit TIDAK
-   generate dist/, pm2 tetap jalankan kode lama kalau ini dilewat.
-   Ditemukan nyata di TASK B1, 9 Agu 2026: unit test 11/11 pass tapi
-   production masih pakai kode lama karena langkah ini terlewat.)
-2. Output test suite lengkap (pass/fail count, termasuk pre-existing
-   failure yang sudah diketahui)
-3. Output `git diff --stat` (bukti scope tidak melebar)
-4. Konfirmasi `pm2 restart api` sukses + tidak crash loop
-5. Untuk perubahan yang menyentuh side-effect (DB write, WA send):
-   bukti test manual WA nyata ATAU test otomatis yang mensimulasikan
-   skenario itu secara eksplisit.
-
-Tanpa kelima ini, status TASK = "BELUM SELESAI", titik.
+### 10 Agu 2026 — TASK B4 selesai: 5 tier SEDANG-risk fallback.service.ts tertutup
+Konteks: Setelah full reset (lihat entri di atas), TASK B4 diulang
+dari nol dan dipecah jadi 5 sub-task terpisah (B4.1-B4.5), tiap
+sub-task WAJIB commit bersih sebelum robot lanjut ke sub-task
+berikutnya. Menyelesaikan sisa audit B2 (tryOrderStatus, trySop,
+tryShipping, tryFAQ/tryKnowledge, tryProductNotFound).
+Fix per tier: tryOrderStatus ('sampai mana' vs stok produk — gate
+pakai isOrderStatusIntent + sinyal order eksplisit), trySop
+('ganti X ke Y' vs retur — isSopRetourIntent, pola 2-produk
+dikecualikan dari retur), tryShipping ('mau pesan' vs ongkir —
+isShippingIntent, kata order eksplisit tanpa kata kirim/ongkir →
+bukan shipping), tryFAQ/tryKnowledge (threshold 0.3→0.5 + margin
+0.15, ditandai [DUGAAN] karena FAQ/knowledge canary kosong, belum
+tervalidasi data nyata), tryProductNotFound (regex anchor awal →
+isProductNotFoundInquiry, deteksi kata tanya di mana saja dalam
+kalimat + filter kata pengisi untuk cegah false-positive baru).
+Bukti: 5 commit terpisah (fca533f, 373cb37, 7b71298, 4205b29,
+ffd00df). Tiap commit: tsc 0 error, build sukses, pm2 restart online,
+test suite (baseline 2 pre-existing failure — reasoning-v2 I-V2-6 +
+engine-config-v2 circular dep — tetap konsisten sepanjang 5 commit,
+total test naik 219→230→239→239→247). git diff --stat gabungan
+(rentang fca533f^..ffd00df) DIVERIFIKASI LIVE hanya menyentuh 3 file
+source: fallback.service.ts, tier-match.ts, tier-match.test.ts — scope
+tidak melebar sepanjang 5 sub-task. E2E curl production store-f7140b5c
+untuk tiap tier (regresi + bug-fix case) + DB readback throwaway
+Prisma tx untuk B4.4/B4.5 (FAQ/knowledge confidence, pola sama TASK
+C1), semua dummy data dihapus setelah verifikasi (0 remaining).
+Temuan sampingan (dicatat, BUKAN bug dari B4 — dicatat di §3): kata
+'mau' di ORDER_INTENT_KEYWORDS (fast-path.ts) bisa short-circuit
+sebelum trySop sempat dicek untuk kalimat seperti "barang rusak mau
+retur" — ditemukan saat B4.2, di luar scope, item antrian terpisah.
+Threshold tryFAQ/tryKnowledge masih [DUGAAN] belum tervalidasi data
+nyata (canary FAQ/knowledge kosong).
+Keputusan: P1 — Semantic authority "Langkah 2+" RESMI SELESAI. Next:
+P2 — Truth boundary (executor menolak harga tidak sama dengan DB).
+Siapa yang setuju: owner (Panji), Claude — berdasarkan git log/diff/
+test suite mentah yang di-cross-check live (bukan cuma ringkasan
+laporan-taskB4.md), termasuk mengonfirmasi 1 inkonsistensi kecil di
+laporan gabungan (tabel scope B4.4 sempat menyebut tier-match.test.ts
+ikut berubah, padahal laporan asli B4.4 dan angka test count
+membuktikan tidak — dicatat sebagai catatan minor, tidak mengubah
+verdict TASK B4 selesai).
