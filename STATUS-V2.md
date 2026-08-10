@@ -190,3 +190,13 @@ Audit read-only WorkspaceV2 vs legacy `ExtractedEntities`. Laporan penuh:
 Saran urutan fix di §7 laporan-taskP3-audit.md. **Belum diperbaiki** — task ini
 read-only saja per instruksi.
 
+
+## UPDATE 10/8 — P3 (CONTEXT BOUNDARY) CLOSED
+T1-T4 tertutup (workspace_v2 kolom baru, shape extractedEntities disatukan
+OBJECT, v1->v2 migrasi legacy state, optimistic lock RMW). Commit
+c164729/3780453/eb74929/099967a/fd08ba3. Test baseline tetap 2 failed/1
+failed (tidak nambah). Race test T4: before 0/10 both-saved -> after 10/10.
+Sisa belum digarap (di luar scope P3, item antrian): T5 fallback tier
+overlap (RENDAH), appendMessage lastMessages race (belum diklasifikasi).
+NEXT: P4 - Remove second brain (extractAndSaveOrder berhenti jadi
+interpreter kedua untuk pesan yang sudah diproses v2).
