@@ -129,16 +129,15 @@ export class ConversationService {
       };
 
       try {
-        // 1. Load workspace dari DB (extractedEntities)
-        // Using context.extractedEntities, assuming getOrCreateContext returns context with extractedEntities directly or accessible via contextRow
-        // Let's use the context passed as a raw object (as seen in context definition)
-        const ctxRow = await prisma.conversationContext.findUnique({
-            where: { conversationId },
-            select: { extractedEntities: true }
-        });
-        
-        // Data di DB (JSON) sudah diparse otomatis oleh Prisma menjadi object
-        const workspace = loadWorkspace(JSON.stringify(ctxRow?.extractedEntities || {}));
+         // 1. Load workspace dari kolom baru `workspace_v2` (T1 fix P3.1)
+         const ctxRow = await prisma.conversationContext.findUnique({
+             where: { conversationId },
+             select: { workspace_v2: true }
+         });
+         
+         // Data di DB (JSON) sudah diparse otomatis oleh Prisma menjadi object
+         // loadWorkspace (workspace.ts) defensif: kolom kosong/null -> WorkspaceV2 default kosong
+         const workspace = loadWorkspace(JSON.stringify(ctxRow?.workspace_v2 || {}));
         
         // 2. Auto-drop deferred pending
         for (const pending of workspace.pendings) {
@@ -228,9 +227,9 @@ export class ConversationService {
           }
 
           try {
-            // Save workspace ke DB
-            const resolvedContextEntities = saveWorkspace(workspace);
-            await conversationContextService.updateExtractedEntities(conversationId, JSON.parse(resolvedContextEntities));
+            // Save workspace ke kolom `workspace_v2` (T1 fix P3.1 — bukan lewat updateExtractedEntities yang NO-OP)
+            const resolvedWs = saveWorkspace(workspace);
+            await conversationContextService.updateWorkspaceV2(conversationId, JSON.parse(resolvedWs));
 
             // Compose reply dengan total dari DB cart
             const resolvedCart = await this.getCartFromDb(conversationId);
@@ -311,10 +310,10 @@ export class ConversationService {
           }
         }
         
-        try {
-          // 5. Save workspace ke DB
-          const updatedContextEntities = saveWorkspace(workspace);
-          await conversationContextService.updateExtractedEntities(conversationId, JSON.parse(updatedContextEntities));
+         try {
+          // 5. Save workspace ke kolom `workspace_v2` (T1 fix P3.1 — bukan lewat updateExtractedEntities yang NO-OP)
+          const updatedWorkspace = saveWorkspace(workspace);
+          await conversationContextService.updateWorkspaceV2(conversationId, JSON.parse(updatedWorkspace));
 
           // 6. Compose reply pakai composer-v2
           const reply = composeReply({
