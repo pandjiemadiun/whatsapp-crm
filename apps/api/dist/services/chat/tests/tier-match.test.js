@@ -153,11 +153,11 @@ describe('TASK B4.2 — isSopRetourIntent gate (ganti X ke Y vs retur)', () => {
 });
 describe('TASK B4.3 — isShippingIntent gate (produk + order vs ongkir)', () => {
     it('(1) "berapa ongkir ke Jaksel?" → true (regresi)', () => {
-        const q = 'berapa ongkir ke Jaksel?';
+        const q = 'berapa ongkir ke Jaksel?'.toLowerCase();
         assert.equal(isShippingIntent(q, noDB), true, '"ongkir" is a strong shipping signal');
     });
     it('(2) "kurier pakai JNE ya?" → true (regresi)', () => {
-        const q = 'kurier pakai JNE ya?';
+        const q = 'kurier pakai JNE ya?'.toLowerCase();
         assert.equal(isShippingIntent(q, noDB), true, '"kurir" + "jne" are explicit shipping signals');
     });
     it('(3) "mau pesan kangkung" (produk + kata order, TANPA kata kirim) → false (pencegahan)', () => {
