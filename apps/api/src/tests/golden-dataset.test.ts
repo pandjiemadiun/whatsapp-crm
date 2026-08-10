@@ -12,7 +12,6 @@
  *
  * Mocks:
  *   - groqAdapter.generate → canned JSON (I8: max 1 LLM per turn)
- *   - orderService.extractAndSaveOrder → no-op (prevents real LLM in order extraction)
  *   - orderService.detectDoneOrdering → false (prevents finalizeDraftOrder side-effects)
  *   - adapters.logger.info → captures 'Pipeline audit' entries
  */
@@ -57,7 +56,6 @@ let auditLogs: Array<Record<string, unknown>> = [];
 const originalGenerate = groqAdapter.generate.bind(groqAdapter);
 const originalLoggerInfo = adapters.logger.info;
 const OrderProto = Object.getPrototypeOf(orderService);
-const originalExtractOrder = OrderProto.extractAndSaveOrder;
 const originalDetectDone = OrderProto.detectDoneOrdering;
 
 // ──────────────────────────────────────────────────────────
@@ -248,9 +246,7 @@ before(async () => {
   // Mock groqAdapter.generate — intercepts interpreter LLM calls
   (groqAdapter as any).generate = mockGenerate;
 
-  // Mock orderService to prevent real LLM calls in extractAndSaveOrder
-  // and to prevent finalizeDraftOrder side-effects (detectDoneOrdering)
-  OrderProto.extractAndSaveOrder = async () => null;
+  // Mock orderService to prevent finalizeDraftOrder side-effects (detectDoneOrdering)
   OrderProto.detectDoneOrdering = () => false;
 
   // Capture audit logs instead of forwarding to winston
@@ -268,7 +264,6 @@ before(async () => {
 after(async () => {
   // Restore originals
   (groqAdapter as any).generate = originalGenerate;
-  OrderProto.extractAndSaveOrder = originalExtractOrder;
   OrderProto.detectDoneOrdering = originalDetectDone;
   (adapters.logger as any).info = originalLoggerInfo;
 
