@@ -106,7 +106,7 @@ export interface ConversationContextData {
   /** Riwayat pesan terakhir (maks 10) */
   lastMessages: ConversationMessage[];
   /** Entitas yang sudah diekstrak dari percakapan */
-  extractedEntities: ExtractedEntity[];
+  extractedEntities: ExtractedEntities;
   /** Intent pengguna terakhir yang terdeteksi */
   userIntent: string | null;
   /** Kunci sesi unik (SHA256 dari conversationId + timestamp) */
@@ -264,6 +264,8 @@ export interface ExtractedEntities {
 pendingClarification?: PendingClarification | null;
   /** BAGIAN 2.4 — Snapshot sebelum cart mutation (untuk rollback) */
   previousMutation?: { cartSnapshot: ConfirmedItem[]; message: string } | null;
+  /** Tok entitas mentah (product/order/quantity/destination) yang diekstrak — dilacak per-conversation */
+  trackedEntities?: ExtractedEntity[];
 }
 
 /**
