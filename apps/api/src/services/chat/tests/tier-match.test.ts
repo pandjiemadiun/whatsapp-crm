@@ -12,6 +12,8 @@ import {
   isOrderStatusIntent,
   isSopRetourIntent,
   isShippingIntent,
+  isProductNotFoundInquiry,
+  PRODUCT_INQUIRY_WORDS,
   TOTAL_TRIGGERS,
   PAYMENT_EXPLICIT_METHODS,
   ORDER_STATUS_KEYWORDS,
@@ -243,5 +245,73 @@ describe('TASK B4.3 — isShippingIntent gate (produk + order vs ongkir)', () =>
     assert.equal(SHIPPING_KEYWORDS.includes('kirim'), true);
     assert.equal(SHIPPING_KEYWORDS.includes('jne'), true);
     assert.equal(SHIPPING_KEYWORDS.includes('ambil sendiri'), true);
+  });
+});
+
+describe('TASK B4.5 — isProductNotFoundInquiry (match inquiry word di mana saja)', () => {
+  it('(1) "ada brambang?" → isInquiry true, askedTerms=["brambang"] (regresi, existing di awal)', () => {
+    const q = 'ada brambang?'.toLowerCase();
+    const r = isProductNotFoundInquiry(q);
+    assert.equal(r.isInquiry, true);
+    assert.equal(r.askedTerms.length, 1);
+    assert.equal(r.askedTerms[0], 'brambang');
+  });
+
+  it('(2) "kak nanya stok kangkung?" → isInquiry true, askedTerms=["kangkung"] (BUG lama: kata pertama "kak" bukan inquiry word)', () => {
+    const q = 'kak nanya stok kangkung?'.toLowerCase();
+    const r = isProductNotFoundInquiry(q);
+    assert.equal(r.isInquiry, true);
+    assert.equal(r.askedTerms.length, 1);
+    assert.equal(r.askedTerms[0], 'kangkung');
+  });
+
+  it('(3) "kentang enak buat sup ya kak" → isInquiry FALSE (bukan pertanyaan ketersediaan, tidak ada inquiry word)', () => {
+    const q = 'kentang enak buat sup ya kak'.toLowerCase();
+    const r = isProductNotFoundInquiry(q);
+    assert.equal(r.isInquiry, false);
+    assert.equal(r.askedTerms.length, 0);
+  });
+
+  it('(4) "ada gak durian?" (durian TIDAK ada di katalog) → isInquiry true, askedTerms=["durian"]', () => {
+    const q = 'ada gak durian?'.toLowerCase();
+    const r = isProductNotFoundInquiry(q);
+    assert.equal(r.isInquiry, true);
+    // askedTerms harus mengandung "durian" (kata kunci setelah inquiry word)
+    assert.ok(r.askedTerms.includes('durian'), 'askedTerms must include "durian"');
+    // Verifikasi hasDbMatch logic (simulasi tryProductNotFound):
+    const askedWords = r.askedTerms.filter(w => w.length > 1 && !['kg', 'gr', 'ml', 'biji', 'bungkus'].includes(w));
+    const hasDbMatch = askedWords.some(w => CATALOG.some(dn => dn.includes(w)));
+    assert.equal(hasDbMatch, false, '"durian" not in canary catalog → hasDbMatch false → tryProductNotFound returns "belum tersedia"');
+  });
+
+  it('(4b) "ada kangkung?" (kangkung ADA di katalog) → isInquiry true, hasDbMatch true → tryProductNotFound return null', () => {
+    const q = 'ada kangkung?'.toLowerCase();
+    const r = isProductNotFoundInquiry(q);
+    assert.equal(r.isInquiry, true);
+    assert.ok(r.askedTerms.includes('kangkung'));
+    // hasDbMatch: "kangkung" ada di CATALOG → true → tryProductNotFound return null
+    const askedWords = r.askedTerms.filter(w => w.length > 1 && !['kg', 'gr', 'ml', 'biji', 'bungkus'].includes(w));
+    const hasDbMatch = askedWords.some(w => CATALOG.some(dn => dn.includes(w)));
+    assert.equal(hasDbMatch, true, '"kangkung" in canary catalog → hasDbMatch true → tryProductNotFound returns null (defer to tryProduct)');
+  });
+
+  it('(5) "beli lalu jual sama ya" → isInquiry FALSE (inquiry word di tengah, hanya filler setelahnya, tidak end with ?)', () => {
+    const q = 'beli lalu jual sama ya'.toLowerCase();
+    const r = isProductNotFoundInquiry(q);
+    assert.equal(r.isInquiry, false, '"beli...jual sama ya" — inquiry word in passing, only filler words after → no false positive');
+  });
+
+  it('(6) "stok kangkung berapa" → isInquiry true (inquiry word di awal, tidak end with ?) — regresi ke-awal', () => {
+    const q = 'stok kangkung berapa'.toLowerCase();
+    const r = isProductNotFoundInquiry(q);
+    assert.equal(r.isInquiry, true);
+    assert.ok(r.askedTerms.includes('kangkung'));
+  });
+
+  it('sanity: PRODUCT_INQUIRY_WORDS mengandung semua kata inquiry B4.2', () => {
+    const expected = ['ada', 'boleh', 'jual', 'beli', 'stok', 'ready', 'kosong', 'tersedia', 'punya'];
+    for (const w of expected) {
+      assert.equal(PRODUCT_INQUIRY_WORDS.includes(w), true, `PRODUCT_INQUIRY_WORDS missing: ${w}`);
+    }
   });
 });

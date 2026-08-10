@@ -318,4 +318,45 @@ export function isShippingIntent(lower, catalogNames) {
     // Selain itu, keyword shipping asli tetap berlaku.
     return SHIPPING_KEYWORDS.some((kw) => lower.includes(kw));
 }
+// ────────────────────────────────────────── tryProductNotFound inquiry ─────────
+/** Kata inquiry ketersediaan produk — match di mana saja, bukan hanya awal. */
+export const PRODUCT_INQUIRY_WORDS = [
+    'ada', 'boleh', 'jual', 'beli', 'stok', 'ready', 'kosong', 'tersedia', 'punya',
+];
+/** Kata pengisi yang tidak dianggap "kata benda" hasil inquiry.
+ *  Mencegah false-positive pada kalimat panjang yang sekadar menyebut kata
+ *  inquiry sambil lalu (bukan pertanyaan) — seperti "beli lalu jual sama ya". */
+const INQUIRY_FILLER_WORDS = new Set([
+    'gak', 'ga', 'ya', 'kak', 'kakak', 'dong', 'sih', 'aja', 'juga',
+    'sama', 'lalu', 'dulu', 'nih', 'saja', 'tolong', 'minta',
+]);
+/**
+ * TASK B4.5 — Deteksi inquiry "ada/stok/etc" di mana saja, bukan hanya
+ * di awal kalimat. Bug (laporan-taskB2.md `:338`): regex `^(ada|...)`
+ * hanya match kalau kata inquiry di AWAL — "kak nanya stok kangkung?"
+ * miss (kata pertama 'kak').
+ *
+ * Heuristik: inquiry word + kata benda setelahnya (bukan filler saja),
+ * ATAU kalimat diakhiri '?'.
+ *
+ * @param lower query yang sudah trim().toLowerCase()
+ * @returns { isInquiry, askedTerms } — askedTerms = kata benda setelah inquiry
+ */
+export function isProductNotFoundInquiry(lower) {
+    const inquiryWord = PRODUCT_INQUIRY_WORDS.find((w) => lower.includes(w));
+    if (!inquiryWord)
+        return { isInquiry: false, askedTerms: [] };
+    const inquiryIdx = lower.indexOf(inquiryWord);
+    const afterInquiry = lower.slice(inquiryIdx + inquiryWord.length).trim();
+    const cleaned = afterInquiry.replace(/[.,!?]+$/, '').trim();
+    const rawTerms = cleaned.split(/\s+/).filter((w) => w.length > 0);
+    // Filter kata pengisi supaya "beli lalu jual sama ya" tidak false-positive.
+    const terms = rawTerms.filter((w) => !INQUIRY_FILLER_WORDS.has(w));
+    const hasTerms = terms.length > 0;
+    const endsWithQuestion = lower.trim().endsWith('?');
+    // Heuristik: inquiry word + kata benda setelahnya, ATAU kalimat '?'.
+    if (!hasTerms && !endsWithQuestion)
+        return { isInquiry: false, askedTerms: [] };
+    return { isInquiry: true, askedTerms: hasTerms ? terms : [] };
+}
 //# sourceMappingURL=tier-match.js.map
