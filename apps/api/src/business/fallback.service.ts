@@ -23,7 +23,9 @@ import { shouldAnswerSingleProduct } from '../services/chat/product-match.js';
 // dari harga vs total/keranjang, dan metode bayar vs pertanyaan harga).
 // TASK B4.1 — pure order-status intent classification (cegah "sampai mana <produk>"
 // disalahartikan sebagai status order).
-import { isTotalTrigger, isTotalIntent, isPaymentIntent, isOrderStatusIntent, ORDER_STATUS_KEYWORDS, isSopRetourIntent, SOP_RETUR_KEYWORDS } from '../services/chat/tier-match.js';
+// TASK B4.3 — pure shipping intent classification (cegah "mau pesan <produk>"
+// disalahartikan sebagai tanya ongkir).
+import { isTotalTrigger, isTotalIntent, isPaymentIntent, isOrderStatusIntent, ORDER_STATUS_KEYWORDS, isSopRetourIntent, SOP_RETUR_KEYWORDS, isShippingIntent, SHIPPING_KEYWORDS } from '../services/chat/tier-match.js';
 
 // In-memory cache for store profiles (TTL: 10 minutes)
 const storeProfileCache = new Map<string, { profile: string; expiresAt: number }>();
@@ -451,19 +453,19 @@ async getResponse(
   private async tryShipping(context: ConversationContext, query: string, customerCity: string | null = null, askIdentity: boolean = true): Promise<ResponseOption | null> {
     const lower = query.trim().toLowerCase();
 
-    // Keyword gate — only shipping-specific terms (not ambiguous "cod" alone).
+    // TASK B4.3 — keyword gate cepat pakai SHIPPING_KEYWORDS (di tier-match.ts).
     // "cod" is payment-tier; "bisa cod" is shipping only if store uses COD
     // as delivery method (pickup). Let tryPayment handle the "cod" ambiguity.
-    const shippingKeywords = [
-      'ongkir', 'kirim', 'pengiriman', 'ekspedisi', 'biaya kirim',
-      'berapa ongkos', 'ambil sendiri', 'pickup', 'dikirim', 'ongkos kirim',
-      'kurir', 'jne', 'j&t', 'sicepat', 'anteraja', 'gosend', 'grab',
-      'bisa diantar', 'diantar', 'pengirimannya',
-    ];
-    const hasKeyword = shippingKeywords.some(kw => lower.includes(kw));
-    if (!hasKeyword) return null;
+    const matched = SHIPPING_KEYWORDS.some((kw) => lower.includes(kw));
+    if (!matched) return null;
 
     try {
+      // TASK B4.3 — refined gate: produk + kata order ('mau'/'pesan'/'order')
+      // tanpa kata kirim/ongkir eksplisit → ini order, bukan tanya ongkir.
+      const catalogNames = (await productService.listActiveProducts(context.storeId)).map((p) =>
+        p.name.toLowerCase()
+      );
+      if (!isShippingIntent(lower, catalogNames)) return null;
       const store = await prisma.store.findUnique({
         where: { id: context.storeId },
         select: {

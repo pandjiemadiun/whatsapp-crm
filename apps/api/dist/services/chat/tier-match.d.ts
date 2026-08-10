@@ -82,4 +82,20 @@ export declare const SOP_RETUR_KEYWORDS: readonly string[];
  * @param catalogNames  nama produk toko (lowercase)
  */
 export declare function isSopRetourIntent(lower: string, catalogNames: readonly string[]): boolean;
+/** Keyword shipping asli — tetap berlaku sebagai fallback di isShippingIntent. */
+export declare const SHIPPING_KEYWORDS: readonly string[];
+/**
+ * TASK B4.3 — Gate cerdas untuk tryShipping.
+ *
+ * Aturan:
+ * - Jika query mengandung nama produk katalog + kata order eksplisit
+ *   ('mau'/'pesan'/'order') TANPA kata kirim/ongkir eksplisit
+ *   ('ongkir'/'kirim'/'ekspedisi'/'kurir'/nama jasa kirim) → return false
+ *   (ini order, bukan tanya ongkir).
+ * - Selain itu, keyword shipping asli tetap berlaku seperti sebelumnya.
+ *
+ * @param lower         query yang sudah trim().toLowerCase()
+ * @param catalogNames  nama produk toko (lowercase)
+ */
+export declare function isShippingIntent(lower: string, catalogNames: readonly string[]): boolean;
 //# sourceMappingURL=tier-match.d.ts.map
