@@ -98,4 +98,22 @@ export declare const SHIPPING_KEYWORDS: readonly string[];
  * @param catalogNames  nama produk toko (lowercase)
  */
 export declare function isShippingIntent(lower: string, catalogNames: readonly string[]): boolean;
+/** Kata inquiry ketersediaan produk — match di mana saja, bukan hanya awal. */
+export declare const PRODUCT_INQUIRY_WORDS: readonly string[];
+/**
+ * TASK B4.5 — Deteksi inquiry "ada/stok/etc" di mana saja, bukan hanya
+ * di awal kalimat. Bug (laporan-taskB2.md `:338`): regex `^(ada|...)`
+ * hanya match kalau kata inquiry di AWAL — "kak nanya stok kangkung?"
+ * miss (kata pertama 'kak').
+ *
+ * Heuristik: inquiry word + kata benda setelahnya (bukan filler saja),
+ * ATAU kalimat diakhiri '?'.
+ *
+ * @param lower query yang sudah trim().toLowerCase()
+ * @returns { isInquiry, askedTerms } — askedTerms = kata benda setelah inquiry
+ */
+export declare function isProductNotFoundInquiry(lower: string): {
+    isInquiry: boolean;
+    askedTerms: string[];
+};
 //# sourceMappingURL=tier-match.d.ts.map

@@ -25,7 +25,9 @@ import { shouldAnswerSingleProduct } from '../services/chat/product-match.js';
 // disalahartikan sebagai status order).
 // TASK B4.3 — pure shipping intent classification (cegah "mau pesan <produk>"
 // disalahartikan sebagai tanya ongkir).
-import { isTotalTrigger, isTotalIntent, isPaymentIntent, isOrderStatusIntent, ORDER_STATUS_KEYWORDS, isSopRetourIntent, SOP_RETUR_KEYWORDS, isShippingIntent, SHIPPING_KEYWORDS } from '../services/chat/tier-match.js';
+// TASK B4.5 — pure inquiry detection untuk tryProductNotFound (match inquiry
+// word di mana saja, bukan hanya di awal kalimat).
+import { isTotalTrigger, isTotalIntent, isPaymentIntent, isOrderStatusIntent, ORDER_STATUS_KEYWORDS, isSopRetourIntent, SOP_RETUR_KEYWORDS, isShippingIntent, SHIPPING_KEYWORDS, isProductNotFoundInquiry } from '../services/chat/tier-match.js';
 
 // In-memory cache for store profiles (TTL: 10 minutes)
 const storeProfileCache = new Map<string, { profile: string; expiresAt: number }>();
@@ -362,9 +364,12 @@ async getResponse(
     const lower = query.trim().toLowerCase();
     const greetingWords = ['halo', 'hai', 'permisi', 'selamat', 'pagi', 'siang', 'sore', 'malam', 'hallo'];
     if (greetingWords.some(g => lower.includes(g))) return null;
-    const inquiryMatch = lower.match(/^(ada|boleh|jual|beli|stok|ready|kosong|tersedia|punya)\s+(.+?)(\?|$)/);
-    if (!inquiryMatch) return null;
-    const askedProduct = inquiryMatch[2].replace(/[.,!?]/g, '').trim();
+    // TASK B4.5 — ganti regex ^() (hanya match di awal) dengan
+    // isProductNotFoundInquiry (match inquiry word di mana saja).
+    // Pertahankan semua logic setelahnya (askedWords, hasDbMatch).
+    const { isInquiry, askedTerms } = isProductNotFoundInquiry(lower);
+    if (!isInquiry) return null;
+    const askedProduct = askedTerms.join(' ');
     if (!askedProduct || askedProduct.length < 2) return null;
     try {
       const products = await productService.listActiveProducts(context.storeId);
