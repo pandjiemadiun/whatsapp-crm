@@ -12,6 +12,7 @@
  *      merekam status, tidak menghasilkan harga/stok. (I15)
  */
 import type { WorkspaceV2, PendingV2, DraftCartOp, ActV2 } from './types-v2.js';
+import type { ExtractedEntities, PendingClarification } from '../../domain/types.js';
 import {
   DEFERRED_AUTO_DROP_TURNS,
   SELECTION_CONFIDENCE_THRESHOLD,
@@ -247,4 +248,110 @@ export function getSummary(ws: WorkspaceV2): string {
 export function setSummary(ws: WorkspaceV2, summary: string): WorkspaceV2 {
   ws.conversation_summary = summary;
   return ws;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// v1 legacy -> v2 migration (T3 fix, P3.2)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Cek apakah legacy extractedEntities masih "ada isi" yang perlu dimigrasi ke v2.
+ * Hanya migrasi bila ada confirmedItems atau pendingClarification — field in-itu
+ * yang punya padanan v2 (draft_cart / pendings). Field lain (recipientName,
+ * shippingAddress, discussedItems) tidak beralih otomatis pada turn pertama
+ * kecuali memang ada keranjang/klarifikasi untuk dilanjutkan.
+ */
+export function hasLegacyState(legacy: ExtractedEntities | null | undefined): boolean {
+  if (!legacy || typeof legacy !== 'object') return false;
+  const hasCart = Array.isArray(legacy.confirmedItems) && legacy.confirmedItems.length > 0;
+  const hasPending = !!legacy.pendingClarification;
+  return hasCart || hasPending;
+}
+
+/**
+ * Ambil opsi clarification sebagai string[] (v2 PendingV2.options).
+ * Legacy bisa simpan opsi sebagai ClarificationOption[] (object) atau rawOptions
+ * (string[], backward compat). Normalisasi ke string label.
+ */
+function clarificationOptionsToStrings(pc: PendingClarification): string[] {
+  const rawOptions = (pc as unknown as { rawOptions?: unknown }).rawOptions;
+  if (Array.isArray(rawOptions)) {
+    return rawOptions.filter((s): s is string => typeof s === 'string');
+  }
+  if (Array.isArray(pc.options)) {
+    return pc.options
+      .map((o): string =>
+        typeof o === 'string' ? o : (o?.label ?? o?.id ?? '')
+      )
+      .filter((s) => s.length > 0);
+  }
+  return [];
+}
+
+/**
+ * Coerce legacy qty (string|number|null) ke number positif.
+ */
+function coerceQty(qty: string | number | null | undefined): number {
+  if (typeof qty === 'number' && !isNaN(qty) && qty > 0) return qty;
+  if (typeof qty === 'string') {
+    const n = Number(qty.replace(/[^\d.]/g, ''));
+    if (!isNaN(n) && n > 0) return n;
+  }
+  return 1;
+}
+
+/**
+ * Migrasi satu arah: legacy ExtractedEntities (kolom `extractedEntities`) ke
+ * WorkspaceV2 (kolom `workspace_v2`).
+ *
+ * Pemetaan (T3 fix — P3.2):
+ *   - confirmedItems  -> draft_cart   (action:'add', status:'confirmed', qty_source:'default')
+ *   - pendingClarification -> pendings  (status:'active'; question/options/asked_at/retry_count
+ *                                       dipetakan ke PendingV2; retry_count -> attempts)
+ *   - recipientName / shippingAddress / lastAmbiguousPrompt -> resolved_facts
+ *     (v2 tidak punya slot eksplisit; masukkan ke resolved_facts yang generik)
+ * Field tanpa padanan (discussedItems, previousMutation) tidak dipetakan —
+ * biarkan default kosong.
+ *
+ * PURE: tidak ada I/O; dipanggil di titik baca conversation.service.ts:141.
+ * Hasil mapping ini kemudian di-persist ke `workspace_v2` oleh caller agar turn
+ * berikutnya pakai workspace_v2 sebagai sumber kebenaran (tidak re-map legacy).
+ */
+export function mapLegacyEntitiesToWorkspace(legacy: ExtractedEntities): WorkspaceV2 {
+  const pendings: PendingV2[] = [];
+
+  if (legacy.pendingClarification) {
+    const pc = legacy.pendingClarification;
+    pendings.push({
+      id: pc.id || `migrate:${pc.asked_at}`,
+      question: pc.question,
+      options: clarificationOptionsToStrings(pc),
+      status: 'active',
+      attempts: typeof pc.retry_count === 'number' ? pc.retry_count : 0,
+      deferred_turns: 0,
+      asked_at: pc.asked_at,
+    });
+  }
+
+  const draft_cart: DraftCartOp[] = (legacy.confirmedItems || []).map((it) => ({
+    action: 'add' as const,
+    product: it.product,
+    qty: coerceQty(it.qty),
+    qty_source: 'default' as const,
+    status: 'confirmed' as const,
+  }));
+
+  const resolved_facts: Record<string, unknown> = {};
+  if (legacy.recipientName) resolved_facts.recipientName = legacy.recipientName;
+  if (legacy.shippingAddress) resolved_facts.shippingAddress = legacy.shippingAddress;
+  if (legacy.lastAmbiguousPrompt) resolved_facts.lastAmbiguousPrompt = legacy.lastAmbiguousPrompt;
+
+  return {
+    schema_version: '',
+    conversation_summary: '',
+    pendings,
+    draft_cart,
+    resolved_facts,
+    options_presented: [],
+  };
 }
