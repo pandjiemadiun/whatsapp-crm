@@ -192,7 +192,7 @@ Beberapa observasi penting (semua di kolom `extractedEntities` yang SAMA, row
 | T1 | WorkspaceV2 tidak pernah persisten → **memori antar-turn v2 hilang total** (pendings, draft_cart, resolved_facts, options_presented, conversation_summary) | v2 save 233/317 (NO-OP) → load 141 | **TINGGI** | Turn 1 v2 minta klarifikasi → set pending di WorkspaceV2 (in-mem). Turn 2 customer jawab "iya" → v2 loadWorkspace baca kolom (hanya legacy/kosong) → `pendings:[]` → pending hilang → customer disuruh ulang dari awal. Untuk canary (`engine=v2`) ini bug data-nyata tiap sesi berkelanjutan. |
 | T2 | Kolom `extractedEntities` bentuknya tidak konsisten (ARRAY di updateExtractedEntities/mergeEntities vs OBJECT di parseExtractedEntities/setPendingClarification/modifyCart) → **parseEntity kosongkan data** | conversation-context.service.ts:116 (array) vs :199/:318/:1397/:210 (object) | **TINGGI** | Penulis terakhir berupa array → `parseExtractedEntities` (object-guard, 210) `return {discussedItems:[], confirmedItems:[]}` → confirmedItems/pendingClarification hilang. Saling eksklusi antar penulis. |
 | T3 | v2 membaca kolom legacy sebagai WorkspaceV2 → **v2 tidak melihat data v1** (confirmedItems, pendingClarification, recipientName, shippingAddress) | conversation.service.ts:141 loadWorkspace | **SEDANG** | Jika engine beralih v2 (atau canary) setelah v1 mengumpulkan state → v2 "buta" state lama → bisa menanyakan ulang / kehilangan cart yang sudah dikonfirmasi v1. |
-| T4 | Race condition last-write-wins pada kolom `extractedEntities` (read-modify-write tanpa transaksi) | conversation-context.service.ts:modifyCart/setPendingClarification/updateExtractedEntities — semua `findUnique`→`update` | **SEDANG** | Dua pesan hampir bersamaan → satu update menimpa pending/cart lain → klarifikasi/cart customer termutation. (Dokumen RAILS §2 sudah mencatat `modifyCart` non-transaksional.) |
+| T4 | Race condition last-write-wins pada kolom `extractedEntities` (read-modify-write tanpa transaksi) | conversation-context.service.ts:modifyCart/setPendingClarification/updateExtractedEntities (+ updateWorkspaceV2 P3.1) — semua `findUnique`→`update` | **SELESAI (FIXED)** | Dua pesan hampir bersamaan → satu update menimpa pending/cart lain. **Diperbaiki P3.4** lewat optimistic locking `atomicCas()` (compare `updatedAt` @updatedAt sebelum write, retry pada mismatch) — lihat §9. |
 | T5 | Fallback tier (fallback.service.ts:997/1003) menulis `extractedEntities` ke kolom yang sama → **bisa menimpa state** v1/v2 secara diam-diam | fallback.service.ts:938/949/997/1003 | **RENDAH** | Hanya berlaku bila fallback mengembalikan entitas; dampak lokal & sudah dikelola catch. Tapi memperparah ketidakkonsistenan shape (T2). |
 
 ## 7. Rekomendasi urutan fix (bukan bagian P3 — untuk TASK berikutnya)
@@ -213,10 +213,20 @@ Urutan didasarkan pada Risiko × Dampak produksi (canary v2 aktif):
 3. **(SEDANG) T3 — v2 loadWorkspace harus mampu memetakan legacy→v2**
    (map confirmedItems→draft_cart, pendingClarification→pendings) agar transisi
    v1→v2 tak buta.
-4. **(SEDANG) T4 — Wrap read-modify-write (`modifyCart`,
-   `setPendingClarification`, `updateExtractedEntities`) dalam transaksi Prisma
-   (`$transaction` / `prisma.$transaction([read, write])`) atau optimistic
-   locking (`updatedAt` compare) untuk cegah race.
+4. **(SELESAI) T4 — Wrap read-modify-write (`modifyCart`,
+   `setPendingClarification`, `updateExtractedEntities`, `updateWorkspaceV2`)
+   dalam transaksi Prisma (`$transaction` / `prisma.$transaction([read, write])`)
+   atau optimistic locking (`updatedAt` compare) untuk cegah race.
+   **Implementasi P3.4:** memilih **optimistic locking** lewat helper privat
+   `atomicCas()` — tiap RMW dibungkus dalam loop read(`findUnique` select
+   `updatedAt`) → compute → `updateMany({ where: { conversationId, updatedAt } })`
+   atomic CAS; bila writer lain menyelesaikan dulu `updatedAt` berubah → `count 0`
+   → retry (backoff eksponensial, max 5 attempt). Semua titik RMW
+   `extractedEntities` dilindungi (termasuk `updateShippingInfo`,
+   `clearPendingClarification`, `incrementClarificationRetry`, `restoreCart`
+   yang sama-sama rasyuk kelas bug ini). Lihat §9 untuk hasil race test
+   before/after. `appendMessage` (kolom `lastMessages`, di luar scope T4) diserahkan
+   ke task berikutnya.**
 5. **(RENDAH) T5 — Fallback tier tidak menulis shape baru ke kolom yang sama
    tanpa koordinasi.**
 
@@ -227,3 +237,46 @@ Urutan didasarkan pada Risiko × Dampak produksi (canary v2 aktif):
       untuk audit read-only — tidak ada change).
 - [x] Semua kutipan di atas adalah verbatim; file:line diverifikasi lewat
       `grep`/`sed` langsung pada pohon sumber.
+
+---
+
+## 9. T4 fix (P3.4) — Race test before/after
+
+**Pendekatan yang dipilih:** *optimistic locking* lewat helper privat
+`atomicCas()` (bukan `prisma.$transaction`). Alasan: `findUnique`→`update`
+hanya menyentuh kolom `extractedEntities` (atau `workspace_v2`) pada row
+`conversationContext` yang sama per `conversationId`; cukup dorong guard
+`updatedAt` agar writer yang kalah retry dengan state yang sudah di-refresh.
+Tidak perlu `SELECT … FOR UPDATE` (blocking) — tidak meningkatkan lock
+contention pada hot conversation. Verifikasikan bahwa `updateMany` di Prisma
+5.22 memang *bump* kolom `@updatedAt` (tes terpisah, lihat bawah) sehingga
+optimistic clock naik tiap commit. Semua 4 titik scope T4 —
+`modifyCart`, `setPendingClarification`, `updateExtractedEntities`,
+`updateWorkspaceV2` — kini lewat `atomicCas`; sekaligus dengan
+`updateShippingInfo`/`clearPendingClarification`/`incrementClarificationRetry`/
+`restoreCart` (kelas bug serupa, kolom `extractedEntities`).
+
+**Race test (`scripts/race-test-p34.ts`):** untuk `conversationId` yang sama,
+kirim 2 request nyaris bersamaan via `Promise.all` — satu
+`modifyCart('add','TestProduct')` (tulis `confirmedItems`), satu
+`setPendingClarification(...)` (tulis `pendingClarification`). Kolom JSON
+`extractedEntities` yang SAMA. 10 iterasi masing-masing pada conversation
+yang fresh.
+
+```
+[BEFORE (findUnique->update, non-atomik)] iterations=10 bothSaved=0 cartLost=10 pendingLost=0 bothLost=0 → FAIL (data lost → race)
+[AFTER  (atomicCas aktif)           ] iterations=10 bothSaved=10 cartLost=0  pendingLost=0 bothLost=0  → PASS (both writes preserved, no last-write-wins)
+```
+
+- **Before:** `findUnique`→`update` (overwrite seluruh object) tanpa lock →
+  writer yang selalu lebih cepat menimpa writer kedua → **10/10 iterasi kehilangan
+  cart** (confirmedItems hilang; `pendingClarification` yang menyentuh lebih
+  lambat, menimpa). Bukti last-write-wins.
+- **After:** `atomicCas` optimistic lock → writer kalah detect `count===0`
+  (updatedAt berubah), retry dengan state fresh, apply-on-top → **10/10 iterasi
+  KEDUA field tersimpan**, 0 kehilangan. Bukti race teratasi.
+
+Verifikasi pendukung (Prisma 5.22.0 + PostgreSQL): `updateMany({ where:{…},
+data:{…} })` memang *bump* kolom `DateTime @updatedAt` → optimistic clock
+berfungsi. (`appendMessage` tidak termasuk — menulis kolom `lastMessages`,
+di luar scope T4 §2/§5; diserahkan ke task berikutnya.)
