@@ -682,3 +682,25 @@ baseline tetap 2 failed/1 failed (sama P4.1), pm2 online. Commit 947fdaf.
 Sisa dari BUG-BELUM-DIBERESKAN.md yang BUKAN bagian P4 (dicatat, ditunda
 owner): II-4 (seed test data woltel/brambang), III-1/III-2 (dist+logs
 ter-track di git, tunggu investigasi alur deploy).
+
+### 10 Agu 2026 — P5.1 selesai: 5 bug objektif reply composition
+Konteks: Audit P5.0 (read-only, commit 1be0516) pisahkan temuan composer-v2
+jadi BUG (5, objektif rusak) vs GAYA (6, preferensi bahasa, tunggu owner).
+Fix 5 BUG: I-1a (subtotal hitung qty=0 sebagai 1, padahal display filter -
+sekarang konsisten filter qty>0 di keduanya), I-2 (v2 path tidak apply
+truncateTo2Sentences seperti v1 - root cause reply terpotong, bukan string
+"adari" spesifik yang tidak ketemu di repo saat audit, tapi mekanisme
+truncation-nya nyata), #3 (silent drop message ke-4+ sekarang di-log warn),
+#4 (qty<=0 di DraftCartOp render "x1" bukan "x0"), #5 (reply_draft spasi-
+doang sekarang trim() dulu sebelum truthy check).
+Bukti: I-1a subtotal 49000->44000 (item qty=0 ke-exclude), I-2 unit test
+reply 3+ kalimat -> truncated 2. tsc 0 error, build sukses, test baseline
+tetap (2 failed suites/1 failed test pre-existing + 5 unit test baru pass).
+pm2 online. Commit 0e99fbd.
+6 temuan GAYA BELUM disentuh (menunggu keputusan owner terpisah): regex
+truncate salah anggap '?' interjeksi BI sebagai akhir kalimat, topic-switch
+message generic, konsistensi v1/v2 truncate (sudah sebagian ke-cover I-2),
+'x' vs '×' qty display, larangan harga di reply_draft (desain arsitektur),
+tone/emoji ESCALATE_REPLY.
+**P5.1 SELESAI. P5 BELUM TOTAL TUTUP - nunggu keputusan 6 item GAYA.**
+Siapa yang setuju: owner (Panji), Claude.
