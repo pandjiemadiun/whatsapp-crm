@@ -1,5 +1,21 @@
 import type { ActV2, InterpreterResultV2, WorkspaceV2 } from './types-v2.js';
 import { composeClarification } from './clarification-composer.js';
+import { adapters } from '../../adapters/container.js';
+
+/**
+ * I-2 FIX: Truncate teks ke (paling banyak) 2 kalimat pertama.
+ * Di-duplicate dari interpreter.ts:truncateTo2Sentences untuk menjaga
+ * composer-v2 tetap pure (tidak import interpreter.ts yang ber-side-effects
+ * melalui groq/prisma/adapters).
+ */
+function truncateTo2Sentences(text: string): string {
+  if (!text) return '';
+  const sentences = text
+    .split(/(?<=[.!?])\s+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return sentences.slice(0, 2).join(' ');
+}
 
 export interface CatalogItem {
   id: string;
@@ -45,7 +61,10 @@ export function composeReply(params: {
 
   // B. JIKA plannedActs kosong
   if (plannedActs.length === 0) {
-    return reasoningResult.reply_draft || "Maaf kak, saya kurang paham.";
+    // I-5 FIX: trim() dulu agar string spasi-doang ("  ") tidak lolos
+    // sebagai truthy; I-2 FIX: truncate reply_draft ke ≤2 kalimat
+    const draft = (reasoningResult.reply_draft || '').trim();
+    return draft ? truncateTo2Sentences(draft) : "Maaf kak, saya kurang paham.";
   }
 
   const messages: string[] = [];
@@ -56,7 +75,10 @@ export function composeReply(params: {
       if (op.status === 'needs_clarification') {
         return `Boleh tolong konfirmasi produk ${op.product}?`;
       }
-      return `🛒 Ditambahkan ke keranjang: ${op.product} x${op.qty}`;
+      // I-4 FIX: guard qty > 0 untuk mencegah "x0" di reply (draft_cart_ops
+      // tidak divalidasi qty di validator-v2.ts). Konsisten sama I-1a filter.
+      const displayQty = op.qty > 0 ? op.qty : 1;
+      return `🛒 Ditambahkan ke keranjang: ${op.product} x${displayQty}`;
     });
     messages.push(...cartMessages);
   } else {
@@ -79,7 +101,11 @@ export function composeReply(params: {
   // D. JIKA ada info_answer act (cek intents di plannedActs)
   const hasInfo = plannedActs.some((act) => act.intent === 'info_answer');
   if (hasInfo && reasoningResult.reply_draft) {
-    messages.push(reasoningResult.reply_draft);
+    // I-5 + I-2 FIX: trim + truncate reply_draft sebelum dimasukkan ke messages
+    const draft = reasoningResult.reply_draft.trim();
+    if (draft) {
+      messages.push(truncateTo2Sentences(draft));
+    }
   }
 
   // E. JIKA ada topic_switch=true
@@ -89,11 +115,18 @@ export function composeReply(params: {
   }
 
   // F. Format final — rugi-rugi: jangan pernah balas kosong
+  // I-3 FIX: log warning bila slice(0,3) men-drop messages (bukan silently)
+  if (messages.length > 3) {
+    adapters.logger.warn('composeReply: messages truncated to 3', {
+      originalCount: messages.length,
+      dropped: messages.length - 3,
+    });
+  }
   const finalReply = messages.slice(0, 3).join('\n');
   if (finalReply.trim().length > 0) {
     return finalReply;
   }
-  return reasoningResult.reply_draft && reasoningResult.reply_draft.trim().length > 0
-    ? reasoningResult.reply_draft
+  return reasoningResult.reply_draft?.trim() && reasoningResult.reply_draft.trim().length > 0
+    ? truncateTo2Sentences(reasoningResult.reply_draft.trim())
     : "Maaf kak, saya kurang paham. Bisa ulangi pesannya?";
 }
