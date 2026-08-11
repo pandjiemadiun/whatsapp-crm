@@ -60,9 +60,10 @@ export class ConversationService {
     storeId: string,
     customerId: string,
     conversationId: string,
-    customerMessage: string
+    customerMessage: string,
+    channel: 'whatsapp' | 'web' = 'whatsapp',
   ): Promise<ResponseResult | null> {
-    adapters.logger.info('Processing customer message', { storeId, customerId, conversationId });
+    adapters.logger.info('Processing customer message', { storeId, customerId, conversationId, channel });
 
     const conversation = await prisma.conversation.upsert({
       where: { id: conversationId },
@@ -72,7 +73,7 @@ export class ConversationService {
         storeId: storeId,
         customerId: customerId,
         customerPhone: customerId, // Fallback nilai phone dengan customerId
-        channel: 'whatsapp',
+        channel,
         status: 'open',
       },
     });
@@ -1173,7 +1174,8 @@ export class ConversationService {
     storeId: string,
     customerId: string,
     customerPhone: string,
-    customerName?: string
+    customerName?: string,
+    channel: 'whatsapp' | 'web' = 'whatsapp',
   ): Promise<ConversationWithContext> {
     const conv = await prisma.conversation.create({
       data: {
@@ -1181,7 +1183,7 @@ export class ConversationService {
         customerId,
         customerPhone,
         customerName: customerName ?? null,
-        channel: 'whatsapp',
+        channel,
         status: 'open',
       },
     });
