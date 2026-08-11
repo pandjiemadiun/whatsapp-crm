@@ -445,10 +445,10 @@ $ git diff --stat HEAD -- .github/workflows/test.yml
 ### git log -2
 ```
 $ git log --oneline -2
-2122a24 fix(P6.3): tambah flag --experimental-vm-modules yang hilang di CI test:chat step
+f5b0fe6 fix(P6.3): tambah flag --experimental-vm-modules yang hilang di CI test:chat step
 08a3a06 ci(P6.3): tambah GitHub Actions workflow test:chat + test:golden dengan ephemeral Postgres
 ```
-Commit `2122a24` local-only — `git push` TIDAK dijalankan; owner yang push manual ke origin.
+Commit `f5b0fe6` local-only — `git push` TIDAK dijalankan; owner yang push manual ke origin.
 
 ### Scope compliance P6.3-FIX
 - ✅ Hanya `.github/workflows/test.yml` yang diubah (1 line).
