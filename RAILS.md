@@ -704,3 +704,14 @@ message generic, konsistensi v1/v2 truncate (sudah sebagian ke-cover I-2),
 tone/emoji ESCALATE_REPLY.
 **P5.1 SELESAI. P5 BELUM TOTAL TUTUP - nunggu keputusan 6 item GAYA.**
 Siapa yang setuju: owner (Panji), Claude.
+
+### 10 Agu 2026 — P5.2 selesai + P5 TOTAL TUTUP
+3 fix GAYA sesuai keputusan owner: regex truncate '?' tidak split kalau
+diikuti huruf kecil/koma (interjeksi BI), simbol qty seragam 'x' ASCII,
+ESCALATE_REPLY emoji dihapus. Commit bd607f6. tsc/build/test baseline OK
+(+8 test baru pass, 2 pre-existing tetap).
+3 GAYA sisa diputuskan owner: topic-switch message tetap generic (effort
+vs gain kecil), konsistensi v1/v2 truncate otomatis selesai lewat P5.1/
+P5.2, larangan harga di reply_draft dipertahankan (desain lama, resiko
+inkonsistensi kalau diubah).
+**P5 (Response naturalness) RESMI SELESAI TOTAL 10 Agu 2026.**
