@@ -330,3 +330,9 @@ Verifikasi: tsc 0 error, build sukses, test baseline 2 failed/1 failed
 pending@24000 → "total belanja saya berapa" jawab Rp 36.000 (draft).
 Commit terpisah.
 NEXT: P5 - Response naturalness (composer-v2).
+
+## UPDATE 10/8 — P4.2 CLOSED, P4 TOTAL SELESAI
+activeOrder/tryTotal sekarang eksklusif pilih draft dulu. Bug sampingan
+tryTotal JSON.parse ikut fix (dalam scope file yang sama). Commit 947fdaf.
+Ditunda (owner): II-4 seed test, III-1/III-2 dist+logs hygiene.
+NEXT: P5 - Response naturalness (composer-v2).

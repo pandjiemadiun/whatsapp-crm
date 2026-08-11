@@ -660,3 +660,25 @@ Bukti DB (harness in-process, dev DB, mock LLM):
 - "terima kasih banyak" → interpreter prompt: `status=draft` (bukan pending)
 - tsc 0 error, build sukses, test baseline tetap 2 failed/1 failed (golden pass).
 Commit terpisah.**
+
+### 10 Agu 2026 — P4.2 selesai: activeOrder/tryTotal diskriminasi draft vs pending (I-3)
+Konteks: Satu-satunya temuan P4.0 yang masih terbuka setelah extractAndSaveOrder
+dihapus (P4.1) - activeOrder (conversation.service.ts) dan tryTotal/lastOrder
+fallback (fallback.service.ts) tidak bedain orderStatus 'draft' (harga current
+working cart) vs 'pending' (createOrder, ternyata VALID harga DB, bukan phantom
+- diverifikasi dulu sebelum diubah, bukan diasumsikan).
+Fix: activeOrder & lastOrder query eksklusif pilih draft dulu, fallback ke
+notIn/in status lama HANYA kalau tidak ada draft sama sekali.
+Temuan sampingan dalam scope (fallback.service.ts, file yang sama): bug
+pre-existing JSON.parse(lastOrder.items as string) selalu gagal karena Prisma
+Json type return array bukan string -> tryTotal SELALU jawab "keranjang
+kosong" apa pun isi draft-nya. Diperbaiki dalam commit sama karena tanpa ini
+efek P4.2 di tryTotal tidak bisa dibuktikan (acceptance #6 butuh ini).
+Bukti: draft@36000 vs pending@24000 sama conversationId - "total belanja
+saya berapa" -> jawab 36000 (draft), bukan 24000 (pending). Interpreter
+prompt juga confirm activeOrder=draft. tsc 0 error, build sukses, test
+baseline tetap 2 failed/1 failed (sama P4.1), pm2 online. Commit 947fdaf.
+**P4 RESMI SELESAI TOTAL (audit + P4.1 + P4.2) 10 Agu 2026.**
+Sisa dari BUG-BELUM-DIBERESKAN.md yang BUKAN bagian P4 (dicatat, ditunda
+owner): II-4 (seed test data woltel/brambang), III-1/III-2 (dist+logs
+ter-track di git, tunggu investigasi alur deploy).
