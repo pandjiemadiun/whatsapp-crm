@@ -142,7 +142,7 @@ model Conversation {
   storeId               String
   customerId            String
   customerName          String?
-  customerPhone         String
+  customerPhone         String?
   status                String   @default("open")
   channel               String   @default("whatsapp")
   lastMessageAt         DateTime?
@@ -394,7 +394,8 @@ model AdminAuthToken {
 model Customer {
   id            String   @id @default(uuid())
   storeId       String
-  phone         String
+  phone         String?
+  webUid        String?  @unique
   name          String?
   originCity    String?
   nameSource    String?  // 'self_stated' | 'pushname'

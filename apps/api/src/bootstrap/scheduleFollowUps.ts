@@ -166,7 +166,7 @@ interface IdleConversation {
   id: string;
   storeId: string;
   customerId: string;
-  customerPhone: string;
+  customerPhone: string | null;
   customerName: string | null;
   lastMessageAt: Date | null;
   metadata: unknown;
@@ -203,14 +203,22 @@ async function processFollowUp(conv: IdleConversation, now: Date): Promise<void>
 
   if (store.fonnteToken) {
     try {
-      await fonnteService.sendMessage(customerPhone, followUpText, { token: store.fonnteToken });
+      if (!customerPhone) {
+        adapters.logger.warn('Skip Fonnte follow-up: customerPhone is null', { conversationId });
+      } else {
+        await fonnteService.sendMessage(customerPhone, followUpText, { token: store.fonnteToken });
+      }
     } catch {
       sendError = 'Fonnte send failed';
     }
   } else if (store.phoneNumber) {
     try {
-      const deviceId = `garuda-${storeId.replace(/[^a-zA-Z0-9]/g, '-').slice(0, 20)}`;
-      await gowaAdapter.sendMessage(customerPhone, followUpText, { deviceId });
+      if (!customerPhone) {
+        adapters.logger.warn('Skip GOWA follow-up: customerPhone is null', { conversationId });
+      } else {
+        const deviceId = `garuda-${storeId.replace(/[^a-zA-Z0-9]/g, '-').slice(0, 20)}`;
+        await gowaAdapter.sendMessage(customerPhone, followUpText, { deviceId });
+      }
     } catch {
       sendError = 'GOWA send failed';
     }

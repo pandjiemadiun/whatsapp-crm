@@ -38,7 +38,7 @@ interface ConversationListItem {
   id: string;
   customerId: string;
   customerName: string | null;
-  customerPhone: string;
+  customerPhone: string | null;
   status: string;
   lastMessageAt: Date | null;
   aiResponseCount: number;

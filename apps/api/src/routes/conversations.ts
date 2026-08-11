@@ -144,19 +144,27 @@ router.post('/:id/reply', validateRequest(replyMessageSchema, 'body'), async (re
     const store = await prisma.store.findUnique({ where: { id: storeId } });
     if (store?.fonnteToken) {
       try {
-        await fonnteService.sendMessage(conversation.customerPhone, sanitizedContent, {
-          token: store.fonnteToken,
-        });
+        if (!conversation.customerPhone) {
+          adapters.logger.warn('Skip Fonnte send: conversation.customerPhone is null', { conversationId: conversation.id, storeId });
+        } else {
+          await fonnteService.sendMessage(conversation.customerPhone, sanitizedContent, {
+            token: store.fonnteToken,
+          });
+        }
       } catch {
         sendError = 'Fonnte send failed';
       }
     } else if (store?.phoneNumber) {
       try {
         // Fallback to GOWA if store has a WhatsApp number configured
-        const did = `garuda-${storeId.replace(/[^a-zA-Z0-9]/g, '-').slice(0, 20)}`;
-        await gowaAdapter.sendMessage(conversation.customerPhone, sanitizedContent, {
-          deviceId: did,
-        });
+        if (!conversation.customerPhone) {
+          adapters.logger.warn('Skip GOWA send: conversation.customerPhone is null', { conversationId: conversation.id, storeId });
+        } else {
+          const did = `garuda-${storeId.replace(/[^a-zA-Z0-9]/g, '-').slice(0, 20)}`;
+          await gowaAdapter.sendMessage(conversation.customerPhone, sanitizedContent, {
+            deviceId: did,
+          });
+        }
       } catch {
         sendError = 'GOWA send failed';
       }
