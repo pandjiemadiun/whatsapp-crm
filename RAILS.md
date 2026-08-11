@@ -624,3 +624,39 @@ fallback (fallback.service.ts:649-661) tidak diskriminatif draft vs
 pending - createOrder (:393) masih bisa hasilkan baris pending yang
 kepilih jadi order aktif meski bukan dari extractAndSaveOrder lagi.
 **P4 RESMI SELESAI 10 Agu 2026.**
+
+### 11 Agu 2026 — P4.2 selesai: diskriminasi draft vs pending di activeOrder/tryTotal
+
+Konteks: Setelah P4.1 menghapus `extractAndSaveOrder` (phantom `pending`
+tanpa harga DB), tersisa `createOrder` (order.service.ts:213) yang masih
+menulis `orderStatus: 'pending'`. Pending dari `createOrder` **valid** —
+harga divalidasi DB via `productService.getProductById` (bukan phantom/LLM).
+Tapi `activeOrder` (conversation.service.ts:829) dan `tryTotal`/`lastOrder`
+fallback (fallback.service.ts:649) masih tidak bedakan `draft` (current
+working cart) vs `pending` lain — bisa memilih baris `pending` jadi order
+aktif dan menimpa harga keranjang yang sedang dibangun.
+
+Verifikasi SCOPE 1 (createOrder): hanya dipanggil dari test files, tidak
+dari production code. Production flow pakai `addConfirmedItemToOrder`/
+`syncCartStateToDraftOrder` (draft, harga DB) + `finalizeDraftOrder`
+(→ waiting_address). Pending dari `createOrder` punya harga DB valid —
+bukan phantom. createOrder tidak diubah (tidak ada bug).
+
+Fix (2 source file + 6 dist file rebuild):
+1. `activeOrder` (conversation.service.ts): query `draft` eksklusif dulu,
+   fallback ke `notIn [shipped,delivered,cancelled]` HANYA bila tidak ada
+   draft.
+2. `tryTotal`/`lastOrder` (fallback.service.ts): query `draft` eksklusif
+   dulu, fallback ke `[pending,waiting_payment,paid,waiting_address,confirmed]`
+   HANYA bila tidak ada draft. Plus perbaiki bug pre-existing
+   `JSON.parse(lastOrder.items as string)` yang gagal karena Prisma `Json`
+   type mengembalikan JS array (bukan string) → catch mengembalikan items=[]
+   → "keranjang kosong" selalu. Fix: handle `Array.isArray` dan `typeof
+   string` secara eksplisit.
+
+Bukti DB (harness in-process, dev DB, mock LLM):
+- conv-A: 2 rows (draft@36000 + pending@24000, createdAt ASC)
+- "total belanja saya berapa" → "GRAND TOTAL: Rp 36.000" (draft, bukan 24.000)
+- "terima kasih banyak" → interpreter prompt: `status=draft` (bukan pending)
+- tsc 0 error, build sukses, test baseline tetap 2 failed/1 failed (golden pass).
+Commit terpisah.**
