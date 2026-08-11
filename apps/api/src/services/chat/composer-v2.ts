@@ -4,14 +4,15 @@ import { adapters } from '../../adapters/container.js';
 
 /**
  * I-2 FIX: Truncate teks ke (paling banyak) 2 kalimat pertama.
- * Di-duplicate dari interpreter.ts:truncateTo2Sentences untuk menjaga
- * composer-v2 tetap pure (tidak import interpreter.ts yang ber-side-effects
- * melalui groq/prisma/adapters).
+ * P5.2 FIX: regex diperbarui agar '?' tidak dianggap akhir kalimat bila
+ * diikuti huruf kecil/koma (interjeksi BI). Di-duplicate dari interpreter.ts
+ * untuk menjaga composer-v2 pure (tidak import interpreter.ts yang ber-
+ * side-effects lewat groq/prisma/adapters).
  */
 function truncateTo2Sentences(text: string): string {
   if (!text) return '';
   const sentences = text
-    .split(/(?<=[.!?])\s+/)
+    .split(/(?<=[.!])\s+|(?<=\?)[ \t]+(?![a-z,])/)
     .map((s) => s.trim())
     .filter(Boolean);
   return sentences.slice(0, 2).join(' ');
@@ -28,7 +29,7 @@ export interface CatalogItem {
  * disambungkan ke admin toko, sehingga customer tahu keadaan sebenarnya.
  */
 export const ESCALATE_REPLY =
-  'Baik kak, akan saya sambungkan ke admin toko ya, mohon ditunggu 🙏';
+  'Baik kak, akan saya sambungkan ke admin toko. Mohon ditunggu sebentar ya.';
 
 /** Balasan eskalasi — pure, untuk di-test & dipakai conversation.service.ts. */
 export function composeEscalateReply(): string {

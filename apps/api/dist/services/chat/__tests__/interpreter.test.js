@@ -174,5 +174,34 @@ describe('truncateTo2Sentences (BAGIAN 3)', () => {
     it('string kosong -> empty string', () => {
         assert.equal(truncateTo2Sentences(''), '');
     });
+    // ── P5.2 FIX: regex '?' tidak split jika diikuti huruf kecil/koma ──────────
+    it('P5.2: "?" diikuti huruf besar -> split (kalimat terpisah)', () => {
+        assert.equal(truncateTo2Sentences('Apakah sudah siap? Bisa lanjut.'), 'Apakah sudah siap? Bisa lanjut.');
+    });
+    it('P5.2: "?" diikuti huruf kecil -> TIDAK split (interjeksi BI)', () => {
+        assert.equal(truncateTo2Sentences('Boleh kak? mau tanya dong.'), 'Boleh kak? mau tanya dong.');
+    });
+    it('P5.2: "?" diikuti koma -> TIDAK split (interjeksi BI)', () => {
+        assert.equal(truncateTo2Sentences('Boleh kak?, mau tanya dong.'), 'Boleh kak?, mau tanya dong.');
+    });
+    it('P5.2: "?" di akhir string -> TIDAK split (1 kalimat)', () => {
+        assert.equal(truncateTo2Sentences('Mau tanya apa?'), 'Mau tanya apa?');
+    });
+    it('P5.2: interjeksi "?" + kalimat lanjutan → tidak terpotong', () => {
+        // Kalimat BI asli: "?" jadi interjeksi, tidak pemisah kalimat
+        const input = 'Keranjang sudah diupdate ya? silakan lanjut. Totalnya Rp 36.000. Terima kasih.';
+        const result = truncateTo2Sentences(input);
+        // "ya? silakan" → tidak split (? diikuti huruf kecil)
+        // "lanjut. Totalnya" → split di ". " → 2 kalimat
+        // "36.000." → titik desimal, tidak diikuti spasi → tidak split
+        // "Terima kasih." → kalimat 3, akan dipotong
+        assert.equal(result, 'Keranjang sudah diupdate ya? silakan lanjut. Totalnya Rp 36.000.');
+        // Pastikan "Terima kasih" (kalimat ketiga) sudah dipotong
+        assert.ok(!result.includes('Terima kasih'), 'kalimat ketiga tidak boleh ada');
+    });
+    it('P5.2: "?" diikuti spasi + angka -> split', () => {
+        // "?" diikuti huruf besar → split
+        assert.equal(truncateTo2Sentences('Pesan sekali ya? Nanti saja.'), 'Pesan sekali ya? Nanti saja.');
+    });
 });
 //# sourceMappingURL=interpreter.test.js.map
