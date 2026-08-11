@@ -28,6 +28,8 @@ import { normalize } from '../services/chat/normalizer.js';
 import { ResponseSource } from '../domain/types.js';
 import type { AIResponse, AIGenerateOptions } from '../adapters/ai/types.js';
 import type { InterpreterResult, ResponseResult } from '../domain/types.js';
+import { setStoreEngine } from '../services/chat/engine-config.js';
+import type { InterpreterResultV2 } from '../services/chat/types-v2.js';
 
 // ──────────────────────────────────────────────────────────
 // Constants
@@ -689,6 +691,36 @@ async function withProduct(
   }
 }
 
+/**
+ * Aktifkan engine V2 untuk STORE_ID via Redis (getStoreEngine → 'v2'),
+ * jalankan fn, lalu kembalikan ke 'v1' di finally.
+ * Diperlukan untuk golden case P3 (workspace_v2 persist antar-turn).
+ */
+async function withEngineV2(fn: () => Promise<void>): Promise<void> {
+  await setStoreEngine(STORE_ID, 'v2');
+  try {
+    await fn();
+  } finally {
+    await setStoreEngine(STORE_ID, 'v1');
+  }
+}
+
+/**
+ * Builder canned response untuk interpreter V2 (InterpreterResultV2 JSON).
+ * Berbeda dengan `canned()` (V1 InterpreterResult) — V2 pakai acts[], confidence{v4}, draft_cart_ops.
+ */
+function cannedV2(obj: Partial<InterpreterResultV2>): string {
+  return JSON.stringify({
+    acts: [] as any[],
+    unmatched_mentions: [] as string[],
+    topic_switch: false,
+    draft_cart_ops: [] as any[],
+    reply_draft: null as string | null,
+    confidence: { entities: 0.95, intent: 0.95, selection: 0.95, topic: 0.95 } as any,
+    ...obj,
+  });
+}
+
 test('Case B3-a: "total berapa" (regresi) tetap di-jawab tryTotal (0 LLM)', async () => {
   const convId = 'conv-b3a';
   await createConv(convId, 'cust-b3a');
@@ -778,4 +810,78 @@ test('Case P2-I13: wrong price in pending (sim LLM) -> DB price in cart (raw rea
   assert.notEqual(berasItem.price, 99999, 'LLM wrong price 99999 must NOT survive');
   assert.ok(result!.message.content.includes('beras'));
   await prisma.conversation.delete({ where: { id: convId } }).catch(() => {});
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TASK P6.4a — Golden case: workspace_v2 persist antar-turn (P3 architecture gate)
+//
+// Skenario: engine V2 aktif, turn 1 menambahkan 'beras' ke keranjang via
+// LLM interpreter (act buy), turn 2 menanyakan 'total berapa'. Jika kolom
+// workspace_v2 tidak persisten (NO-OP bug P3-audit §2, conversation.service.ts:233),
+// turn 2 V2 akan gagal membaca state turn 1 (workspace_v2 kosong → migrasi ulang
+// legacy empty). Dua bukti persist:
+//  (a) turn 2 'total berapa' berhasil jawab Rp 12.000 (cart persist via executeCartOps→modifyCart)
+//  (b) kolom DB `workspace_v2` tidak null setelah turn 1 (direct DB check)
+// ─────────────────────────────────────────────────────────────────────────────
+test('Case P3: engine v2 — workspace_v2 persist antar-turn (P3 gate)', async () => {
+  const convId = 'conv-p3';
+  await createConv(convId, 'cust-p3');
+  await withEngineV2(async () => {
+    try {
+      // --- Turn 1: beli beras 1kg via V2 interpreter ---
+      cannedContent = cannedV2({
+        acts: [
+          {
+            act_id: 'a1',
+            intent: 'buy',
+            entities: [{ type: 'product', value: 'beras', confidence: 0.95 }],
+            qty: 1,
+            qty_source: 'explicit',
+            confidence: 0.95,
+            supersedes: null,
+          },
+        ],
+        reply_draft: 'Ditambahkan beras ke keranjang ya.',
+      });
+
+      const t1 = await processMsg(convId, 'cust-p3', 'saya mau beli beras 1');
+      assert.ok(t1.result, 'turn 1 must return a response');
+      // V2 path tidak pakai 'Pipeline audit' logger — pakai llmcalls counter + direct DB check
+      assert.equal(t1.llmCalls, 1, 'turn 1 V2: 1 LLM call (intent buy)');
+
+      // Direct DB check: kolom workspace_v2 HARUS terisi (bukan null/NO-OP)
+      const ctxAfterT1 = await prisma.conversationContext.findUnique({
+        where: { conversationId: convId },
+        select: { workspace_v2: true },
+      });
+      const wsRaw = ctxAfterT1?.workspace_v2;
+      assert.ok(wsRaw !== null && wsRaw !== undefined, 'workspace_v2 column must be populated (P3.1 persist, bukan NO-OP)');
+
+      // --- Turn 2: tanya total — bila workspace/cart persist OK, cukup 0 LLM ---
+      cannedContent = cannedV2({
+        acts: [],
+        reply_draft: 'Total belanja Anda adalah Rp 12.000.',
+      });
+
+      const t2 = await processMsg(convId, 'cust-p3', 'total berapa');
+      assert.ok(t2.result, 'turn 2 must return a response');
+
+      // Jika cart (confirmedItems di extractedEntities) persisten dari turn 1,
+      // tryTotal akan menghitung Rp 12.000 (beras 1x12000).
+      // Jika persist gagal, tryTotal akan balas 'keranjang kosong' → RED.
+      assert.ok(
+        t2.result!.message.content.match(/12\.?000|12000/),
+        `turn 2 must show Rp 12.000 from persisted cart, got: ${t2.result!.message.content}`,
+      );
+
+      // Persist verifikasi: workspace_v2 kolom masih ada di turn 2
+      const ctxAfterT2 = await prisma.conversationContext.findUnique({
+        where: { conversationId: convId },
+        select: { workspace_v2: true },
+      });
+      assert.ok(ctxAfterT2?.workspace_v2 !== null && ctxAfterT2?.workspace_v2 !== undefined, 'workspace_v2 must still be populated on turn 2');
+    } finally {
+      await prisma.conversation.delete({ where: { id: convId } }).catch(() => {});
+    }
+  });
 });
