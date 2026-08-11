@@ -950,3 +950,85 @@ test('Case P4: activeOrder/tryTotal memilih draft (Rp 12.000) bukan pending (Rp 
     await prisma.conversation.delete({ where: { id: convId } }).catch(() => {});
   }
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TASK P6.4c — Golden case: reply composition invariants (P5 gate)
+//
+// (a) Subtotal HANYA menghitung item qty > 0 — qty=0 (mis. "Brambang (0x)")
+//     tidak boleh menyumbang ke subtotal. Verifikasi via tryTotal draft order
+//     yang seed items [beras qty=1 price=12000, brambang qty=0 price=8000]
+//     → subtotal harus 12.000 (bukan 20.000). P5.1 fix I-1a
+//     (conversation.service.ts:254, fallback.service.ts:694).
+//
+// (b) Interpreter reply_draft dengan 3+ kalimat → hasil akhir ≤ 2 kalimat.
+//     Memastikan truncateTo2Sentences applied (interpreter.ts:233 /
+//     conversation.service.ts:350 safety-net). Regresi P5.1 I-2.
+//
+// CATATAN (bukan bug, hanya keterbatasan golden dataset):
+// (c) item qty<=0 display "x1" (composer-v2.ts:79-81) — hanya dapat di-test
+//     di V2 composer unit test, BUKAN di golden dataset integration karena
+//     V2 engine flow belum menghubungkan draft_cart_ops qty=0 ke display
+//     di level golden dataset. Lihat composer-v2.test.ts:P5.1 #4 untuk unit test.
+// ─────────────────────────────────────────────────────────────────────────────
+test('Case P5: reply composition subtotal qty-filter + truncate (P5 gate)', async () => {
+  const convId = 'conv-p5';
+  await createConv(convId, 'cust-p5');
+
+  try {
+    // (a) Subtotal hanya item qty > 0
+    await prisma.order.create({
+      data: {
+        id: 'ord-p5',
+        storeId: STORE_ID,
+        conversationId: convId,
+        customerId: 'cust-p5',
+        items: [
+          { product: 'beras', qty: 1, price: 12000, mentionedAt: new Date().toISOString(), confirmedAt: new Date().toISOString() },
+          { product: 'brambang', qty: 0, price: 8000, mentionedAt: new Date().toISOString(), confirmedAt: new Date().toISOString() },
+        ],
+        totalPrice: 12000,
+        orderStatus: 'draft',
+        currency: 'IDR',
+        deletedAt: null,
+      } as any,
+    });
+
+    const { result: r1 } = await processMsg(convId, 'cust-p5', 'total berapa');
+    assert.ok(r1, 'must return a response for subtotal');
+    // beras 1x12000 = 12.000; brambang qty=0 harus DIFILTER (bukan 20.000)
+    assert.ok(
+      /12\.?000|12000/.test(r1!.message.content),
+      `subtotal harus 12.000 (qty=0 terfilter), got: ${r1!.message.content}`,
+    );
+    assert.ok(
+      !/20\.?000|20000/.test(r1!.message.content),
+      `subtotal tidak boleh 20.000 (qty=0 tidak boleh dihitung), got: ${r1!.message.content}`,
+    );
+
+    // (b) Interpreter reply_draft 3+ kalimat → truncate ≤ 2 kalimat
+    const convId2 = 'conv-p5b';
+    await createConv(convId2, 'cust-p5b');
+    try {
+      cannedContent = canned({
+        intent: 'smalltalk',
+        cart_ops: [],
+        reply_draft: 'Kami punya beras murni. Silakan pesan ya. Terima kasih!',
+        confidence: 0.9,
+      });
+      const { result: r2 } = await processMsg(convId2, 'cust-p5b', 'rekomendasi apa ya?');
+      assert.ok(r2, 'must return a response for truncate');
+      assert.ok(r2!.message.content, 'reply must have content');
+      const sentences = r2!.message.content
+        .split(/(?<=[.!?])\s+/)
+        .filter((s: string) => s.trim().length > 0);
+      assert.ok(
+        sentences.length <= 2,
+        `reply_draft harus maks 2 kalimat (truncate), dapat ${sentences.length}: ${r2!.message.content}`,
+      );
+    } finally {
+      await prisma.conversation.delete({ where: { id: convId2 } }).catch(() => {});
+    }
+  } finally {
+    await prisma.conversation.delete({ where: { id: convId } }).catch(() => {});
+  }
+});
