@@ -376,3 +376,83 @@ ci(P6.3): tambah GitHub Actions workflow test:chat + test:golden dengan ephemera
 git push TIDAK dijalankan — local HEAD = c3431c0 (setelah commit workflow P6.3
 ini ditambah). Owner yang melakukan push manual ke origin.
 ```
+
+---
+
+## P6.3-FIX — perbaikan flag `--experimental-vm-modules` yang hilang
+
+### Root cause run gagal pertama di GitHub Actions
+Run pertama workflow `test.yml` gagal TOTAL — **23/23 test suites failed**
+dengan error:
+```
+SyntaxError: Cannot use import statement outside a module
+```
+di semua file test. Root cause: step `Run test:chat` memanggil
+`npx jest` langsung, **tanpa flag `--experimental-vm-modules`** yang wajib
+ada. Lihat package.json script asli:
+```
+"test:chat": "node --experimental-vm-modules ./node_modules/.bin/jest --config jest.config.cjs"
+```
+Tanpa flag ini, Node tidak treat `.ts` sebagai ESM sesuai
+`jest.config.cjs` (`extensionsToEsm: ['.ts']`, `useESM: true`) — semua
+`import` statement di file test crash.
+
+Perbaikan hanya 1 line (tetap konsisten dengan npm script asli) —
+mengganti `npx jest` → `node --experimental-vm-modules ./node_modules/.bin/jest`.
+
+### Before / after — baris command yang diubah
+```diff
+-   npx jest --config jest.config.cjs --json --outputFile=/tmp/chat.json > /tmp/chat_stdout.log 2>/tmp/chat_stderr.log
++   node --experimental-vm-modules ./node_modules/.bin/jest --config jest.config.cjs --json --outputFile=/tmp/chat.json > /tmp/chat_stdout.log 2>/tmp/chat_stderr.log
+```
+- Hanya baris command Jest yang diubah — `set +e`, parsing JSON, echo,
+  baseline tolerance logic **tidak disentuh**.
+- **test:golden tidak perlu perbaikan** — script-nya pakai `tsx`
+  (`tsx --env-file=../../.env --test --test-force-exit src/tests/golden-dataset.test.ts`),
+  bukan `node` langsung → `tsx` handle ESM otomatis, tidak butuh
+  `--experimental-vm-modules`. Di workflow tetap pakai `npm run test:golden`
+  (yang memanggil `tsx`), sudah tepat.
+
+### Verifikasi lokal (simulasi persis perintah di CI)
+```
+$ cd /home/ubuntu/garuda/apps/api && node --experimental-vm-modules ./node_modules/.bin/jest --config jest.config.cjs --json --outputFile=/tmp/chat-local-test.json > /tmp/chat-local-stdout.log 2>/tmp/chat-local-stderr.log
+$ echo "jest_exit=$?"
+jest_exit=1
+$ node -e "const r=JSON.parse(require('fs').readFileSync('/tmp/chat-local-test.json')); console.log('passed:', r.numPassedTests, 'failed_tests:', r.numFailedTests, 'failed_suites:', r.numFailedTestSuites)"
+passed: 260 failed_tests: 1 failed_suites: 2
+```
+✅ **MATCH baseline** — `failed_tests≤1` ✅, `failed_suites≤2` ✅,
+`passed_tests≈260` ✅. **Bukan 23/23 gagal lagi.** Flag
+`--experimental-vm-modules` memperbaiki crash ESM.
+> catatan: `jest_exit=1` di-expected karena 1 pre-existing failed test
+> (regression P6 baseline); workflow tetap lanjut ke step
+> "Validate test:chat baseline tolerance" dan akan hijau karena within
+> baseline.
+
+### Validasi YAML syntax
+```
+$ python3 -c "import yaml; yaml.safe_load(open('.github/workflows/test.yml')); print('YAML VALID')"
+YAML VALID
+```
+
+### git diff --stat (hanya test.yml, 1 line)
+```
+$ git diff --stat HEAD -- .github/workflows/test.yml
+ .github/workflows/test.yml | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+```
+
+### git log -2
+```
+$ git log --oneline -2
+2122a24 fix(P6.3): tambah flag --experimental-vm-modules yang hilang di CI test:chat step
+08a3a06 ci(P6.3): tambah GitHub Actions workflow test:chat + test:golden dengan ephemeral Postgres
+```
+Commit `2122a24` local-only — `git push` TIDAK dijalankan; owner yang push manual ke origin.
+
+### Scope compliance P6.3-FIX
+- ✅ Hanya `.github/workflows/test.yml` yang diubah (1 line).
+- ✅ `test:golden` step tidak disentuh (sudah benar pakai `npm run test:golden` → `tsx`).
+- ✅ Tidak ada file source, package.json, jest.config.cjs yang berubah.
+- ✅ `git push` tidak dijalankan — commit local-only, owner yang push manual.
+

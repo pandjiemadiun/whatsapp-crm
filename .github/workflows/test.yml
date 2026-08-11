@@ -101,7 +101,7 @@ jobs:
         working-directory: apps/api
         run: |
           set +e
-          npx jest --config jest.config.cjs --json --outputFile=/tmp/chat.json > /tmp/chat_stdout.log 2>/tmp/chat_stderr.log
+          node --experimental-vm-modules ./node_modules/.bin/jest --config jest.config.cjs --json --outputFile=/tmp/chat.json > /tmp/chat_stdout.log 2>/tmp/chat_stderr.log
           JEST_EXIT=$?
           echo "jest_exit_code=${JEST_EXIT}"
           # Jika Jest exit 0 semua OK; jika non-zero, cek apakah within baseline
