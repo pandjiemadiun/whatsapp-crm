@@ -40,6 +40,8 @@ const STORE_ID = 'store-golden-test';
 // to avoid substring-match ambiguity with "beras" in tryProduct.
 const BASE_PRODUCTS = [
   { id: 'prod-beras', name: 'beras', price: 12000, stock: 50 },
+  { id: 'prod-woltel', name: 'woltel', price: 10000, stock: 50 },
+  { id: 'prod-brambang', name: 'brambang', price: 8000, stock: 50 },
 ] as const;
 
 const BERASSS_PRODUCT = { id: 'prod-berasss', name: 'berasss', price: 15000, stock: 50 };
