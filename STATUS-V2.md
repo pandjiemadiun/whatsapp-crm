@@ -316,4 +316,17 @@ ANTRIAN BARU (bukan bug P4, ditemukan saat kerja): activeOrder/tryTotal
 tidak diskriminasi draft vs pending order - createOrder masih bisa
 hasilkan pending yang kepilih jadi order aktif. Perlu TASK terpisah
 sebelum atau sejalan P5.
+
+**UPDATE 11/8 — P4.2 CLOSED (diskriminasi draft vs pending)**
+activeOrder (conversation.service.ts) dan tryTotal/lastOrder fallback
+(fallback.service.ts) diubah: query `draft` eksklusif dulu, fallback ke
+status non-terminal (pending+lsb) HANYA bila tidak ada draft sama sekali.
+Plus perbaiki bug pre-existing `JSON.parse(lastOrder.items as string)`
+di tryTotal — Prisma Json type kembalikan JS array, bukan string, jadi
+parse selalu gagal → "keranjang kosong" selalu. Fix: handle
+Array.isArray + typeof string.
+Verifikasi: tsc 0 error, build sukses, test baseline 2 failed/1 failed
+(golden pass), pm2 restart online. Manual test: 1 draft@36000 + 1
+pending@24000 → "total belanja saya berapa" jawab Rp 36.000 (draft).
+Commit terpisah.
 NEXT: P5 - Response naturalness (composer-v2).

@@ -584,21 +584,49 @@ export class FallbackService {
             const cartItems = entities.confirmedItems || [];
             let items = [...cartItems];
             if (items.length === 0) {
-                const lastOrder = await prisma.order.findFirst({
+                // Prefer 'draft' (harga DB, bentuk ConfirmedItem) sebagai sumber total
+                // fallback. 'pending' (hasil createOrder) dan status lain hanya dipilih
+                // bila memang tidak ada draft, agar tidak menampilkan harga/total order
+                // yang tidak sedang dibangun di dialog ini. Lihat BUG I-3.
+                let lastOrder = await prisma.order.findFirst({
                     where: {
                         conversationId: context.conversationId,
                         storeId: context.storeId,
                         deletedAt: null,
-                        orderStatus: { in: ['pending', 'waiting_payment', 'paid', 'waiting_address', 'confirmed'] },
+                        orderStatus: 'draft',
                     },
                     orderBy: { createdAt: 'desc' },
                     select: { items: true, totalPrice: true, currency: true, orderStatus: true },
                 });
+                if (!lastOrder) {
+                    lastOrder = await prisma.order.findFirst({
+                        where: {
+                            conversationId: context.conversationId,
+                            storeId: context.storeId,
+                            deletedAt: null,
+                            orderStatus: { in: ['pending', 'waiting_payment', 'paid', 'waiting_address', 'confirmed'] },
+                        },
+                        orderBy: { createdAt: 'desc' },
+                        select: { items: true, totalPrice: true, currency: true, orderStatus: true },
+                    });
+                }
                 if (lastOrder) {
-                    try {
-                        items = JSON.parse(lastOrder.items);
+                    // Prisma Json field dikembalikan sebagai JS array (bukan string),
+                    // jadi JSON.parse gagal. Handle kedua bentuk agar draft/pending
+                    // items bisa diparsed dengan benar. Lihat BUG I-3 / P4.2.
+                    const rawItems = lastOrder.items;
+                    if (Array.isArray(rawItems)) {
+                        items = rawItems;
                     }
-                    catch {
+                    else if (typeof rawItems === 'string') {
+                        try {
+                            items = JSON.parse(rawItems);
+                        }
+                        catch {
+                            items = [];
+                        }
+                    }
+                    else {
                         items = [];
                     }
                 }

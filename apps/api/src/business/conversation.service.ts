@@ -823,15 +823,34 @@ export class ConversationService {
     const entities = conversationContextService.parseExtractedEntities(ctxRow?.extractedEntities);
     const cart = entities.confirmedItems || [];
 
-    const activeOrder = await prisma.order.findFirst({
+    // activeOrder: prefer 'draft' (current working cart, harga dari DB) over
+    // other non-terminal statuses. 'pending' (mis. hasil createOrder katalog)
+    // dan status lain hanya dipilih sebagai fallback bila memang tidak ada draft,
+    // agar tidak memilih baris pending jadi order aktif dan menimpa harga
+    // keranjang yang sedang dibangun di dialog ini. Lihat BUG I-3
+    // (laporan-taskP4-fix.md §6 temuan #4).
+    let activeOrder = await prisma.order.findFirst({
       where: {
         conversationId,
         deletedAt: null,
-        orderStatus: { notIn: ['shipped', 'delivered', 'cancelled'] },
+        orderStatus: 'draft',
       },
       orderBy: { createdAt: 'desc' },
       select: { id: true, orderStatus: true, items: true, notes: true },
     });
+
+    // Fallback hanya bila tidak ada draft: ambil order non-terminal paling baru.
+    if (!activeOrder) {
+      activeOrder = await prisma.order.findFirst({
+        where: {
+          conversationId,
+          deletedAt: null,
+          orderStatus: { notIn: ['shipped', 'delivered', 'cancelled'] },
+        },
+        orderBy: { createdAt: 'desc' },
+        select: { id: true, orderStatus: true, items: true, notes: true },
+      });
+    }
 
     return {
       storeId,
