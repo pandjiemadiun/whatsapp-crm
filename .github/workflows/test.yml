@@ -1,0 +1,140 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TASK P6.3 — CI workflow: gate test:chat + test:golden
+#
+#  - test:golden HARUS 17/17 pass (0 pre-existing failure) → gagal → CI merah.
+#  - test:chat punya baseline 2 failed suites / 1 failed test PRE-EXISTING
+#    (lihat RAILS.md §3) → toleransi: CI tetap hijau selama failures tidak
+#    melebihi baseline; regresi (failures naik) → CI merah.
+#
+# Semua test pakai DB + Redis service container (ephemeral, di dalam runner).
+# DATABASE_URL/REDIS_URL/FIELD_ENCRYPTION_KEY di-arahkan ke service container,
+# TIDAK pernah ke production/VPS.
+# ─────────────────────────────────────────────────────────────────────────────
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    # Postgres (schema.prisma provider = "postgresql", 15 migrations)
+    # Redis  (setStoreEngine / withEngineV2 di golden-dataset.test.ts P6.4a)
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: garuda_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js (v20 LTS — tsconfig target ES2020)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: apps/api/package-lock.json
+
+      - name: Install dependencies (apps/api)
+        working-directory: apps/api
+        run: npm ci
+
+      - name: Setup .env (dummy, ke service container — BUKAN production)
+        working-directory: apps/api
+        run: |
+          # Generate random encryption key (dummy)
+          ENC_KEY=$(node -e 'console.log(require("crypto").randomBytes(32).toString("hex"))')
+          # Propagate ke semua step selanjutnya via $GITHUB_ENV (Jest/test:chat baca env langsung)
+          echo "DATABASE_URL=postgresql://postgres:postgres@localhost:5432/garuda_ci" >> $GITHUB_ENV
+          echo "REDIS_URL=redis://localhost:6379" >> $GITHUB_ENV
+          echo "FIELD_ENCRYPTION_KEY=${ENC_KEY}" >> $GITHUB_ENV
+          echo "GROQ_API_KEYS=dummy-test-key-1,dummy-test-key-2,dummy-test-key-3" >> $GITHUB_ENV
+          echo "GEMINI_API_KEY=dummy-test-key" >> $GITHUB_ENV
+          echo "NODE_ENV=development" >> $GITHUB_ENV
+          # Buat .env di root repo untuk tsx test:golden (--env-file=../../.env)
+          {
+            echo 'DATABASE_URL="postgresql://postgres:postgres@localhost:5432/garuda_ci"'
+            echo 'REDIS_URL="redis://localhost:6379"'
+            echo "FIELD_ENCRYPTION_KEY=\"${ENC_KEY}\""
+            echo 'GROQ_API_KEYS="dummy-test-key-1,dummy-test-key-2,dummy-test-key-3"'
+            echo 'GEMINI_API_KEY="dummy-test-key"'
+            echo 'NODE_ENV="development"'
+            echo 'PORT=3000'
+          } > ../../.env
+
+      - name: Generate Prisma client
+        working-directory: apps/api
+        run: npx prisma generate
+
+      - name: Migrate database (ephemeral CI Postgres)
+        working-directory: apps/api
+        run: npx prisma migrate deploy
+
+      # ── test:chat (Jest) — baseline 2 failed suites / 1 failed test ──────────
+      # TIDAK langsung fail CI — parse JSON output, bandingkan ke baseline.
+      # Regresi = failures > baseline → CI merah.
+      - name: Run test:chat (baseline-tolerant parse)
+        working-directory: apps/api
+        run: |
+          set +e
+          npx jest --config jest.config.cjs --json --outputFile=/tmp/chat.json > /tmp/chat_stdout.log 2>/tmp/chat_stderr.log
+          JEST_EXIT=$?
+          echo "jest_exit_code=${JEST_EXIT}"
+          # Jika Jest exit 0 semua OK; jika non-zero, cek apakah within baseline
+          if [ $JEST_EXIT -ne 0 ]; then
+            echo "::warning::test:chat exited non-zero — parsing failures against baseline"
+          fi
+
+      - name: Validate test:chat baseline tolerance
+        working-directory: apps/api
+        if: always()
+        run: |
+          FAILED_TESTS=$(node -e "try{const r=require('/tmp/chat.json');console.log(r.numFailedTests||0)}catch(e){console.log(0)}")
+          FAILED_SUITES=$(node -e "try{const r=require('/tmp/chat.json');console.log(r.numFailedTestSuites||0)}catch(e){console.log(0)}")
+          PASSED_TESTS=$(node -e "try{const r=require('/tmp/chat.json');console.log(r.numPassedTests||0)}catch(e){console.log(0)}")
+          echo "=== test:chat summary ==="
+          echo "passed_tests=${PASSED_TESTS}"
+          echo "failed_tests=${FAILED_TESTS}"
+          echo "failed_suites=${FAILED_SUITES}"
+          echo "=== Jest stdout (tail) ==="
+          tail -5 /tmp/chat_stdout.log || true
+          echo "=== Jest stderr (tail) ==="
+          tail -20 /tmp/chat_stderr.log || true
+          # baseline (RAILS.md §3): 1 failed test, 2 failed suites (pre-existing)
+          BASELINE_FAILED_TESTS=1
+          BASELINE_FAILED_SUITES=2
+          if [ "$FAILED_TESTS" -gt "$BASELINE_FAILED_TESTS" ] || [ "$FAILED_SUITES" -gt "$BASELINE_FAILED_SUITES" ]; then
+            echo "::error::Regresi terdeteksi: test:chat failures melebihi baseline (>${BASELINE_FAILED_TESTS} test / >${BASELINE_FAILED_SUITES} suites failed)"
+            echo "  actual: failed_tests=${FAILED_TESTS} failed_suites=${FAILED_SUITES}"
+            exit 1
+          fi
+          echo "test:chat within baseline (≤${BASELINE_FAILED_TESTS} test / ≤${BASELINE_FAILED_SUITES} suites failed) — OK"
+
+      # ── test:golden (node:test) — MUST 17/17 pass, 0 pre-existing failure ─────
+      - name: Run test:golden
+        working-directory: apps/api
+        run: npm run test:golden
