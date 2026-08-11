@@ -8,7 +8,7 @@ export interface CatalogItem {
  * BUKAN generic "kurang paham" — menyatakan dengan jujur bahwa akan
  * disambungkan ke admin toko, sehingga customer tahu keadaan sebenarnya.
  */
-export declare const ESCALATE_REPLY = "Baik kak, akan saya sambungkan ke admin toko ya, mohon ditunggu \uD83D\uDE4F";
+export declare const ESCALATE_REPLY = "Baik kak, akan saya sambungkan ke admin toko. Mohon ditunggu sebentar ya.";
 /** Balasan eskalasi — pure, untuk di-test & dipakai conversation.service.ts. */
 export declare function composeEscalateReply(): string;
 /**

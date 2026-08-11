@@ -192,6 +192,28 @@ describe('composer-v2', () => {
     assert.notStrictEqual(reply, 'Maaf kak, saya kurang paham. Bisa diulang?');
   });
 
+  // P5.2 FIX: ESCALATE_REPLY — hapus emoji, tetap hangat
+  it('P5.2: ESCALATE_REPLY tidak mengandung emoji/non-ASCII', () => {
+    const reply = composeEscalateReply();
+    assert.equal(reply, ESCALATE_REPLY);
+    // Tidak boleh ada karakter non-ASCII (emoji, dsb)
+    assert.ok(/[^\x00-\x7F]/.test(reply) === false, 'tidak boleh ada emoji/non-ASCII');
+    // Tetap mengandung nada hangat
+    assert.match(reply, /Baik kak/i);
+    assert.match(reply, /ditunggu|menunggu/);
+  });
+
+  it('P5.2: ESCALATE_REPLY before/after — emoji 🙏 dihapus', () => {
+    const before = 'Baik kak, akan saya sambungkan ke admin toko ya, mohon ditunggu 🙏';
+    const after = composeEscalateReply();
+    // before (lama) memang punya emoji — inilah yang diperbaiki
+    assert.ok(before.includes('🙏'), 'before harus punya emoji (bukti ada yang dihapus)');
+    // after (baru) TIDAK boleh ada emoji
+    assert.ok(!after.includes('🙏'), 'emoji tidak boleh ada setelah fix');
+    // Nada tetap hangat
+    assert.match(after.toLowerCase(), /admin toko|pemilik toko/);
+  });
+
   it('TASK C1: escalateStatusUpdate() memakai konvensi existing (human_takeover + humanTakeoverAt), bukan status baru', () => {
     const update = escalateStatusUpdate();
     // Konvensi yang SUDAH ADA di codebase:

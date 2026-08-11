@@ -974,7 +974,7 @@ export class ConversationService {
         .map((i) => {
           const qty = typeof i.qty === 'number' ? i.qty : 1;
           const price = typeof i.price === 'number' ? i.price : 0;
-          return `• ${i.product} ×${qty}${price > 0 ? ` — Rp ${(price * qty).toLocaleString('id-ID')}` : ''}`;
+          return `• ${i.product} x${qty}${price > 0 ? ` — Rp ${(price * qty).toLocaleString('id-ID')}` : ''}`;
         })
         .join('\n');
       replyText += `\n\n*Keranjang sekarang:*\n${cartSummary}\n\nMau tambah yang lain atau sudah cukup Kak? 😊`;

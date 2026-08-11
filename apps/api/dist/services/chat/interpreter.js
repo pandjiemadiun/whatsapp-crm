@@ -168,7 +168,16 @@ export function validateCartOps(cartOps, storeProducts) {
 }
 /**
  * truncateTo2Sentences — memotong teks ke (paling banyak) 2 kalimat pertama.
- * Kalimat dipisahkan oleh [.!?] diikuti pemisah spasi (look-behind boundary).
+ *
+ * P5.2 FIX: regex diperbarui agar '?' tidak dianggap akhir kalimat bila
+ * diikuti huruf kecil atau koma (pola interjeksi BI: "boleh kak? mau tanya"
+ * atau "boleh kak?, mau tanya"). '?' tetap dianggap akhir kalimat bila
+ * diikuti spasi + huruf besar, akhir string, atau tanda baca lain.
+ *
+ * Regex breakdown:
+ *   (?<=[.!])\s+              → '.'/'!' + spasi: selalu split (akhiri kalimat)
+ *   (?<=\?)[ \t]+(?![a-z,])   → '?' + spasi, TAPI tidak jika diikuti huruf
+ *                               kecil atau koma (interjeksi BI)
  *
  * Pure & sync. Pipeline (FASE 4) pakai sebagai safety-net agar reply_draft
  * tak melebihi 2 kalimat, sekaligus memenuhi aturan system prompt.
@@ -177,7 +186,7 @@ export function truncateTo2Sentences(text) {
     if (!text)
         return '';
     const sentences = text
-        .split(/(?<=[.!?])\s+/)
+        .split(/(?<=[.!])\s+|(?<=\?)[ \t]+(?![a-z,])/)
         .map((s) => s.trim())
         .filter(Boolean);
     return sentences.slice(0, 2).join(' ');
