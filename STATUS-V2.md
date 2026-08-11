@@ -342,3 +342,9 @@ NEXT: P5 - Response naturalness (composer-v2).
 di-log, qty<=0 display fix, reply spasi-doang di-trim. Commit 0e99fbd.
 6 item GAYA nunggu keputusan owner (lihat RAILS §6).
 NEXT: keputusan GAYA, lalu P6 (golden dataset architecture gate).
+
+## UPDATE 10/8 — P5 TOTAL SELESAI
+P5.1 (5 bug objektif) + P5.2 (3 GAYA) selesai. Commit 0e99fbd, bd607f6.
+3 GAYA sisa: ditunda permanen (topic-switch generic, v1/v2 sudah konsisten
+otomatis, larangan harga reply_draft dipertahankan).
+NEXT: P6 - Golden dataset sebagai architecture gate (terakhir di roadmap).
