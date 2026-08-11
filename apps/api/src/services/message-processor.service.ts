@@ -51,6 +51,8 @@ export interface ProcessMessageInput {
   text: string;
   messageId: string;
   gateway: 'gowa' | 'fonnte';
+  channel?: 'whatsapp' | 'web';
+  webUid?: string;
   deviceId?: string;
   token?: string;
   inboxId?: number;
@@ -231,6 +233,23 @@ try {
       };
     }
 
+    // Channel-aware validation (P-PWA.4) — before creating/upserting Conversation.
+    // WA: customerPhone wajib; Web: Customer.webUid wajib. Diletakkan sekali
+    // di funnel ini (dipanggil baik path awal :166 maupun retry via handleFlushed :200),
+    // sebelum create Conversation di :238. Jalur WA existing selalu nyalurkan
+    // customerPhone (dari fromJid/sender) sehingga guard tidak pernah trigger.
+    const channel = input.channel ?? 'whatsapp';
+    if (channel === 'whatsapp' && !input.customerPhone) {
+      throw new Error(
+        `customerPhone required for whatsapp channel (storeId=${input.storeId}, conversationId=${input.conversationId})`
+      );
+    }
+    if (channel === 'web' && !input.webUid) {
+      throw new Error(
+        `webUid required for web channel (storeId=${input.storeId}, conversationId=${input.conversationId})`
+      );
+    }
+
     // 7. Call conversation service (handles context + fallback chain)
     let result;
     try {
@@ -239,7 +258,8 @@ result = await this.llmCircuitBreaker.wrap(() =>
           input.storeId,
           input.customerId,
           input.conversationId,
-          msg.content
+          msg.content,
+          channel
         )
       );
     } catch (err) {
