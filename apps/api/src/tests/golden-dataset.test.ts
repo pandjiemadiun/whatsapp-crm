@@ -720,7 +720,7 @@ test('Case B3-b: "berapa bayar kangkung" -> tryProduct (harga), BUKAN tryTotal/t
     assert.match(result!.message.content, /kangkung/i, 'harus sebut kangkung');
     assert.match(result!.message.content, /8\.?000|8000/, 'harus sebut harga 8000');
     assert.equal(calls, 0, '0 LLM — tryProduct fast path (bukan interpreter)');
-    assert.equal(audit.stagesReached, ['normalizer', 'tier3']);
+    assert.deepEqual(audit.stagesReached, ['normalizer', 'tier3']);
     assert.equal(audit.finalIntent, 'fastpath');
     // Bukti: TIDAK pernah menyentuh tryTotal/tryPayment (content bukan keranjang-bayar)
     assert.ok(!result!.message.content.includes('keranjang belanja Kakak masih kosong'), 'must not be tryTotal empty-cart reply');
