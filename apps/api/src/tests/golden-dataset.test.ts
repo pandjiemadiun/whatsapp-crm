@@ -885,3 +885,68 @@ test('Case P3: engine v2 — workspace_v2 persist antar-turn (P3 gate)', async (
     }
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TASK P6.4b — Golden case: activeOrder draft vs pending discrimination (P4 gate)
+//
+// Reproduce manual test dari P4.2 (commit 947fdaf). Seed 2 baris order untuk
+// 1 conversationId:
+//   - order 'draft'   @harga A (12.000)  — harus dipilih oleh activeOrder/tryTotal
+//   - order 'pending' @harga B (24.000)  — HANYA dipilih bila tidak ada draft
+// Tanya "total berapa" → assert balasan match draft (A), BUKAN pending (B).
+// Kalau fix P4.2 di-revert (query lama notIn shipped/delivered/cancelled
+// tanpa prefer-draft-first), pending yang lebih baru bisa terpilih → RED.
+// ─────────────────────────────────────────────────────────────────────────────
+test('Case P4: activeOrder/tryTotal memilih draft (Rp 12.000) bukan pending (Rp 24.000) (P4 gate)', async () => {
+  const convId = 'conv-p4';
+  await createConv(convId, 'cust-p4');
+
+  try {
+    // Seed order 'draft' (harga A = 12.000, beras 1x) — HARUS dipilih
+    await prisma.order.create({
+      data: {
+        id: 'ord-draft-p4',
+        storeId: STORE_ID,
+        conversationId: convId,
+        customerId: 'cust-p4',
+        items: [{ product: 'beras', qty: 1, price: 12000, mentionedAt: new Date().toISOString(), confirmedAt: new Date().toISOString() }],
+        totalPrice: 12000,
+        orderStatus: 'draft',
+        currency: 'IDR',
+        deletedAt: null,
+      } as any,
+    });
+
+    // Seed order 'pending' (harga B = 24.000, beras 2x) — HARUS tdk dipilih
+    await new Promise(r => setTimeout(r, 10)); // pastikan createdAt lebih baru
+    await prisma.order.create({
+      data: {
+        id: 'ord-pending-p4',
+        storeId: STORE_ID,
+        conversationId: convId,
+        customerId: 'cust-p4',
+        items: [{ product: 'beras', qty: 2, price: 12000, mentionedAt: new Date().toISOString(), confirmedAt: new Date().toISOString() }],
+        totalPrice: 24000,
+        orderStatus: 'pending',
+        currency: 'IDR',
+        deletedAt: null,
+      } as any,
+    });
+
+    const { result, llmCalls: calls } = await processMsg(convId, 'cust-p4', 'total berapa');
+    assert.ok(result, 'must return a response');
+    assert.equal(calls, 0, 'tryTotal is a 0-LLM fast-path (bukan interpreter)');
+
+    // Assert: balasan HARUS berisi harga draft (12.000), BUKAN pending (24.000)
+    assert.ok(
+      /12\.?000|12000/.test(result!.message.content),
+      `reply must contain draft price 12000, got: ${result!.message.content}`,
+    );
+    assert.ok(
+      !/24\.?000|24000/.test(result!.message.content),
+      `reply must NOT contain pending price 24000 (draft-first discrimination), got: ${result!.message.content}`,
+    );
+  } finally {
+    await prisma.conversation.delete({ where: { id: convId } }).catch(() => {});
+  }
+});
