@@ -250,8 +250,12 @@ export class ConversationService {
 
             // Compose reply dengan total dari DB cart
             const resolvedCart = await this.getCartFromDb(conversationId);
-            const resolvedSubtotal = resolvedCart.reduce(
-              (sum, i) => sum + (Number(i.price) * Number(i.qty || 1)),
+            // I-1a FIX: filter qty <= 0 (konsisten sama renderCartSummary filter :965).
+            // Sebelumnya Number(i.qty || 1) memperlakukan qty=0 sebagai qty=1,
+            // menyebabkan subtotal termasuk item yang tidak ditampilkan -> mismatch.
+            const visibleCart = resolvedCart.filter((i) => Number(i.qty || 0) > 0);
+            const resolvedSubtotal = visibleCart.reduce(
+              (sum, i) => sum + (Number(i.price) * Number(i.qty || 0)),
               0
             );
             let resolvedReply: string;
@@ -333,13 +337,17 @@ export class ConversationService {
           await conversationContextService.updateWorkspaceV2(conversationId, JSON.parse(updatedWorkspace));
 
           // 6. Compose reply pakai composer-v2
-          const reply = composeReply({
+          const composed = composeReply({
             plannedActs: (reasoningOutcome as any).plannedActs || [],
             reasoningResult: (reasoningOutcome as any).result || { acts: [], unmatched_mentions: [], topic_switch: false, draft_cart_ops: [], confidence: { entities: 0, intent: 0, selection: 0, topic: 0 } },
             workspace,
             catalog,
             clarificationAttempt: 1,
           });
+          // I-2 FIX: safety-net truncate — composer-v2 sudah truncate reply_draft,
+          // tapi ini juga memastikan reply akhir ≤2 kalimat (konsisten v1 path :657)
+          // sebelum dikirim ke customer.
+          const reply = truncateTo2Sentences(composed);
 
           // 7. Return result (same format as v1)
           const result = this.buildResult(conversationId, {
