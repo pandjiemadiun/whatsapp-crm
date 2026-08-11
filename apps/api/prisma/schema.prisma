@@ -10,6 +10,7 @@ generator client {
 model Store {
   id                    String   @id @default(uuid())
   name                  String
+  slug                  String?  @unique
   phoneNumber           String?
   profilePhotoUrl       String?
   description           String?
