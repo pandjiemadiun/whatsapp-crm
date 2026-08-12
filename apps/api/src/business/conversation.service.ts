@@ -72,7 +72,7 @@ export class ConversationService {
         id: conversationId,
         storeId: storeId,
         customerId: customerId,
-        customerPhone: customerId, // Fallback nilai phone dengan customerId
+        customerPhone: channel === 'web' ? null : customerId, // WA: pakai customerId(=phone asli); Web: null (bukan webUid)
         channel,
         status: 'open',
       },
