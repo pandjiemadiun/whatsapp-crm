@@ -5,7 +5,6 @@ import {
   Smartphone, Mail, Key, MessageSquare, ShoppingCart, DollarSign, Activity, Brain,
 } from 'lucide-react';
 import adminApi from '../../services/adminApi';
-import ConfirmDialog from '../../components/ConfirmDialog';
 
 interface StoreSummary {
   id: string;
@@ -55,7 +54,7 @@ export default function StoreManagement() {
   const [page, setPage] = useState(1);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; msg: string } | null>(null);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
-  const [confirmDialog, setConfirmDialog] = useState<{ action: 'reset_password' | 'verify_email' | 'disconnect_fonnte'; storeId: string; message: string } | null>(null);
+  const [, setConfirmDialog] = useState<{ action: 'reset_password' | 'verify_email' | 'disconnect_fonnte'; storeId: string; message: string } | null>(null);
 
   // Detail modal
   const [detailStore, setDetailStore] = useState<StoreDetail | null>(null);
@@ -127,50 +126,12 @@ export default function StoreManagement() {
     setConfirmDialog({ action: 'reset_password', storeId, message: 'Reset password toko ini? Toko akan menerima email reset password.' });
   };
 
-  const handleResetPasswordConfirm = async (storeId: string) => {
-    setActionLoading(storeId);
-    try {
-      await adminApi.post(`/stores/${storeId}/reset-password`);
-      showFeedback('success', 'Password berhasil direset');
-    } catch (err: any) {
-      showFeedback('error', err?.response?.data?.error || 'Gagal reset password');
-    } finally {
-      setActionLoading(null);
-    }
-  };
-
   const handleVerifyEmail = (storeId: string) => {
     setConfirmDialog({ action: 'verify_email', storeId, message: 'Verifikasi email toko ini?' });
   };
 
-  const handleVerifyEmailConfirm = async (storeId: string) => {
-    setActionLoading(storeId);
-    try {
-      await adminApi.post(`/stores/${storeId}/verify-email`);
-      showFeedback('success', 'Email berhasil diverifikasi');
-      loadStores();
-    } catch (err: any) {
-      showFeedback('error', err?.response?.data?.error || 'Gagal verifikasi email');
-    } finally {
-      setActionLoading(null);
-    }
-  };
-
   const handleDisconnectFonnte = (storeId: string) => {
     setConfirmDialog({ action: 'disconnect_fonnte', storeId, message: 'Putuskan koneksi Fonnte toko ini?' });
-  };
-
-  const handleDisconnectFonnteConfirm = async (storeId: string) => {
-    setActionLoading(storeId);
-    try {
-      await adminApi.post(`/stores/${storeId}/disconnect-fonnte`);
-      showFeedback('success', 'Fonnte berhasil diputus');
-      loadStores();
-    } catch (err: any) {
-      showFeedback('error', err?.response?.data?.error || 'Gagal putus Fonnte');
-    } finally {
-      setActionLoading(null);
-    }
   };
 
   return (

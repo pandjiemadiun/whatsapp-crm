@@ -5,7 +5,6 @@ import {
   FileDown, X, Download,
 } from 'lucide-react';
 import adminApi from '../../services/adminApi';
-import ConfirmDialog from '../../components/ConfirmDialog';
 
 interface AuditEntry {
   id: string;
@@ -48,8 +47,8 @@ export default function AuditLogViewer() {
   const [totalPages, setTotalPages] = useState(1);
   const [filterAction, setFilterAction] = useState('');
   const [detailLog, setDetailLog] = useState<AuditDetail | null>(null);
-  const [exportLoading, setExportLoading] = useState(false);
-  const [exportConfirm, setExportConfirm] = useState<'csv' | 'json' | null>(null);
+  const [exportLoading] = useState(false);
+  const [, setExportConfirm] = useState<'csv' | 'json' | null>(null);
 
   const loadData = useCallback(() => {
     setLoading(true);
@@ -72,30 +71,6 @@ export default function AuditLogViewer() {
   useEffect(() => {
     loadData();
   }, [loadData]);
-
-  const handleExport = async (format: 'json' | 'csv') => {
-    setExportLoading(true);
-    try {
-      const filters = filterAction ? { action: filterAction } : {};
-      const res = await adminApi.post('/audit-logs/export', { format, filters }, { responseType: 'blob' });
-      const blob = new Blob([res.data], {
-        type: format === 'json' ? 'application/json' : 'text/csv',
-      });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      const dateStr = new Date().toISOString().slice(0, 10);
-      a.href = url;
-      a.download = `audit-logs-${dateStr}.${format}`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    } catch (err: any) {
-      alert(err?.response?.data?.error || 'Gagal export logs');
-    } finally {
-      setExportLoading(false);
-    }
-  };
 
   const loadDetail = async (logId: string) => {
     try {

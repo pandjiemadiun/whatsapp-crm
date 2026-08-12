@@ -1,5 +1,4 @@
 import { useEffect, useState, useCallback } from 'react';
-import ConfirmDialog from './ConfirmDialog';
 import api from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -59,12 +58,15 @@ export default function useFonnteSettings(): UseFonnteSettingsResult {
   const [maskedToken, setMaskedToken] = useState('');
   const [connectedNumber, setConnectedNumber] = useState('');
   const [saving, setSaving] = useState(false);
-  const [disconnecting, setDisconnecting] = useState(false);
-  const [confirmDialog, setConfirmDialog] = useState<{ type: 'rotate' | 'disconnect' } | null>(null);
+  // P-PWA.17: konfirmasi-dialog flow sudah tidak ter-render (ConfirmDialog dihapus),
+  // jadi setter untuk state loading/confirm yang tidak pernah ada caller-nya di-drop
+  // lewat destructuring value-only. Value tetap dipakai di response/JSX konsumen.
+  const [disconnecting] = useState(false);
+  const [, setConfirmDialog] = useState<{ type: 'rotate' | 'disconnect' } | null>(null);
   const [lastChecked, setLastChecked] = useState<Date | null>(null);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; msg: string } | null>(null);
   const [webhookUrl, setWebhookUrl] = useState('');
-  const [webhookLoading, setWebhookLoading] = useState(false);
+  const [webhookLoading] = useState(false);
   const [webhookCopied, setWebhookCopied] = useState(false);
 
   const showFeedback = (type: 'success' | 'error', msg: string) => {
@@ -85,30 +87,9 @@ export default function useFonnteSettings(): UseFonnteSettingsResult {
     }
   }, [storeId]);
 
-  const handleRotateWebhook = () => {
+  const handleRotateWebhook = async () => {
     if (!storeId) return;
     setConfirmDialog({ type: 'rotate' });
-  };
-
-  const handleRotateConfirm = async () => {
-
-    setWebhookLoading(true);
-    setFeedback(null);
-    try {
-      const res = await api.post('/messages/rotate-webhook-secret');
-      if (res.data.success) {
-        setWebhookUrl(res.data.data.webhookUrl);
-        setWebhookCopied(false);
-        showFeedback('success', 'New webhook URL generated. Update it in your Fonnte dashboard.');
-      } else {
-        showFeedback('error', res.data.error || 'Failed to generate webhook URL.');
-      }
-    } catch (err: any) {
-      const msg = err?.response?.data?.error || err?.message || 'Failed to generate webhook URL';
-      showFeedback('error', msg);
-    } finally {
-      setWebhookLoading(false);
-    }
   };
 
   const handleCopyWebhook = async () => {
@@ -211,41 +192,9 @@ export default function useFonnteSettings(): UseFonnteSettingsResult {
     }
   };
 
-  const handleDisconnect = () => {
+  const handleDisconnect = async () => {
     if (!storeId) return;
     setConfirmDialog({ type: 'disconnect' });
-  };
-
-  const handleDisconnectConfirm = async () => {
-
-    setDisconnecting(true);
-    setFeedback(null);
-
-    try {
-      const res = await api.put('/auth/profile', {
-        storeId,
-        fonnteToken: null,
-        fonnteNumber: null,
-      });
-
-      if (res.data.success) {
-        setViewState('disconnected');
-        setToken('');
-        setFonnteNumber('');
-        setMaskedToken('');
-        setConnectedNumber('');
-        setLastChecked(new Date());
-        setStep(1);
-        showFeedback('success', 'Gateway disconnected successfully.');
-      } else {
-        showFeedback('error', res.data.error || 'Failed to disconnect.');
-      }
-    } catch (err: any) {
-      const msg = err?.response?.data?.error || err?.message || 'Failed to disconnect';
-      showFeedback('error', msg);
-    } finally {
-      setDisconnecting(false);
-    }
   };
 
   return {

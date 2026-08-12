@@ -1,6 +1,5 @@
 import { useEffect, useState, Fragment } from 'react';
 import { useNavigate } from 'react-router-dom';
-import ConfirmDialog from '../../components/ConfirmDialog';
 import { Settings, ArrowLeft, Loader2, Edit3, Save, X, Eye, EyeOff, AlertTriangle, Trash2, RefreshCw, Wifi, CheckCircle2, Key, Shield, Database, Info } from 'lucide-react';
 import adminApi from '../../services/adminApi';
 import { useAdminAuth } from '../../contexts/AdminAuthContext';
@@ -85,23 +84,6 @@ export default function PlatformConfig() {
 
   const handleDelete = (key: string) => {
     setDeletingKey(key);
-  };
-
-  const confirmDelete = async () => {
-    if (!deletingKey) return;
-    const key = deletingKey;
-    setDeletingKey(key);
-    try {
-    await adminApi.delete(`/config/${key}`);
-      showFeedback('success', 'Konfigurasi berhasil dihapus');
-      const res = await adminApi.get('/config');
-      setConfigs(res.data.data || []);
-    } catch (err: any) {
-      const msg = err?.response?.data?.error || err?.message || 'Gagal menghapus';
-      showFeedback('error', msg);
-    } finally {
-      setDeletingKey(null);
-    }
   };
 
   const handleReloadCache = async () => {

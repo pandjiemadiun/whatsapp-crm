@@ -5,7 +5,6 @@ import {
   ExternalLink, Check,
 } from 'lucide-react';
 import useFonnteSettings, { formatTime } from '../components/FonnteSettings';
-import ConfirmDialog from '../components/ConfirmDialog';
 
 export default function WhatsAppConnect() {
   const navigate = useNavigate();
