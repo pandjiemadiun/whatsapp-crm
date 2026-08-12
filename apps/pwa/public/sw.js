@@ -11,6 +11,17 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('fetch', (event) => {
+  // Lompati SW untuk request API (lifeline chat): fetch() di dalam handler SW
+  // dapat menghasilkan 304/0-status di Chrome sehingga ChatPage gagal baca
+  // init -> berpotensi render "Toko tidak ditemukan" walaupun server mengembali
+  // 200. /api/* dibiarkan ke jaringan langsung (tanpa intersepsi). Lihat laporan P-PWA.19.
+  let reqUrl;
+  try {
+    reqUrl = new URL(event.request.url);
+  } catch {
+    /* abaikan, biarkan jaringan yang menangani */
+  }
+  if (reqUrl && reqUrl.pathname.startsWith('/api/')) return;
   // pass-through ke jaringan; hanya membuktikan SW mengontrol halaman.
   // Pada failure, kembalikan Response kosong agar fetch tak mengganggu render.
   if (event.request.method === 'GET') {
