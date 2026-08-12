@@ -5,3 +5,20 @@
 @theme {
   --color-brand: #1B53F5;
 }
+
+/* P-PWA.14: animasi 3-dot "mengetik..." (nihil banget, dipakai ChatBubble isTyping) */
+@layer utilities {
+  @keyframes dot-pulse {
+    0% { opacity: 0.2; transform: translateY(0); }
+    50% { opacity: 1; transform: translateY(-2px); }
+    100% { opacity: 0.2; transform: translateY(0); }
+  }
+  .dot-pulse {
+    display: inline-block;
+    width: 0.45em;
+    height: 0.45em;
+    border-radius: 9999px;
+    background: theme('colors.gray.400');
+    animation: dot-pulse 1.2s ease-in-out infinite;
+  }
+}

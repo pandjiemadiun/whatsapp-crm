@@ -24,6 +24,23 @@ export default function ChatPage() {
   const [loading, setLoading] = useState(true)
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [isTyping, setIsTyping] = useState(false)
+
+  // P-PWA.14: timer + target untuk "delay natural".
+  // - targetDisplayMs dihitung SEKALI saat pesan dikirim (700-1300ms).
+  // - balasan ditampilkan pada max(targetDisplayMs, waktu response benar-benyra datang):
+  //   AI cepat -> tetap tunggu sampai target; AI lambat -> tampilkan langsung,
+  //   TIDAK pernah menambah delay di atas waktu respon asli.
+  const typingTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const targetDisplayMs = useRef<number>(0)
+  const sendStartedAt = useRef<number>(0)
+
+  const clearTypingTimer = () => {
+    if (typingTimer.current) {
+      clearTimeout(typingTimer.current)
+      typingTimer.current = null
+    }
+  }
   const bottomRef = useRef<HTMLDivElement>(null)
 
   // --- Identity (webUid) persisten di localStorage, satu per browser ---
@@ -69,11 +86,22 @@ export default function ChatPage() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
+  // 4. clear timer bila komponen unmount (hindari memory leak + setState pasca-unmount)
+  useEffect(() => clearTypingTimer, [])
+
   const onSend = async () => {
     if (!input.trim() || sending || !webUid || !slug) return
     setSending(true)
     setError(null)
     const text = input.trim()
+
+    // 2. target display duration (700-1300ms) — dihitung SEKALI saat kirim
+    sendStartedAt.current = Date.now()
+    targetDisplayMs.current = 700 + Math.floor(Math.random() * 600)
+    clearTypingTimer()
+
+    // 1. tampilkan "mengetik..." SEGERA setelah user kirim (optimistic)
+    setIsTyping(true)
 
     // Optimistic: tampilkan user bubble sebelum response balik
     setMessages((m) => [...m, { role: 'user', content: text }])
@@ -85,8 +113,14 @@ export default function ChatPage() {
         message: text,
       })
       const body = res.data
+      const elapsed = Date.now() - sendStartedAt.current
+      // 3. balasan muncul pada max(targetDisplayTime, waktu response datang) —
+      //    tidak ada tambahan delay di ATAS target, tidak kurangi saat AI lambat.
+      const delay = Math.max(targetDisplayMs.current - elapsed, 0)
+
       if (body?.status === 'pending_human') {
-        // human_takeover: teruskan ke admin, bukan error
+        // human_takeover: bukan balasan AI berjenjang -> tampilkan segera
+        clearTypingTimer()
         setMessages((m) => [
           ...m,
           {
@@ -95,23 +129,40 @@ export default function ChatPage() {
           },
         ])
       } else if (body?.success && body.content != null) {
-        setMessages((m) => [...m, { role: 'assistant', content: body.content }])
+        // Balasan AI asli: tunggu sampai max(target, arrival).
+        // AI lambat (elapsed >= target -> delay <= 0): tampilkan LANGSUNG, tak pakai timer.
+        if (delay <= 0) {
+          clearTypingTimer()
+          setIsTyping(false)
+          setSending(false)
+          setMessages((m) => [...m, { role: 'assistant', content: body.content }])
+        } else {
+          typingTimer.current = setTimeout(() => {
+            clearTypingTimer()
+            setIsTyping(false)
+            setSending(false)
+            setMessages((m) => [...m, { role: 'assistant', content: body.content }])
+          }, delay)
+        }
       } else {
+        clearTypingTimer()
+        setIsTyping(false)
+        setSending(false)
         setMessages((m) => [
           ...m,
           { role: 'system', content: 'Tidak ada balasan dari sistem' },
         ])
       }
     } catch (e: any) {
-      // 429 mutex / network error -> tampilkan di area chat (bukan alert),
-      // tombol kirim tetap bisa dipakai lagi
+      // 5. error (network / 429): tampilkan SECEARA LANGSUNG — jangan nunggu target
+      clearTypingTimer()
+      setIsTyping(false)
+      setSending(false)
       if (e?.response?.status === 429) {
         setError('Sesi sedang sibuk, mohon kirim lagi.')
       } else {
         setError(e?.message ?? 'Gagal mengirim pesan')
       }
-    } finally {
-      setSending(false)
     }
   }
 
@@ -164,6 +215,7 @@ export default function ChatPage() {
             />
           ))
         )}
+        {isTyping && <ChatBubble role="assistant" isTyping />}
         {error && (
           <div className="text-red-600 text-sm p-2">{error}</div>
         )}
