@@ -72,8 +72,17 @@ app.set('trust proxy', Number(process.env.TRUST_PROXY || 1));
 
 // Middleware JSON & CORS
 app.use(express.json());
+// CORS whitelist: localhost dev TETAP dipakai; origin produksi PWA ditambahkan
+// via env var PWA_ALLOWED_ORIGINS (comma-separated). Jika env var kosong/unset,
+// fallback hanya ke localhost (tidak pernah open/*). Lihat .env.example.
+const LOCALHOST_ORIGINS = ['http://localhost:5173', 'http://localhost:4173'];
+const envOrigins = (process.env.PWA_ALLOWED_ORIGINS || '')
+  .split(',')
+  .map((o) => o.trim())
+  .filter((o) => o.length > 0);
+const corsAllowedOrigins = [...new Set([...LOCALHOST_ORIGINS, ...envOrigins])];
 app.use(cors({
-  origin: ['http://localhost:5173', 'http://localhost:4173'],
+  origin: corsAllowedOrigins,
   credentials: true,
 }));
 
