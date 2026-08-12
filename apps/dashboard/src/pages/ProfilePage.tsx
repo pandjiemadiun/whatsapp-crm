@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Save, Loader2, Camera, Lock, Pencil, Trash2, Upload, Plus, Truck, BookOpen, AlertCircle, ChevronDown, Store, CreditCard } from 'lucide-react';
+import { ArrowLeft, Save, Loader2, Camera, Lock, Pencil, Trash2, Upload, Plus, Truck, BookOpen, AlertCircle, ChevronDown, Store, CreditCard, Copy, RefreshCw } from 'lucide-react';
 import api from '../services/api';
 import { TIMEZONES } from '../lib/timezones';
 import { useAuth } from '../contexts/AuthContext';
@@ -18,8 +18,36 @@ type OperatingHoursData = {
   summary: string;
 };
 
+/**
+ * P-PWA.16 — Slug management.
+ * Regex + panjang validasi DIPADANGIN dengan backend routes/profile.ts.
+ * Format: huruf kecil, angka, dash; tidak diawali/diakhiri dash; tidak ada
+ * dash berurut; panjang 3-50 karakter. Hanya validasi FORMAT karakter saja
+ * (sistem tidak menilai makna semantik, mis. apakah "toko-0812xxx" nomor WA).
+ */
+const SLUG_REGEX = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const MIN_SLUG_LEN = 3;
+const MAX_SLUG_LEN = 50;
+
+function validateSlug(slug: string): { valid: boolean; error?: string } {
+  const s = slug.trim().toLowerCase();
+  if (s.length < MIN_SLUG_LEN) return { valid: false, error: `Slug minimal ${MIN_SLUG_LEN} karakter` };
+  if (s.length > MAX_SLUG_LEN) return { valid: false, error: `Slug maksimal ${MAX_SLUG_LEN} karakter` };
+  if (!SLUG_REGEX.test(s)) {
+    return { valid: false, error: 'Hanya huruf kecil, angka, dan dash (mis. toko-makmur). Tidak boleh diawali/diakhiri dash.' };
+  }
+  return { valid: true };
+}
+
+// Domain publik PWA (customer-facing chat URL). Di production disajikan dari
+// qlobot.web.id, sehingga origin-nya otomatis benar. Dipakai untuk menampilkan
+// link yang bisa di-copy di form profil.
+const PWA_BASE_URL = typeof window !== 'undefined' ? window.location.origin : 'https://qlobot.web.id';
+
+
 interface ProfileData {
   name: string;
+  slug: string | null;
   email: string;
   phoneNumber: string | null;
   description: string | null;
@@ -128,7 +156,7 @@ export default function ProfilePage() {
 
   const [profile, setProfile] = useState<ProfileData | null>(null);
   const [form, setForm] = useState({
-    name: '', description: '', businessCategory: '', address: '', phoneNumber: '', timezone: 'Asia/Jakarta',
+    name: '', description: '', businessCategory: '', address: '', phoneNumber: '', slug: '', timezone: 'Asia/Jakarta',
   });
 
   const [operatingHours, setOperatingHours] = useState<OperatingHoursData>({
@@ -140,6 +168,8 @@ export default function ProfilePage() {
   const [pwForm, setPwForm] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
 
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; msg: string } | null>(null);
+  const [slugError, setSlugError] = useState<string | null>(null);
+  const [slugCopied, setSlugCopied] = useState(false);
   const [pwFeedback, setPwFeedback] = useState<{ type: 'success' | 'error'; msg: string } | null>(null);
   const [paymentFeedback, setPaymentFeedback] = useState<{ type: 'success' | 'error'; msg: string } | null>(null);
   const [shippingFeedback, setShippingFeedback] = useState<{ type: 'success' | 'error'; msg: string } | null>(null);
@@ -184,6 +214,8 @@ const [savingShipping, setSavingShipping] = useState(false);
   const [shippingDirty, setShippingDirty] = useState(false);
   const [sopDirty, setSopDirty] = useState(false);
   const [, setSavedFlags] = useState<{ profile?: boolean; payment?: boolean; shipping?: boolean; sop?: boolean }>({});
+  // Per-section error flags untuk tombol "Simpan Semua" (PS2+PO3)
+  const [sectionError, setSectionError] = useState<Record<string, string>>({});
 
   // SOP per-category state
   const [expandedSop, setExpandedSop] = useState<Record<string, boolean>>({
@@ -262,6 +294,7 @@ const [savingShipping, setSavingShipping] = useState(false);
         setProfile(d);
         setForm({
           name: d.name || '',
+          slug: d.slug || '',
           description: d.description || '',
           businessCategory: d.businessCategory || '',
           address: d.address || '',
@@ -443,11 +476,26 @@ setShippingFlatInCity(d.shippingFlatInCity ?? '');
       showFeedback('error', 'Nama toko wajib diisi');
       return;
     }
+
+    // Validasi slug client-side SEBELUM submit — format sama persis dengan
+    // backend (routes/profile.ts). Error muncul instan, tidak nunggu round-trip API.
+    const slugInput = form.slug.trim();
+    if (slugInput !== '') {
+      const slugCheck = validateSlug(slugInput);
+      if (!slugCheck.valid) {
+        showFeedback('error', slugCheck.error!);
+        return;
+      }
+    }
+
     setSaving(true);
     try {
       const regenerated = generateSummary(operatingHours.days);
       const payload = {
         name: form.name.trim(),
+        // slug kosong → undefined (omitted dari JSON, backend biarkan slug lama).
+        // slug terisi → kirim hasil lowercase-trim supaya konsisten dengan response.
+        slug: slugInput !== '' ? slugInput.toLowerCase() : undefined,
         description: form.description.trim() || null,
         businessCategory: form.businessCategory.trim() || null,
         address: form.address.trim() || null,
@@ -457,8 +505,13 @@ setShippingFlatInCity(d.shippingFlatInCity ?? '');
       };
       const res = await api.put('/profile', payload);
       if (res.data.success) {
+        // Refresh slug dari response server (normalized/kebab-case) supaya link
+        // yang ditampilkan selalu konsisten dengan yang tersimpan.
+        const savedSlug = res.data.data?.slug ?? null;
+        setForm((f) => ({ ...f, slug: savedSlug ?? '' }));
+        setSlugError(null);
         updateUserProfile({ storeName: form.name.trim() });
-        showFeedback('success', 'Profil berhasil disimpan');
+        showFeedback('success', savedSlug ? 'Profil & alamat chat toko berhasil disimpan' : 'Profil berhasil disimpan');
         setProfileDirty(false);
         setSavedFlags(f => ({ ...f, profile: true }));
         setTimeout(() => setSavedFlags(f => { const n = { ...f }; delete n.profile; return n; }), 3000);
@@ -748,6 +801,13 @@ setShippingFlatInCity(d.shippingFlatInCity ?? '');
           </div>
         )}
 
+        {/* Tampilkan error per-section bila ada (mis. validasi slug gagal di handleSave) */}
+        {Object.keys(sectionError).length > 0 && (
+          <div className="mb-2 text-xs text-red-600 dark:text-red-400">
+            Gagal menyimpan pada bagian: {Object.values(sectionError).join(', ')}
+          </div>
+        )}
+
         {/* 1. Informasi Toko */}
         <div ref={profileRef} className="bg-surface dark:bg-dcard rounded-2xl border border-line dark:border-dline p-6">
           <SectionHeader
@@ -859,6 +919,74 @@ setShippingFlatInCity(d.shippingFlatInCity ?? '');
                 className="w-full px-3 py-2 border border-line dark:border-dline rounded-lg text-sm bg-surface dark:bg-dsurface text-ink placeholder-muted focus:outline-none focus:ring-2 focus:ring-brand disabled:opacity-50 resize-y"
               />
             </div>
+
+            {/* Slug / Alamat Chat Toko — identitas publik toko di URL PWA */}
+            <div className="space-y-1">
+              <label className="text-sm font-medium text-ink dark:text-surface">
+                Alamat Chat Toko <span className="text-xs text-muted">(opsional)</span>
+              </label>
+              <input
+                type="text"
+                value={form.slug}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setForm({ ...form, slug: v });
+                  setProfileDirty(true);
+                  // Validasi live supaya error muncul sebelum submit (cepat, tidak nunggu round-trip API)
+                  if (v.trim() === '') {
+                    setSlugError(null);
+                  } else {
+                    const check = validateSlug(v);
+                    setSlugError(check.valid ? null : check.error!);
+                  }
+                }}
+                disabled={saving}
+                placeholder="toko-makmur"
+                className={`w-full px-3 py-2 border rounded-lg text-sm bg-surface dark:bg-dsurface text-ink placeholder-muted focus:outline-none focus:ring-2 disabled:opacity-50 ${
+                  slugError ? 'border-red-500 focus:ring-red-500' : 'border-line dark:border-dline focus:ring-brand'
+                }`}
+                aria-invalid={!!slugError}
+                aria-describedby="slug-help slug-error"
+              />
+              <p id="slug-help" className="text-xs text-muted">
+                Nama unik toko di URL publik. Customer akan membuka{' '}
+                <span className="font-mono text-ink dark:text-surface">
+                  qlobot.web.id/c/<span className="font-semibold">toko-makmur</span>
+                </span>
+                {`. Hanya huruf kecil, angka, dan dash (3–50 karakter), tidak boleh diawali/diakhiri dash.`}
+              </p>
+              {slugError && (
+                <p id="slug-error" className="text-xs text-red-500 dark:text-red-400">{slugError}</p>
+              )}
+            </div>
+
+            {/* Link publik yang bisa di-copy — tampil setiap ada slug tersimpan */}
+            {form.slug ? (
+              <div className="pt-2 space-y-1.5">
+                <p className="text-xs text-muted">Link chat toko Anda (bagikan ke customer di Facebook/IG/dsb):</p>
+                <div className="flex items-center gap-2">
+                  <code className="flex-1 min-w-0 text-xs px-2.5 py-1.5 bg-line dark:bg-dline rounded break-all text-ink dark:text-surface">
+                    {PWA_BASE_URL}/c/{form.slug}
+                  </code>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        await navigator.clipboard.writeText(`${PWA_BASE_URL}/c/${form.slug}`);
+                        setSlugCopied(true);
+                        setTimeout(() => setSlugCopied(false), 2000);
+                      } catch {
+                        // clipboard tidak tersedia — biarkan, link tetap terlihat
+                      }
+                    }}
+                    className="shrink-0 px-2.5 py-1.5 rounded-lg bg-brand-soft dark:bg-brand/15 text-brand hover:bg-brand hover:text-white focus-visible:ring-2 focus:ring-brand transition"
+                    title="Salin link"
+                  >
+                    {slugCopied ? <span className="text-xs font-medium">Tersalin!</span> : <Copy className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+            ) : null}
 
             <div className="space-y-1">
               <div className="flex items-center justify-between">
