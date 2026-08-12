@@ -33,5 +33,23 @@ module.exports = {
       error_file: '/root/.pm2/logs/dashboard-error.log',
       out_file: '/root/.pm2/logs/dashboard-out.log',
     },
+    {
+      // P-PWA.19: apps/pwa (chat publik) di port 8081 (bebeas — lihat audit P-PWA.18 poin 6).
+      // Diikuti pola dashboard: vite preview --host, fork mode.
+      name: 'pwa',
+      cwd: '/home/ubuntu/garuda/apps/pwa',
+      script: 'node_modules/.bin/vite',
+      args: 'preview --host --port 8081',
+      instances: 1,
+      exec_mode: 'fork',
+      env: { NODE_ENV: 'production' },
+      kill_timeout: 10000,
+      max_restarts: 5,
+      min_uptime: 5000,
+      max_memory_restart: '300M',
+      time: true,
+      error_file: '/root/.pm2/logs/pwa-error.log',
+      out_file: '/root/.pm2/logs/pwa-out.log',
+    },
   ],
 };
