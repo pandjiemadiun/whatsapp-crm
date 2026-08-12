@@ -103,11 +103,15 @@ export default function ChatPage() {
       setLoading(true)
       try {
         const initRes = await api.get(`/pwa/${slug}/init`)
-        if (!cancelled) setStore(initRes.data?.store ?? null)
+        // API envelope: { success:true, data:{ store } }. `store` ada DI `.data`,
+        // BUKAN top-level; bila dibaca `.store` langsung selalu undefined ->
+        // setStore(null) -> "Toko tidak ditemukan" meski API mengembalikan 200 + store.
+        if (!cancelled) setStore(initRes.data?.data?.store ?? null)
         const histRes = await api.get(
           `/pwa/${slug}/history?uid=${encodeURIComponent(webUid)}`,
         )
-        if (!cancelled) setMessages(histRes.data?.history ?? [])
+        // envelope sama: { success:true, data:{ history } } — baca di .data.
+        if (!cancelled) setMessages(histRes.data?.data?.history ?? [])
       } catch (e: any) {
         if (!cancelled) {
           if (e?.response?.status === 404) setStore(null)
