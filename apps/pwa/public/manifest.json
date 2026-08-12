@@ -1,0 +1,21 @@
+{
+  "name": "QloBot — Chat Toko",
+  "short_name": "QloBot",
+  "description": "Asisten chat pelanggan untuk toko online Anda",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#1B53F5",
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
