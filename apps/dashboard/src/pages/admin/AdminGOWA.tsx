@@ -2,7 +2,6 @@ import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, Loader2, Smartphone, QrCode, RefreshCw, CheckCircle2, XCircle, AlertTriangle, Trash2 } from 'lucide-react';
 import adminApi from '../../services/adminApi';
-import ConfirmDialog from '../../components/ConfirmDialog';
 
 interface GOWAStatus {
   deviceId: string;
@@ -25,8 +24,8 @@ export default function AdminGOWA() {
   const [status, setStatus] = useState<GOWAStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [connecting, setConnecting] = useState(false);
-  const [resetting, setResetting] = useState(false);
-  const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [resetting] = useState(false);
+  const [, setShowResetConfirm] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; msg: string } | null>(null);
 
   const showFeedback = (type: 'success' | 'error', msg: string) => {
@@ -97,21 +96,6 @@ export default function AdminGOWA() {
 
   const handleReset = () => {
     setShowResetConfirm(true);
-  };
-
-  const handleResetConfirm = async () => {
-    if (!selectedStore) return;
-    setResetting(true);
-    try {
-      await adminApi.post(`/stores/${selectedStore}/gowa-reset`);
-      setStatus({ deviceId: '', status: 'disconnected', qrcode: null, ownerJid: null });
-      setPhoneInput('');
-      showFeedback('success', 'GOWA device fully removed and reset');
-    } catch (err: any) {
-      showFeedback('error', err?.response?.data?.error || 'Gagal reset');
-    } finally {
-      setResetting(false);
-    }
   };
 
   return (

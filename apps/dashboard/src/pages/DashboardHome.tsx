@@ -149,8 +149,6 @@ export default function DashboardHome() {
 
       const hasMetrics = metricsRes.status === 'fulfilled';
       const hasConversations = convRes.status === 'fulfilled';
-      const hasOrders = orderRes.status === 'fulfilled';
-      const hasProducts = prodRes.status === 'fulfilled';
 
       setMetricsError(!hasMetrics);
       setConvError(!hasConversations);

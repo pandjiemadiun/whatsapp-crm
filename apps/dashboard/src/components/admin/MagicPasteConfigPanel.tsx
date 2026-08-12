@@ -131,7 +131,7 @@ export function MagicPasteConfigPanel({ token }: Props) {
 
   const confirmDelete = async () => {
     if (!deleteConfirm) return;
-    const { id, name } = deleteConfirm;
+    const { id } = deleteConfirm;
     setDeleteConfirm(null);
     setSaving(true);
     try {
