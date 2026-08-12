@@ -11,3 +11,12 @@ createRoot(document.getElementById('root')!).render(
     </BrowserRouter>
   </StrictMode>,
 )
+
+// P-PWA.15: register Service Worker minimal (syarat installable PWA).
+// Pass-through fetch handler ada di public/sw.js (offline-cache = task berikutnya).
+// Registrasi asinkron; jika gagal, jangan blokir render.
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => {})
+  })
+}

@@ -15,6 +15,44 @@ type HistoryMsg = {
   source?: string | null
 }
 
+// --- P-PWA.15: install-prompt state (localStorage, 7-day window) ---
+// TIDAK boolean polos: { dismissedAt, installed }. Dalam 7 hari setelah dismiss,
+// banner tidak muncul; sudah lewat 7 hari (atau belum pernah dismiss) → muncul lagi.
+const INSTALL_KEY = 'pwa_install_prompt'
+const INSTALL_TTL_MS = 7 * 24 * 60 * 60 * 1000
+interface InstallPromptState {
+  dismissedAt?: number
+  installed?: boolean
+}
+// beforeinstallprompt tidak ada di lib.dom; Safari/iOS TIDAK memicu event ini.
+interface BeforeInstallPromptEvent extends Event {
+  readonly platforms: string[]
+  readonly userChoice: Promise<{ outcome: 'accepted' | 'dismissed'; platform: string }>
+  prompt: () => Promise<void>
+}
+function readInstallState(): InstallPromptState {
+  try {
+    const raw = localStorage.getItem(INSTALL_KEY)
+    return raw ? (JSON.parse(raw) as InstallPromptState) : {}
+  } catch {
+    return {}
+  }
+}
+function isInstallBannerAllowed(): boolean {
+  const s = readInstallState()
+  if (s.installed) return false
+  if (s.dismissedAt && Date.now() - s.dismissedAt < INSTALL_TTL_MS) return false
+  return true
+}
+function markDismissed() {
+  const cur = readInstallState()
+  localStorage.setItem(INSTALL_KEY, JSON.stringify({ ...cur, dismissedAt: Date.now() }))
+}
+function markInstalled() {
+  const cur = readInstallState()
+  localStorage.setItem(INSTALL_KEY, JSON.stringify({ ...cur, installed: true }))
+}
+
 export default function ChatPage() {
   const { slug } = useParams<{ slug: string }>()
   const [store, setStore] = useState<Store | null>(null)
@@ -25,12 +63,15 @@ export default function ChatPage() {
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [isTyping, setIsTyping] = useState(false)
+  const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null)
+  const [installBannerOpen, setInstallBannerOpen] = useState(false)
+  const bottomRef = useRef<HTMLDivElement>(null)
+  const installTriggeredRef = useRef(false) // trigger banner sekali per sesi (setelah balasan AI pertama)
 
   // P-PWA.14: timer + target untuk "delay natural".
   // - targetDisplayMs dihitung SEKALI saat pesan dikirim (700-1300ms).
-  // - balasan ditampilkan pada max(targetDisplayMs, waktu response benar-benyra datang):
-  //   AI cepat -> tetap tunggu sampai target; AI lambat -> tampilkan langsung,
-  //   TIDAK pernah menambah delay di atas waktu respon asli.
+  // - balasan muncul pada max(targetDisplayTime, waktu response datang):
+  //   AI cepat -> tunggu sampai target; AI lambat -> langsung, tak ada delay di atas arrival.
   const typingTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const targetDisplayMs = useRef<number>(0)
   const sendStartedAt = useRef<number>(0)
@@ -41,7 +82,6 @@ export default function ChatPage() {
       typingTimer.current = null
     }
   }
-  const bottomRef = useRef<HTMLDivElement>(null)
 
   // --- Identity (webUid) persisten di localStorage, satu per browser ---
   // crypto.randomUUID() bawaan browser; tidak perlu library ekstra.
@@ -89,6 +129,27 @@ export default function ChatPage() {
   // 4. clear timer bila komponen unmount (hindari memory leak + setState pasca-unmount)
   useEffect(() => clearTypingTimer, [])
 
+  // P-PWA.15: tangkap beforeinstallprompt (Chrome/Edge/Android) untuk banner
+  // "Tambah ke Beranda". Safari/iOS TIDAK memicu event ini -> di situ banner menampilkan
+  // instruksi manual; tidak pernah memaksa auto-prompt di Safari.
+  useEffect(() => {
+    const onBeforeInstallPrompt = (e: Event) => {
+      e.preventDefault()
+      setDeferredPrompt(e as unknown as BeforeInstallPromptEvent)
+    }
+    const onAppInstalled = () => {
+      markInstalled()
+      setInstallBannerOpen(false)
+      setDeferredPrompt(null)
+    }
+    window.addEventListener('beforeinstallprompt', onBeforeInstallPrompt)
+    window.addEventListener('appinstalled', onAppInstalled)
+    return () => {
+      window.removeEventListener('beforeinstallprompt', onBeforeInstallPrompt)
+      window.removeEventListener('appinstalled', onAppInstalled)
+    }
+  }, [])
+
   const onSend = async () => {
     if (!input.trim() || sending || !webUid || !slug) return
     setSending(true)
@@ -114,13 +175,15 @@ export default function ChatPage() {
       })
       const body = res.data
       const elapsed = Date.now() - sendStartedAt.current
-      // 3. balasan muncul pada max(targetDisplayTime, waktu response datang) —
-      //    tidak ada tambahan delay di ATAS target, tidak kurangi saat AI lambat.
+      // 3. balasan muncul pada max(targetDisplayTime, waktu response datang).
+      //    delay = target - elapsed (0 bila AI lebih lambat dari target).
       const delay = Math.max(targetDisplayMs.current - elapsed, 0)
 
       if (body?.status === 'pending_human') {
         // human_takeover: bukan balasan AI berjenjang -> tampilkan segera
         clearTypingTimer()
+        setIsTyping(false)
+        setSending(false)
         setMessages((m) => [
           ...m,
           {
@@ -129,6 +192,13 @@ export default function ChatPage() {
           },
         ])
       } else if (body?.success && body.content != null) {
+        // P-PWA.15: trigger banner install SETELAH balasan AI pertama di sesi ini (sekali).
+        // Safari/iOS (deferredPrompt null) -> banner nanti menampilkan instruksi manual.
+        if (!installTriggeredRef.current && isInstallBannerAllowed()) {
+          installTriggeredRef.current = true
+          setInstallBannerOpen(true)
+        }
+
         // Balasan AI asli: tunggu sampai max(target, arrival).
         // AI lambat (elapsed >= target -> delay <= 0): tampilkan LANGSUNG, tak pakai timer.
         if (delay <= 0) {
@@ -142,6 +212,7 @@ export default function ChatPage() {
             setIsTyping(false)
             setSending(false)
             setMessages((m) => [...m, { role: 'assistant', content: body.content }])
+            typingTimer.current = null
           }, delay)
         }
       } else {
@@ -159,7 +230,7 @@ export default function ChatPage() {
       setIsTyping(false)
       setSending(false)
       if (e?.response?.status === 429) {
-        setError('Sesi sedang sibuk, mohon kirim lagi.')
+        setError('Sesi sedang sibanyak, mohon kirim lagi.')
       } else {
         setError(e?.message ?? 'Gagal mengirim pesan')
       }
@@ -242,6 +313,51 @@ export default function ChatPage() {
           {sending ? 'Mengirim…' : 'Kirim'}
         </button>
       </footer>
+
+      {/* P-PWA.15: banner pasang / instruksi Safari (setelah balasan AI pertama) */}
+      {installBannerOpen && (
+        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-10 max-w-sm w-[90%]">
+          <div className="flex items-center gap-3 bg-white border border-gray-200 rounded-xl shadow-lg px-4 py-3">
+            <span className="text-sm text-gray-700 flex-1">
+              {deferredPrompt
+                ? 'Pasang QloBot di layar utama untuk akses cepat?'
+                : 'Buka di browser, ketuk "Tambah ke Beranda" untuk akses cepat.'}
+            </span>
+            {deferredPrompt && (
+              <button
+                onClick={async () => {
+                  try {
+                    await deferredPrompt.prompt()
+                    const choice = await deferredPrompt.userChoice
+                    if (choice.outcome === 'accepted') {
+                      markInstalled()
+                      setInstallBannerOpen(false)
+                      setDeferredPrompt(null)
+                    } else {
+                      markDismissed()
+                    }
+                  } catch {
+                    markDismissed()
+                  }
+                }}
+                className="text-xs font-medium text-blue-600 whitespace-nowrap"
+              >
+                Pasang
+              </button>
+            )}
+            <button
+              onClick={() => {
+                markDismissed()
+                setInstallBannerOpen(false)
+              }}
+              className="text-gray-400 hover:text-gray-700"
+              aria-label="Tutup"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
