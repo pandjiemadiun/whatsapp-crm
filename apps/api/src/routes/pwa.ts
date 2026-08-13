@@ -63,7 +63,7 @@ router.get('/:storeSlug/init', async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Store not found' });
     }
 
-    res.json({ success: true, data: { store } });
+    res.json({ success: true, data: { store, vapidPublicKey: process.env.VAPID_PUBLIC_KEY || null } });
   } catch (err) {
     adapters.logger.error('PWA init error', err as Error);
     res.status(500).json({ error: 'Failed to fetch store' });
@@ -423,6 +423,88 @@ router.post('/:storeSlug/read', async (req: Request, res: Response) => {
   } catch (err) {
     adapters.logger.error('PWA read error', err as Error);
     res.status(500).json({ error: 'Failed to report read' });
+  }
+});
+
+// POST /api/pwa/:storeSlug/subscribe — persist Web Push subscription (FASE 4).
+// Server-authoritative: resolve store (slug) + customer (webUid) on the server —
+// JANGAN percaya customerId/storeId dari client (tenant isolation). UPDATE
+// existing Customer.pushSubscription (refresh/replace bila browser rotate langganan;
+// MVP = 1 browser/device per webUid → kolom Json? cukup).
+router.post('/:storeSlug/subscribe', async (req: Request, res: Response) => {
+  try {
+    const { storeSlug } = req.params;
+    const { uid, subscription } = req.body as { uid?: string; subscription?: unknown };
+    if (!storeSlug) {
+      return res.status(404).json({ error: 'Store not found' });
+    }
+    if (
+      !uid ||
+      !subscription ||
+      typeof subscription !== 'object' ||
+      !('endpoint' in subscription) ||
+      typeof (subscription as { endpoint?: unknown }).endpoint !== 'string'
+    ) {
+      return res.status(400).json({ error: 'uid and a valid PushSubscription are required' });
+    }
+
+    const store = await prisma.store.findUnique({
+      where: { slug: storeSlug, deletedAt: null },
+      select: { id: true },
+    });
+    if (!store) return res.status(404).json({ error: 'Store not found' });
+
+    const customer = await prisma.customer.findFirst({
+      where: { webUid: uid, storeId: store.id, deletedAt: null },
+      select: { id: true },
+    });
+    if (!customer) return res.status(401).json({ error: 'Unauthorized customer' });
+
+    // UPDATE existing Customer row (MVP: 1 subscription per customer).
+    await prisma.customer.update({
+      where: { id: customer.id },
+      data: { pushSubscription: subscription as any },
+    });
+    res.json({ success: true });
+  } catch (err) {
+    adapters.logger.error('PWA subscribe error', err as Error);
+    res.status(500).json({ error: 'Failed to save subscription' });
+  }
+});
+
+// POST /api/pwa/:storeSlug/unsubscribe — clear Web Push subscription (FASE 4).
+// Server-authoritative resolution (slug + webUid). Clears the column; does NOT
+// delete the customer or conversation. Called on user opt-out / browser-driven
+// unsubscription.
+router.post('/:storeSlug/unsubscribe', async (req: Request, res: Response) => {
+  try {
+    const { storeSlug } = req.params;
+    const { uid } = req.body as { uid?: string };
+    if (!storeSlug) {
+      return res.status(404).json({ error: 'Store not found' });
+    }
+    if (!uid) return res.status(400).json({ error: 'uid is required' });
+
+    const store = await prisma.store.findUnique({
+      where: { slug: storeSlug, deletedAt: null },
+      select: { id: true },
+    });
+    if (!store) return res.status(404).json({ error: 'Store not found' });
+
+    const customer = await prisma.customer.findFirst({
+      where: { webUid: uid, storeId: store.id, deletedAt: null },
+      select: { id: true },
+    });
+    if (!customer) return res.status(401).json({ error: 'Unauthorized customer' });
+
+    await prisma.customer.update({
+      where: { id: customer.id },
+      data: { pushSubscription: null as any },
+    });
+    res.json({ success: true });
+  } catch (err) {
+    adapters.logger.error('PWA unsubscribe error', err as Error);
+    res.status(500).json({ error: 'Failed to clear subscription' });
   }
 });
 

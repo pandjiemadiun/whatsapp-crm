@@ -42,6 +42,13 @@ export class RealtimeService {
   private readonly wsPath: string;
   private onlineByStore: Map<string, number> = new Map();
 
+  // FASE 4: per-conversation customer Socket.IO presence (authoritative online signal).
+  // Single-VPS MVP: in-proc. Keyed by `${storeId}:${conversationId}` (store-scoped →
+  // tenant isolated). Only CUSTOMER sockets count; admin sockets are excluded.
+  // Owner rule: ONLINE = >= 1 active authenticated customer Web Socket for the
+  // conversation. OFFLINE = no active customer socket for the conversation.
+  private customerPresence: Map<string, Set<string>> = new Map();
+
   constructor(wsPath = WS_PATH) {
     this.wsPath = wsPath;
   }
@@ -91,6 +98,23 @@ export class RealtimeService {
   isStoreOnline(storeId: string): boolean {
     const n = this.onlineByStore.get(storeId);
     return !!n && n > 0;
+  }
+
+  // FASE 4: conversation-scoped customer presence (see field above).
+  private presenceKey(storeId: string, conversationId: string): string {
+    return `${storeId}:${conversationId}`;
+  }
+
+  /**
+   * FASE 4 — authoritative online signal for push eligibility (single-VPS MVP).
+   * true  = ada >= 1 active authenticated customer Web Socket untuk conversation ini.
+   * false = tidak ada active customer socket untuk conversation ini.
+   * Tenant-isolated: lookup memakai storeId + conversationId (store A cannot
+   * read presence of store B's conversation).
+   */
+  isCustomerConversationOnline(storeId: string, conversationId: string): boolean {
+    const s = this.customerPresence.get(this.presenceKey(storeId, conversationId));
+    return !!s && s.size > 0;
   }
 
   // ---------- Socket.IO middleware ----------
@@ -171,6 +195,14 @@ export class RealtimeService {
     if (ctx.party === 'customer' && ctx.conversationId) {
       // Customer hanya dapat event pada conversation room miliknya (multi-tenant isolated).
       socket.join(customerConvRoom(ctx.storeId, ctx.conversationId));
+      // FASE 4: register this customer socket as present-on-conversation.
+      const key = this.presenceKey(ctx.storeId, ctx.conversationId);
+      let set = this.customerPresence.get(key);
+      if (!set) {
+        set = new Set();
+        this.customerPresence.set(key, set);
+      }
+      set.add(socket.id);
     }
     if (ctx.party === 'human_agent') {
       // Admin menerima semua event tenant-nya (badge inbox), + conv room bila sedang view.
@@ -198,6 +230,18 @@ export class RealtimeService {
       const n = (this.onlineByStore.get(ctx.storeId) ?? 1) - 1;
       if (n <= 0) this.onlineByStore.delete(ctx.storeId);
       else this.onlineByStore.set(ctx.storeId, n);
+
+      // FASE 4: remove this customer socket from per-conversation presence.
+      // Presence stays true while >= 1 customer socket remains; becomes false only
+      // when the LAST customer socket for the conversation disconnects (#8/#9).
+      if (ctx.party === 'customer' && ctx.conversationId) {
+        const key = this.presenceKey(ctx.storeId, ctx.conversationId);
+        const set = this.customerPresence.get(key);
+        if (set) {
+          set.delete(socket.id);
+          if (set.size === 0) this.customerPresence.delete(key);
+        }
+      }
     });
   }
 

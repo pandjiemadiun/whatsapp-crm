@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom'
 import api, { createChatSocket } from '../services/api'
 import type { Socket } from 'socket.io-client'
 import ChatBubble from './ChatBubble'
+import NotificationPrompt from './NotificationPrompt'
 
 type Store = {
   name?: string | null
@@ -68,6 +69,7 @@ export default function ChatPage() {
   const [loading, setLoading] = useState(true)
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [vapidPublicKey, setVapidPublicKey] = useState<string | null>(null)
   const [isAdminTyping, setIsAdminTyping] = useState(false)
   const [isTyping, setIsTyping] = useState(false)
   // FASE 3 local conversation status (driven by WS conversation.* events).
@@ -135,6 +137,7 @@ export default function ChatPage() {
         // BUKAN top-level; bila dibaca `.store` langsung selalu undefined ->
         // setStore(null) -> "Toko tidak ditemukan" meski API mengembalikan 200 + store.
         if (!cancelled) setStore(initRes.data?.data?.store ?? null)
+        if (!cancelled) setVapidPublicKey(initRes.data?.data?.vapidPublicKey ?? null)
         const histRes = await api.get(
           `/pwa/${slug}/history?uid=${encodeURIComponent(webUid)}`,
         )
@@ -435,6 +438,12 @@ export default function ChatPage() {
           </div>
         )}
         <span className="font-medium">{store.name || 'Toku'}</span>
+        <NotificationPrompt
+          slug={slug}
+          uid={webUid}
+          conversationId={conversationId}
+          vapidPublicKey={vapidPublicKey}
+        />
       </header>
 
       {/* area chat */}
