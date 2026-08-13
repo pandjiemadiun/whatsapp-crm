@@ -306,3 +306,137 @@ FASE 3 selesai & terverifikasi: Dashboard ↔ Web human messaging realtime berfu
 *extension* di atas Conversation Engine yang dilindungi, tanpa migrasi skema, tanpa Redis, tanpa
 pm2 restart, tanpa synthetic message id, tanpa double INSERT, dan tanpa melanggar mutex/lock boundary.
 ConversationId konsisten across semua transisi. Semua gate hijau.
+
+> ⚠️ **Catatan forensik (post-commit):** laporan audit independen
+> (`DOCS/laporan-fase3-forensic-audit.md`) membuktikan bahwa pada commit `467ecef`
+> di atas, **`emitAdminTyping` terdefinisi di `apps/dashboard/src/services/realtime.ts`
+> tetapi TIDAK pernah dipanggil dari `apps/dashboard/src/pages/ConversationInbox.tsx`** —
+> sehingga *admin typing → customer* tidak berjalan pada UI Dashboard asli (ditemukan
+> via `grep -rn emitAdminTyping apps/dashboard/src/` = 0 call-site). Klaim "selesai" di
+> atas sebelum *gap patch* ini berjalan belum terverifikasi end-to-end. Berikut
+> *gap patch* yang menutupnya.
+
+---
+
+## FINAL GAP PATCH
+
+Laporan forensik (read-only) terhadap commit FASE 3 (`467ecef`) menemukan satu gap
+fungsional terukur: **admin typing indicator belum di-*wire* ke UI Dashboard.**
+`adminRealtime.emitAdminTyping()` ada dan mekanisme servernya (`admin_typing` →
+`typing.started/stopped {party:'human_agent'}`) sudah pernah diverifikasi runtime, tetapi
+metode klien Dashboard tidak pernah dipanggil ketika admin mengetik.
+
+Gap ini **ditutup** dengan patch berikut. Tidak ada perubahan pada engine, WhatsApp,
+skema, atau file terlindungi; tidak ada migrasi, tidak ada dependency baru, tidak ada
+`pm2 restart`, tidak ada `dist`/`logs`/`.env` yang terlibat.
+
+### 1. Admin typing wiring
+
+Di `apps/dashboard/src/pages/ConversationInbox.tsx`, menambahkan dispatcher *idempotent*
+ke ruangan pelanggan (`store:{storeId}:conv:{id}`) — WS‑only, tanpa DB, tanpa
+`message.created`, tanpa mengubah `party` (`human_agent`) atau room:
+
+- `reportAdminTyping(typing)` — memancarkan hanya bila `selectedIdRef.current` ada
+  (tidak pernah ke conversation lain / tidak saat tidak ada yang terpilih) dan
+  *idempotent* lewat `isTypingRef` (anti storm).
+- `handleReplyChange` → `reportAdminTyping(true)` pada keystroke pertama (non‑empty) +
+  `resetTypistStopTimer()`; `false` ketika input dikosongkan.
+- `handleSend` → `stopAdminTyping()` sebelum kirim (typing stopped pada send).
+- `openConversation` / `closeDetail` → `stopAdminTyping()` untuk menghindari *leak* ke
+  conversation sebelumnya.
+- Efek WS `useEffect` cleanup → `stopAdminTyping()` pada unmount.
+- Auto‑stop 5 detik tiap tidak ada aktivitas agar indikator tidak macet.
+
+Server (`apps/api/src/services/realtime.service.ts` `admin_typing` handler) **tidak
+diubah** — mekanisme sudah benar.
+
+### 2. Exact files changed (gap patch)
+
+| File | Change | Protected? |
+|---|---|---|
+| `apps/dashboard/src/pages/ConversationInbox.tsx` | wiring `emitAdminTyping` ke reply input (+ guard ref + 5s auto‑stop + cleanup) | ❌ tidak termasuk daftar terlindungi |
+| `apps/dashboard/src/services/realtime.ts` | 1 baris: `import.meta.env.DEV` → `(import.meta as any)?.env?.DEV` (guard, behavior‑preserving; diperlukan agar modul dapat di‑import oleh `tsx` smoke test di Node; sama persis di bawah Vite) | ❌ tidak termasuk daftar terlindungi |
+| `apps/api/scripts/smoke-admin-typing.ts` | baru: runtime verification metode klien asli | baru (test) |
+| `DOCS/laporan-fase3-dashboard-human-messaging.md` | bab FINAL GAP PATCH ini | dokumen |
+
+**Protected files / functions:** 0 modifikasi. `git diff 69d8859 HEAD -- <protected files>` = 0 baris;
+`git diff 467ecef HEAD -- <protected files>` = 0 baris.
+
+### 3. Test added/updated
+
+Baru: `apps/api/scripts/smoke-admin-typing.ts` — **bukan** `socket.emit('admin_typing')` manual.
+Script ini memakai **metode klien Dashboard asli**:
+
+```ts
+import { adminRealtime } from '../../dashboard/src/services/realtime.ts';
+adminRealtime.connect();                       // real Dashboard client auth -> join admin room
+adminRealtime.emitAdminTyping(CONV_ID, true);  // REAL client method the wired handler calls
+```
+
+Dengan *polyfill* `window`/`localStorage` agar `connect()` berjalan di Node (tidak ada
+browser). Skenario (14 asersi): admin connect via `adminRealtime.connect()`, customer join
+room, `emitAdminTyping(true)` → customer *menerima* `typing.started {party:'human_agent'}`
+(idempoten, tidak ada conversation yang salah), `emitAdminTyping(false)` → `typing.stopped`,
+zero DB insert selama typing, lalu `POST /reply` → customer menerima `message.created
+human_agent` (id = DB), **tepat satu baris baru**, `conversationId` tidak berubah, dan
+`preExistingKey` metadata tetap.
+
+> **Honest scope:** tautan React input‑handler (`handleReplyChange` →
+> `reportAdminTyping`/`stopAdminTyping` → `emitAdminTyping`) diverifikasi **SOURCE‑VERIFIED
+> ONLY** karena tidak ada browser harness yang terpasang (Playwright terpasang tetapi
+> *browser binary tidak* — dan task melarang install) serta tidak ada vitest/jest‑dom di
+> dashboard. **Metode klien `adminRealtime.emitAdminTyping` itu sendiri** (yang
+> dipanggil handler) **di‑runtime‑verify** end‑to‑end lewat skrip di atas.
+
+### 4. Runtime verification
+
+```
+$ npx tsx --env-file=../../.env scripts/smoke-admin-typing.ts
+===== ADMIN-TYPING SMOKE RESULT: 14 passed, 0 failed =====   exit 0
+```
+
+### 5. Regression results
+
+| Suite | Cara jalankan | Hasil |
+|---|---|---|
+| FASE 3 smoke (`smoke-fase3-chatbox.ts`) | `npx tsx --env-file=../../.env scripts/...` | 49/49 pass ✅ |
+| FASE 1 smoke (`smoke-fase1-realtime.ts`) | `npx tsx --env-file=../../.env scripts/...` | 13/13 pass ✅ |
+| Admin-typing smoke (`smoke-admin-typing.ts`) | `npx tsx --env-file=../../.env scripts/...` | 14/14 pass ✅ |
+| FASE 2 structured‑message | `tsx --test --test-force-exit src/tests/structured-message.test.ts` | 22/22 ✅ |
+| FASE 2 golden‑dataset | `tsx --test --test-force-exit src/tests/golden-dataset.test.ts` | 17/17 ✅ |
+| FASE 2 pipeline | `tsx --test --test-force-exit src/tests/pipeline.test.ts` | 20/20 ✅ |
+| FASE 2 pipeline‑edge‑cases | `tsx --test --test-force-exit src/tests/pipeline-edge-cases.test.ts` | 17/17 ✅ |
+| chat engine jest (`test:chat`) | `node --experimental-vm-modules jest` | 21/23 suites, 260 test pass; 2 **pre‑existing** failure (`engine-config-v2` redisAdapter circular‑init + `reasoning-v2` asersi bergantung LLM) — tidak disentuh FASE 3, tidak regression |
+
+`dist/logs/.env` tidak berubah secara signifikan; semua *fixture* `f3a-*` dibersihkan di `finally`
+(0 sisa); DB kembali ke 16 store / 150 conversation setelah smoke (produksi tidak tersentuh).
+
+### 6. Typecheck / Build
+
+| App | Typecheck (`tsc --noEmit`) | Build |
+|---|---|---|
+| API | exit 0 ✅ | `tsc` exit 0 ✅ |
+| Dashboard (ganti ini) | exit 0 ✅ | `tsc -b && vite build` exit 0 ✅ (hanya peringatan chunk‑size, pra‑ada) |
+| PWA | exit 0 ✅ | `tsc -b && vite build` exit 0 ✅ |
+
+### 7. Git commit hash
+
+- **FASE 3 (sebelumnya):** `467ecef` — `feat(chatbox): FASE 3 dashboard human messaging`
+- **Gap patch ini:** `12fd702` — `fix(chatbox): complete FASE 3 admin typing` (3 file:
+  `ConversationInbox.tsx` + `realtime.ts` + `smoke-admin-typing.ts`)
+
+`git diff --check` bersih; `git status --short` tidak mencantumkan `.env`/`dist`/`logs` pada
+commit ini.
+
+### 8. Remaining limitations (tidak‑blokir COMPLETE)
+
+1. **Render `human_agent` di PWA masih sebagai role `assistant`** (`apps/pwa/src/components/ChatBubble.tsx`
+   hanya model `user|assistant|system`; `ChatPage.tsx` memetakan `human_agent → 'assistant'`).
+   Pesan tetap **sampai, ter‑dedup, dan id‑kanonis** (smoke [12]); hanya *berbeda visual* —
+   bubble tampak seperti asisten. Dipersilakan ditinggalkan sesuai instruksi ("boleh
+   mempertahankan existing rendering; prioritas GAP #1 lebih tinggi"); bukan desain ulang UI.
+2. **WhatsApp render sebagai `assistant`** — hal yang sama; bukan regression, visual saja.
+3. Pemverian pelengkapan verifikasi akhir (post‑gap) adalah **🟢 COMPLETE**: admin typing
+   ter‑wire, customer menerima `typing.started/stopped party=human_agent`, tidak ada
+   persistence regression, semua acceptance kritis FASE 3 lolos, FASE 1 & FASE 2 regression
+   lolos, typecheck/build lolos.
