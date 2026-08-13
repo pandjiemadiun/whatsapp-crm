@@ -116,6 +116,43 @@ export default function ConversationInbox() {
   // doubling the admin's own HTTP /reply echo + concurrent events.
   const renderedIds = useRef<Set<string>>(new Set());
 
+  // ── FASE 3: Admin typing indicator (admin -> customer) ──
+  // `adminRealtime.emitAdminTyping` is a thin WS-only wrapper that emits the
+  // `admin_typing` event; the server forwards typing.started/stopped
+  // {party:'human_agent'} to the customer's conversation room
+  // (`store:{storeId}:conv:{id}`). No DB write, no message.created.
+  const isTypingRef = useRef(false);
+  const typingStopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Dispatch (idempotent) a typing state to the customer conversation room.
+  // Guarded: never sends if no conversation is currently selected, and always
+  // reports against the current selectedId (never a stale/foreign conversation).
+  const reportAdminTyping = useCallback((typing: boolean) => {
+    const cid = selectedIdRef.current;
+    if (!cid) return;
+    if (typing === isTypingRef.current) return;
+    isTypingRef.current = typing;
+    adminRealtime.emitAdminTyping(cid, typing);
+  }, []);
+
+  const stopAdminTyping = useCallback(() => {
+    if (typingStopTimerRef.current) {
+      clearTimeout(typingStopTimerRef.current);
+      typingStopTimerRef.current = null;
+    }
+    reportAdminTyping(false);
+  }, [reportAdminTyping]);
+
+  // Auto-stop after 5s of inactivity so a typing indicator can never "leak" to a
+  // conversation if the admin navigates away without explicitly clearing.
+  const resetTypistStopTimer = useCallback(() => {
+    if (typingStopTimerRef.current) clearTimeout(typingStopTimerRef.current);
+    typingStopTimerRef.current = setTimeout(() => {
+      typingStopTimerRef.current = null;
+      reportAdminTyping(false);
+    }, 5000);
+  }, [reportAdminTyping]);
+
   // ── MatchMedia for responsive behavior ──
   const [isLg, setIsLg] = useState(false);
   useEffect(() => {
@@ -141,6 +178,7 @@ export default function ConversationInbox() {
   }, [conversations, activeTab]);
 
   const openConversation = async (id: string) => {
+    stopAdminTyping(); // switch view -> no stale typing indicator for prior conv
     setSelectedId(id);
     setShowDetail(true);
     setDetailLoading(true);
@@ -171,6 +209,7 @@ export default function ConversationInbox() {
   };
 
   const closeDetail = () => {
+    stopAdminTyping(); // close view -> stop typing indicator for this conv
     setShowDetail(false);
     setSelectedId(null);
     setDetail(null);
@@ -232,6 +271,9 @@ export default function ConversationInbox() {
 
   const handleSend = async () => {
     if (!selectedId || !replyText.trim() || sending) return;
+    // Sending -> admin is no longer "typing". Emit typing stopped so the
+    // customer's indicator clears (FASE 3 acceptance).
+    stopAdminTyping();
     setSending(true);
     try {
       const res = await api.post(`/conversations/${selectedId}/reply`, { message: replyText.trim() });
@@ -253,9 +295,21 @@ export default function ConversationInbox() {
 
   const handleReplyChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const el = e.target;
+    const next = el.value.length > 0;
     setReplyText(el.value);
     el.style.height = 'auto';
     el.style.height = `${el.scrollHeight}px`;
+
+    // FASE 3: admin typing indicator -> customer conversation room (WS only).
+    // `true` on first keystroke (idempotent via isTypingRef); `false` when the
+    // input is cleared OR on send/close. A 5s auto-stop keeps a typing
+    // indicator from leaking if the admin stops interacting.
+    if (next) {
+      reportAdminTyping(true);
+      resetTypistStopTimer();
+    } else {
+      stopAdminTyping();
+    }
   };
 
   const handleReplyKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -427,6 +481,7 @@ export default function ConversationInbox() {
     ];
 
     return () => {
+      stopAdminTyping(); // unmount -> no typing indicator leak to a stale room
       unsub.forEach((u) => u());
       adminRealtime.disconnect();
     };
