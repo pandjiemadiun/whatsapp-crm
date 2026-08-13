@@ -339,4 +339,91 @@ router.post('/:storeSlug/typing', async (req: Request, res: Response) => {
   }
 });
 
+// POST /api/pwa/:storeSlug/read — customer read acknowledgement (FASE 3).
+// Body: { uid, conversationId, at?: string }. NO migration: persist into
+// Conversation.metadata JSON (webLastReadAt). NO conversation_history insert, NO
+// message.created (read state only — CRITICAL read/event rule).
+// Server-side throttle (5s/conv) prevents request storm from client scroll; client
+// only calls on controlled triggers (visible new msg / reconnect catch-up).
+const readThrottle = new Map<string, number>();
+const READ_THROTTLE_MS = 5000;
+router.post('/:storeSlug/read', async (req: Request, res: Response) => {
+  try {
+    const { storeSlug } = req.params;
+    const { uid, conversationId, at } = req.body as {
+      uid?: string;
+      conversationId?: string;
+      at?: string;
+    };
+
+    if (!storeSlug || !uid || !conversationId) {
+      return res.status(400).json({ error: 'uid and conversationId are required' });
+    }
+
+    const throttleKey = `read:${storeSlug}:${conversationId}`;
+    const now = Date.now();
+    const last = readThrottle.get(throttleKey);
+    if (last !== undefined && now - last < READ_THROTTLE_MS) {
+      return res.status(429).json({ error: 'Read throttled', conversationId });
+    }
+
+    const store = await prisma.store.findUnique({
+      where: { slug: storeSlug, deletedAt: null },
+      select: { id: true },
+    });
+    if (!store) return res.status(404).json({ error: 'Store not found' });
+
+    const customer = await prisma.customer.findFirst({
+      where: { webUid: uid, storeId: store.id, deletedAt: null },
+      select: { id: true },
+    });
+    if (!customer) return res.status(401).json({ error: 'Unauthorized customer' });
+
+    const conv = await prisma.conversation.findFirst({
+      where: {
+        id: conversationId,
+        storeId: store.id,
+        customerId: customer.id,
+        channel: 'web',
+        deletedAt: null,
+      },
+      select: { id: true, status: true, lastMessageAt: true, metadata: true },
+    });
+    if (!conv) return res.status(401).json({ error: 'Unauthorized conversation' });
+
+    readThrottle.set(throttleKey, now);
+    setTimeout(() => readThrottle.delete(throttleKey), READ_THROTTLE_MS).unref();
+
+    const readAt = at ? new Date(at) : new Date();
+    const existingMeta =
+      conv.metadata && typeof conv.metadata === 'object'
+        ? (conv.metadata as Record<string, unknown>)
+        : {};
+
+    await prisma.conversation.update({
+      where: { id: conv.id },
+      data: {
+        metadata: { ...existingMeta, webLastReadAt: readAt.toISOString() },
+      },
+    });
+
+    eventBus.publish({
+      event: 'conversation.updated',
+      storeId: store.id,
+      data: {
+        conversationId: conv.id,
+        status: conv.status,
+        lastMessageAt: conv.lastMessageAt,
+        webLastReadAt: readAt.toISOString(),
+      },
+      ts: Date.now(),
+    });
+
+    res.json({ success: true, webLastReadAt: readAt.toISOString() });
+  } catch (err) {
+    adapters.logger.error('PWA read error', err as Error);
+    res.status(500).json({ error: 'Failed to report read' });
+  }
+});
+
 export default router;

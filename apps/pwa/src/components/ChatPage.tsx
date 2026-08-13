@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
 import { useParams } from 'react-router-dom'
 import api, { createChatSocket } from '../services/api'
 import type { Socket } from 'socket.io-client'
@@ -70,6 +70,10 @@ export default function ChatPage() {
   const [error, setError] = useState<string | null>(null)
   const [isAdminTyping, setIsAdminTyping] = useState(false)
   const [isTyping, setIsTyping] = useState(false)
+  // FASE 3 local conversation status (driven by WS conversation.* events).
+  const [conversationStatus, setConversationStatus] =
+    useState<'open' | 'human_takeover' | 'resolved'>('open')
+  const inputDisabled = conversationStatus === 'resolved' || sending
   // Dedup kunci utama: satu messageId → render sekali (HTTP + WS identik).
   const renderedIds = useRef<Set<string>>(new Set())
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null)
@@ -84,6 +88,21 @@ export default function ChatPage() {
   const typingTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const targetDisplayMs = useRef<number>(0)
   const sendStartedAt = useRef<number>(0)
+
+  // FASE 3: customer read acknowledgement (POST /pwa/:slug/read).
+  // Controlled trigger: debounced 1s, hanya saat conversation aktif — hindari
+  // request storm. Server throttle 5s juga melindungi.
+  const readTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const scheduleReadAck = useCallback(() => {
+    if (!slug || !webUid || !conversationId) return
+    if (readTimer.current) clearTimeout(readTimer.current)
+    readTimer.current = setTimeout(() => {
+      readTimer.current = null
+      void api
+        .post(`/pwa/${slug}/read`, { uid: webUid, conversationId })
+        .catch(() => {})
+    }, 1000)
+  }, [slug, webUid, conversationId])
 
   const clearTypingTimer = () => {
     if (typingTimer.current) {
@@ -155,7 +174,10 @@ export default function ChatPage() {
 
     const socket: Socket = createChatSocket({ slug, uid: webUid, conversationId })
 
-    socket.on('connect', () => {})
+    socket.on('connect', () => {
+      // (Re)connected: customer viewing an active conversation -> mark web read.
+      scheduleReadAck()
+    })
 
     // message.created: HTTP messageId = WS data.id (HARD RULE #3) → dedup.
     socket.on('message.created', (data: {
@@ -168,8 +190,11 @@ export default function ChatPage() {
       createdAt?: string
       payload?: unknown
     }) => {
-      // hanya proses balasan assistant yang masuk via WS (customer bubble via HTTP optimis)
-      if (data.sender !== 'assistant') return
+      // P-PWA.15 / FASE 3: customer's OWN message is echoed via HTTP optimis (no id) +
+      // delivery now also broadcasts it. Ignore self 'customer' messages to avoid dup.
+      if (data.sender === 'customer') return
+      // FASE 3: accept admin reply (human_agent) besides AI (assistant).
+      if (data.sender !== 'assistant' && data.sender !== 'human_agent') return
       if (renderedIds.current.has(data.id)) return // dedup HTTP+WS
       renderedIds.current.add(data.id)
       setMessages((m) => [...m, {
@@ -183,6 +208,22 @@ export default function ChatPage() {
       }])
       setIsAdminTyping(false)
       bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+      // Customer just saw a human/agent message -> mark web read (debounced).
+      scheduleReadAck()
+    })
+
+    // FASE 3: status lifecycle (handoff / resume / resolve) — update local status.
+    // conversationId stay the same (no new conversation).
+    socket.on('conversation.handoff', () => setConversationStatus('human_takeover'))
+    socket.on('conversation.resumed', () => setConversationStatus('open'))
+    socket.on('conversation.resolved', () => {
+      setConversationStatus('resolved')
+      setIsAdminTyping(false)
+    })
+    socket.on('conversation.updated', (d: { lastMessageAt?: string | null; status?: string }) => {
+      if (d?.status && (d.status === 'human_takeover' || d.status === 'open' || d.status === 'resolved')) {
+        setConversationStatus(d.status)
+      }
     })
 
     // admin/customer typing indicator (FASE 1 foundation)
@@ -208,6 +249,9 @@ export default function ChatPage() {
           const missing = hist.filter((m) => m.id && !renderedIds.current.has(m.id))
           missing.forEach((m) => { if (m.id) renderedIds.current.add(m.id) })
           if (missing.length) setMessages((prev) => [...prev, ...missing])
+          bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+          // Customer has caught up to latest history -> mark web read.
+          scheduleReadAck()
         })
         .catch(() => {})
     })
@@ -215,7 +259,7 @@ export default function ChatPage() {
     return () => {
       socket.close()
     }
-  }, [slug, webUid, conversationId])
+  }, [slug, webUid, conversationId, scheduleReadAck])
 
   // FASE 1 — customer typing → POST /typing → EventBus → room admin (store:{storeId}:admin).
   // Throttle sisi client 1s; server juga throttle 1s.
@@ -256,7 +300,7 @@ export default function ChatPage() {
   }, [])
 
   const onSend = async () => {
-    if (!input.trim() || sending || !webUid || !slug) return
+    if (!input.trim() || sending || !webUid || !slug || inputDisabled) return
     setSending(true)
     setError(null)
     const text = input.trim()
@@ -413,6 +457,20 @@ export default function ChatPage() {
             Admin sedang mengetik…
           </div>
         )}
+        {(conversationStatus === 'human_takeover' || conversationStatus === 'resolved') && (
+          <div
+            className={`text-xs px-3 py-1 rounded-md mb-1 ${
+              conversationStatus === 'resolved'
+                ? 'bg-gray-100 text-gray-600'
+                : 'bg-amber-50 text-amber-800 border border-amber-200'
+            }`}
+            aria-label={conversationStatus === 'resolved' ? 'conversation resolved' : 'human takeover'}
+          >
+            {conversationStatus === 'resolved'
+              ? 'Percakapan telah diselesaikan oleh admin.'
+              : 'Pesan Anda diteruskan ke admin. Mohon tunggu.'}
+          </div>
+        )}
         {error && (
           <div className="text-red-600 text-sm p-2">{error}</div>
         )}
@@ -429,15 +487,21 @@ export default function ChatPage() {
             // customer typing → /typing → EventBus → room admin (store:{storeId}:admin)
             reportTyping(e.target.value.length > 0)
           }}
-          disabled={sending}
-          placeholder="Ketik pesan..."
+          disabled={inputDisabled}
+          placeholder={
+            conversationStatus === 'resolved'
+              ? 'Percakapan telah selesai'
+              : conversationStatus === 'human_takeover'
+              ? 'Sedang ditangani oleh admin...'
+              : 'Ketik pesan...'
+          }
           onKeyDown={(e) => {
             if (e.key === 'Enter' && !e.shiftKey) onSend()
           }}
         />
         <button
           onClick={onSend}
-          disabled={sending || !input.trim()}
+          disabled={inputDisabled || !input.trim()}
           className="px-4 py-2 bg-blue-600 text-white rounded disabled:opacity-50"
         >
           {sending ? 'Mengirim…' : 'Kirim'}

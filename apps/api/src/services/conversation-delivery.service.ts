@@ -82,6 +82,14 @@ export const conversationDeliveryService = {
     }
 
     let result: ResponseResult | null;
+    // CRITICAL RULE #3 (FASE 3): identify the customer message WHILE the lock is still held.
+    // The engine (processCustomerMessage) persists the customer message (role='user') but
+    // its return value only carries the assistant reply — it does NOT expose the customer
+    // message id. We read that row here, inside the lock boundary (release() is still in the
+    // `finally` below), so a concurrent request for the SAME conversation cannot win the race
+    // and return a different "latest" message. Doing the query AFTER release() would be
+    // racy (forbidden by the contract WARNING).
+    let customerMsg: { id: string; content: string; createdAt: Date } | null = null;
     try {
       // ENGINE: compose + persist (saveMessage :1074 memakai id=message.id :1078).
       // Delivery TIDAK memanggil engine dengan cara lain & TIDAK menambah lock.
@@ -92,6 +100,13 @@ export const conversationDeliveryService = {
         message,
         'web',
       );
+      // Read the customer message persisted by THIS request — safe karena lock masih
+      // dipegang (acquireLock di atas, release() di finally di bawah).
+      customerMsg = await prisma.conversationHistory.findFirst({
+        where: { conversationId, role: 'user' },
+        orderBy: { createdAt: 'desc' },
+        select: { id: true, content: true, createdAt: true },
+      });
     } finally {
       // Release SELESAI setelah persist (engine sudah commit). Order target:
       // process -> persist -> release -> publish -> response
@@ -101,12 +116,40 @@ export const conversationDeliveryService = {
     // --- post-lock: publish domain event (tidak re-enter processing) ---
     if (!result || !result.message?.content) {
       // human_takeover guard (conversation.service.ts:81) — tidak ada balasan AI.
-      // Publish contract handoff (FASE 3 dashboard akan konsumsi; FASE 1 belum ada
-      // subscriber UI, jadi tidak ada side effect visible). ConversationId tetap sama.
+      // FASE 3: publish the customer message that triggered the escalation, THEN handoff.
+      // customerMsg was identified while-locked above (deterministic, no race).
+      if (customerMsg) {
+        eventBus.publish({
+          event: 'message.created',
+          storeId,
+          data: {
+            id: customerMsg.id,
+            conversationId,
+            sender: 'customer',
+            type: 'text',
+            payload: null,
+            content: customerMsg.content,
+            source: 'customer',
+            confidence: null,
+            createdAt: customerMsg.createdAt,
+          },
+          ts: Date.now(),
+        });
+      }
       eventBus.publish({
         event: 'conversation.handoff',
         storeId,
         data: { conversationId, status: 'human_takeover' },
+        ts: Date.now(),
+      });
+      eventBus.publish({
+        event: 'conversation.updated',
+        storeId,
+        data: {
+          conversationId,
+          status: 'human_takeover',
+          lastMessageAt: customerMsg?.createdAt ?? new Date(),
+        },
         ts: Date.now(),
       });
       return { kind: 'pending_human', conversationId };
@@ -172,6 +215,28 @@ export const conversationDeliveryService = {
       createdAt: msg.createdAt,
     };
 
+    // FASE 3: publish the customer message.created FIRST (deterministic id captured while
+    // lock was held), then the assistant reply, then conversation.updated — order per
+    // CRITICAL RULE #3 (customer -> assistant -> conversation.updated).
+    if (customerMsg) {
+      eventBus.publish({
+        event: 'message.created',
+        storeId,
+        data: {
+          id: customerMsg.id,
+          conversationId,
+          sender: 'customer',
+          type: 'text',
+          payload: null,
+          content: customerMsg.content,
+          source: 'customer',
+          confidence: null,
+          createdAt: customerMsg.createdAt,
+        },
+        ts: Date.now(),
+      });
+    }
+
     try {
       // PENTING: UPDATE row harus selesai SEBELUM publish (HARD RULE #19) —
       // klien tidak pernah melihat type=text lalu berubah ke product untuk id yang sama.
@@ -185,6 +250,22 @@ export const conversationDeliveryService = {
       // Event tidak boleh menggagalkan HTTP response — persist (engine) adalah
       // sumber kebenaran; WS hanya transport. Client catchup via GET /history.
       adapters.logger.error('delivery message.created publish failed', e as Error);
+    }
+
+    try {
+      eventBus.publish({
+        event: 'conversation.updated',
+        storeId,
+        data: {
+          conversationId,
+          status: 'open',
+          lastMessageAt: msg.createdAt,
+          lastMessageId: msg.id,
+        },
+        ts: Date.now(),
+      });
+    } catch (e) {
+      adapters.logger.error('delivery conversation.updated publish failed', e as Error);
     }
 
     return {
