@@ -123,11 +123,30 @@ router.get('/:storeSlug/history', async (req: Request, res: Response) => {
         role: true,
         content: true,
         source: true,
+        messageType: true, // FASE 2: structured type (authoritative engine/delivery)
+        metadata: true,    // FASE 2: metadata.messagePayload (merge-preserve existing)
         createdAt: true,
       },
     });
 
-    res.json({ success: true, data: { history, conversationId: conversation.id } });
+    // Normalisasi ke shape kanonis ChatPage (sama dengan WS message.created):
+    // type = messageType (default 'text' bila NULL), payload = metadata.messagePayload.
+    const safeHistory = history.map((h) => {
+      const meta = (h.metadata && typeof h.metadata === 'object'
+        ? (h.metadata as Record<string, unknown>)
+        : {}) as Record<string, unknown>;
+      return {
+        id: h.id,
+        role: h.role,
+        content: h.content,
+        source: h.source,
+        type: h.messageType ?? 'text',
+        payload: (meta.messagePayload as Record<string, unknown> | null) ?? null,
+        createdAt: h.createdAt,
+      };
+    });
+
+    res.json({ success: true, data: { history: safeHistory, conversationId: conversation.id } });
   } catch (err) {
     adapters.logger.error('PWA history error', err as Error);
     res.status(500).json({ error: 'Failed to fetch history' });
@@ -237,11 +256,14 @@ router.post('/:storeSlug/message', conversationLimiter, async (req: Request, res
     }
 
     // kind === 'ok' — messageId = result.message.id = conversation_history.id (SATU identity)
+    // FASE 2: type/payload = canonical structured (sama WS event.data). text default
+    // bila engine tak memberi reason authoritatif (authority-only, no heuristic).
     return res.json({
       success: true,
       messageId: result.messageId, // = conversation_history.id = WS event.data.id (HARD RULE #3)
       conversationId,
-      type: 'text', // FASE 1: default text (structured mapping -> FASE 2)
+      type: result.type, // FASE 2: otoritatif dari engine (reason), default 'text'
+      payload: result.payload,
       content: result.content,
       source: result.source,
       confidence: result.confidence,

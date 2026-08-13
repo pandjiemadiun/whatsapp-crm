@@ -2,6 +2,12 @@ import { conversationService } from '../business/conversation.service.js';
 import { messageQueueService } from './message-queue.service.js';
 import { eventBus } from './event-bus.service.js';
 import { adapters } from '../adapters/container.js';
+import { prisma } from '../infrastructure/prisma.js';
+import {
+  mapStructured,
+  type StructuredMessage,
+  type StructuredMessageType,
+} from './structured-message.mapper.js';
 import type { ResponseResult, ResponseSource } from '../domain/types.js';
 
 /**
@@ -25,8 +31,13 @@ export interface MessageCreatedData {
   id: string;
   conversationId: string;
   sender: 'assistant' | 'customer' | 'human_agent';
-  type: 'text' | 'product' | 'product_list' | 'cart' | 'quick_reply' | 'button' |
-    'order' | 'checkout' | 'image' | 'system' | 'handoff' | 'payment' | 'notification';
+  type: StructuredMessageType;
+  /**
+   * Structured payload (FASE 2) — berasal dari `StructuredMessage.messagePayload`,
+   * sama persis di HTTP response dan WS `message.created` (HARD RULE #11/#12 kanonis).
+   * null bila tidak ada (text).
+   */
+  payload: Record<string, unknown> | null;
   content: string;
   source: ResponseSource;
   confidence: number | null;
@@ -42,6 +53,9 @@ export type DeliveryResult =
       source: ResponseSource;
       confidence: number | null;
       createdAt: Date;
+      /** FASE 2: canonical structured type/payload (sama HTTP + WS). */
+      type: StructuredMessageType;
+      payload: Record<string, unknown> | null;
     }
   | { kind: 'locked'; conversationId: string }
   | { kind: 'pending_human'; conversationId: string };
@@ -100,11 +114,55 @@ export const conversationDeliveryService = {
 
     const msg = result.message;
 
+    // ── FASE 2: Structured enrichment — UPDATE baris YANG SAMA (id = msg.id) ──
+    // HARD RULE #3/#4/#7/#9: satu INSERT (oleh engine); delivery UPDATE same row
+    // SET messageType + metadata.messagePayload (merge-preserve existing metadata).
+    // Sumber otoritatif SATU‑SATUNYA = result.metadata.reason (engine-authored lewat
+    // buildResult). Tidak ada → text. Jika UPDATE gagal → tetap text, TIDAK ada INSERT
+    // kedua, dan request tidak gagal (failure-safe).
+    const structured: StructuredMessage = mapStructured(result);
+    let messageType = structured.messageType;
+    let messagePayload: Record<string, unknown> | null = structured.messagePayload;
+    try {
+      const existing = await prisma.conversationHistory.findUnique({
+        where: { id: msg.id },
+        select: { metadata: true },
+      });
+      const existingMeta =
+        existing && existing.metadata && typeof existing.metadata === 'object'
+          ? (existing.metadata as Record<string, unknown>)
+          : {};
+      // merge-preserve: jangan overwrite existing metadata (HARD RULE #7).
+      const mergedMeta: Record<string, unknown> = { ...existingMeta };
+      if (messagePayload !== null) {
+        mergedMeta.messagePayload = messagePayload;
+      }
+      await prisma.conversationHistory.update({
+        where: { id: msg.id },
+        data: {
+          messageType,
+          // mergedMeta berisi nilai JSON (dari row existing + messagePayload);
+          // Prisma JSON input menolak `Record<string,unknown>` secara tipis → cast.
+          metadata: mergedMeta as any,
+        },
+      });
+    } catch (e) {
+      // Failure-safe (HARD RULE #9): jangan INSERT kedua; baris engine tetap ada
+      // sebagai text. Paksa type=text agar HTTP + WS konsisten dengan state row.
+      adapters.logger.warn('FASE 2 structured update failed — falling back to text', {
+        messageId: msg.id,
+        error: e instanceof Error ? e.message : String(e),
+      });
+      messageType = 'text';
+      messagePayload = null;
+    }
+
     const eventData: MessageCreatedData = {
       id: msg.id, // = conversation_history.id (SAVE satu baris oleh engine)
       conversationId,
       sender: 'assistant',
-      type: 'text', // FASE 1: aman default. Mapping structured -> FASE 2.
+      type: messageType, // FASE 2: otoritatif dari engine (reason), bukan aman default
+      payload: messagePayload,
       content: msg.content,
       source: result.source,
       confidence: result.confidence,
@@ -112,6 +170,8 @@ export const conversationDeliveryService = {
     };
 
     try {
+      // PENTING: UPDATE row harus selesai SEBELUM publish (HARD RULE #19) —
+      // klien tidak pernah melihat type=text lalu berubah ke product untuk id yang sama.
       eventBus.publish({
         event: 'message.created',
         storeId,
@@ -132,6 +192,8 @@ export const conversationDeliveryService = {
       source: result.source,
       confidence: result.confidence,
       createdAt: msg.createdAt,
+      type: messageType,
+      payload: messagePayload,
     };
   },
 };
