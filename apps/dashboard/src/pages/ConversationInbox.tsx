@@ -5,6 +5,10 @@ import {
   Send, Phone,
 } from 'lucide-react';
 import api from '../services/api';
+import adminRealtime, {
+  type CreatedMessageData,
+} from '../services/realtime';
+import { useAuth } from '../contexts/AuthContext';
 
 interface ConversationListItem {
   id: string;
@@ -16,6 +20,7 @@ interface ConversationListItem {
   lastMessage?: string | null;
   aiResponseCount: number;
   faqResponseCount: number;
+  unreadCount?: number;
 }
 
 interface HistoryItem {
@@ -23,7 +28,9 @@ interface HistoryItem {
   role: string;
   content: string;
   source: string | null;
-  createdAt: string;
+  messageType?: string | null;
+  payload?: unknown;
+  createdAt: string | null;
 }
 
 interface ConversationDetail {
@@ -53,7 +60,8 @@ function formatDate(iso: string | null): string {
   return d.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' });
 }
 
-function formatTime(iso: string): string {
+function formatTime(iso: string | null): string {
+  if (!iso) return '—';
   const d = new Date(iso);
   return d.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
 }
@@ -86,19 +94,27 @@ const FILTER_TABS: Array<{ key: FilterTab; label: string }> = [
 
 export default function ConversationInbox() {
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [conversations, setConversations] = useState<ConversationListItem[]>([]);
   const [listLoading, setListLoading] = useState(true);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const selectedIdRef = useRef<string | null>(null);
   const [detail, setDetail] = useState<ConversationDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [replyText, setReplyText] = useState('');
   const [sending, setSending] = useState(false);
   const [takingOver, setTakingOver] = useState(false);
   const [resuming, setResuming] = useState(false);
+  const [resolving, setResolving] = useState(false);
+  const [isCustomerTyping, setIsCustomerTyping] = useState(false);
+  const [wsReady, setWsReady] = useState(false);
   const [showDetail, setShowDetail] = useState(false);
   const [visibleCount, setVisibleCount] = useState(20);
   const [activeTab, setActiveTab] = useState<FilterTab>('all');
   const replyRef = useRef<HTMLTextAreaElement>(null);
+  // Dedup WS message.created by message.id (== conversation_history.id) to avoid
+  // doubling the admin's own HTTP /reply echo + concurrent events.
+  const renderedIds = useRef<Set<string>>(new Set());
 
   // ── MatchMedia for responsive behavior ──
   const [isLg, setIsLg] = useState(false);
@@ -129,9 +145,24 @@ export default function ConversationInbox() {
     setShowDetail(true);
     setDetailLoading(true);
     setDetail(null);
+    setReplyText('');
     try {
       const res = await api.get(`/conversations/${id}`);
-      setDetail(res.data.data);
+      const conv: ConversationDetail = res.data.data;
+      // Seed dedup set supaya WS message.created yang sama tidak double-render
+      // pada percakapan yang dibuka (history catch-up + realtime echo).
+      renderedIds.current = new Set(
+        conv.history.map((h) => h.id).filter(Boolean) as string[],
+      );
+      setDetail(conv);
+      // Admin marks this conversation read when it becomes the active view
+      // (FASE 3 read/unread — adminLastReadAt via Conversation.metadata).
+      try {
+        await api.post(`/conversations/${id}/read`);
+        setConversations((list) =>
+          list.map((c) => (c.id === id ? { ...c, unreadCount: 0 } : c)),
+        );
+      } catch {}
     } catch {
       setDetail(null);
     } finally {
@@ -153,6 +184,13 @@ export default function ConversationInbox() {
     } catch {}
   }, [selectedId]);
 
+  const refreshConversationList = useCallback(async () => {
+    try {
+      const listRes = await api.get('/conversations');
+      setConversations(listRes.data.data);
+    } catch {}
+  }, []);
+
   const handleTakeOver = async () => {
     if (!selectedId) return;
     setTakingOver(true);
@@ -160,8 +198,7 @@ export default function ConversationInbox() {
       const res = await api.put(`/conversations/${selectedId}/status`, { status: 'human_takeover' });
       if (res.data.success) {
         await refreshDetail();
-        const listRes = await api.get('/conversations');
-        setConversations(listRes.data.data);
+        await refreshConversationList();
       }
     } catch {}
     setTakingOver(false);
@@ -174,11 +211,23 @@ export default function ConversationInbox() {
       const res = await api.put(`/conversations/${selectedId}/status`, { status: 'open' });
       if (res.data.success) {
         await refreshDetail();
-        const listRes = await api.get('/conversations');
-        setConversations(listRes.data.data);
+        await refreshConversationList();
       }
     } catch {}
     setResuming(false);
+  };
+
+  const handleResolve = async () => {
+    if (!selectedId) return;
+    setResolving(true);
+    try {
+      const res = await api.put(`/conversations/${selectedId}/status`, { status: 'resolved' });
+      if (res.data.success) {
+        await refreshDetail();
+        await refreshConversationList();
+      }
+    } catch {}
+    setResolving(false);
   };
 
   const handleSend = async () => {
@@ -187,11 +236,16 @@ export default function ConversationInbox() {
     try {
       const res = await api.post(`/conversations/${selectedId}/reply`, { message: replyText.trim() });
       if (res.data.success) {
+        // Seed dedup with the canonical messageId returned by the route
+        // (= conversation_history.id = WS event.data.id) so the WS echo of the
+        // admin's own human_agent reply is not rendered twice.
+        if (res.data.messageId) renderedIds.current.add(res.data.messageId);
         setReplyText('');
         if (replyRef.current) replyRef.current.style.height = 'auto';
         await refreshDetail();
-        const listRes = await api.get('/conversations');
-        setConversations(listRes.data.data);
+        await refreshConversationList();
+        // Admin just sent a reply -> view is read.
+        try { await api.post(`/conversations/${selectedId}/read`); } catch {}
       }
     } catch {}
     setSending(false);
@@ -248,6 +302,136 @@ export default function ConversationInbox() {
   const selected = conversations.find((c) => c.id === selectedId);
   const isTakenOver = detail?.status === 'human_takeover';
 
+  // Ref sink agar WS handler (effect ber‑dependensi rendah) selalu lihat selectedId terbaru.
+  selectedIdRef.current = selectedId;
+
+  // ── FASE 3: Dashboard ↔ Socket.IO (admin realtime) ──
+  // Connect sekali (dependensi [user]); listeners update state secara incremental.
+  // HTTP GET tetap sumber of truth / catch-up (reconnect).
+  useEffect(() => {
+    if (!user) return;
+
+    adminRealtime.connect();
+
+    const unsub = [
+      adminRealtime.onConnect(() => setWsReady(true)),
+      adminRealtime.onDisconnect(() => setWsReady(false)),
+      adminRealtime.onReconnect(() => {
+        refreshConversationList();
+        if (selectedIdRef.current) refreshDetail();
+      }),
+
+      adminRealtime.onMessageCreated((data: CreatedMessageData) => {
+        // Dedup by canonical message.id (= conversation_history.id).
+        if (renderedIds.current.has(data.id)) return;
+        renderedIds.current.add(data.id);
+
+        const role =
+          data.sender === 'customer'
+            ? 'user'
+            : data.sender === 'human_agent'
+            ? 'agent'
+            : 'assistant';
+        const convId = data.conversationId;
+        const msg: HistoryItem = {
+          id: data.id,
+          role,
+          content: data.content,
+          source: data.source ?? null,
+          createdAt: data.createdAt ?? null,
+        };
+
+        if (convId === selectedIdRef.current) {
+          setDetail((prev) =>
+            prev ? { ...prev, history: [...prev.history, msg] } : prev,
+          );
+          // Incoming while viewing => mark read (server-side throttle prevents storm).
+          void api.post(`/conversations/${convId}/read`).catch(() => {});
+        } else {
+          setConversations((list) =>
+            list.map((c) =>
+              c.id === convId
+                ? {
+                    ...c,
+                    lastMessage: data.content.slice(0, 100),
+                    lastMessageAt: data.createdAt ?? c.lastMessageAt,
+                    ...(data.sender === 'customer'
+                      ? { unreadCount: (c.unreadCount || 0) + 1 }
+                      : {}),
+                  }
+                : c,
+            ),
+          );
+        }
+      }),
+
+      adminRealtime.onConversationHandoff((d) => {
+        setConversations((list) =>
+          list.map((c) =>
+            c.id === d.conversationId
+              ? { ...c, status: 'human_takeover', lastMessageAt: d.lastMessageAt ?? c.lastMessageAt }
+              : c,
+          ),
+        );
+        setDetail((prev) =>
+          prev && prev.id === d.conversationId
+            ? { ...prev, status: 'human_takeover', lastMessageAt: d.lastMessageAt ?? prev.lastMessageAt }
+            : prev,
+        );
+      }),
+      adminRealtime.onConversationResumed((d) => {
+        setConversations((list) =>
+          list.map((c) => (c.id === d.conversationId ? { ...c, status: 'open' } : c)),
+        );
+        setDetail((prev) =>
+          prev && prev.id === d.conversationId ? { ...prev, status: 'open' } : prev,
+        );
+      }),
+      adminRealtime.onConversationResolved((d) => {
+        setConversations((list) =>
+          list.map((c) => (c.id === d.conversationId ? { ...c, status: 'resolved' } : c)),
+        );
+        setDetail((prev) =>
+          prev && prev.id === d.conversationId ? { ...prev, status: 'resolved' } : prev,
+        );
+      }),
+      adminRealtime.onConversationUpdated((d) => {
+        setConversations((list) =>
+          list.map((c) =>
+            c.id === d.conversationId
+              ? {
+                  ...c,
+                  status: d.status ?? c.status,
+                  lastMessageAt: d.lastMessageAt ?? c.lastMessageAt,
+                  ...(d.adminLastReadAt ? { unreadCount: 0 } : {}),
+                }
+              : c,
+          ),
+        );
+        setDetail((prev) =>
+          prev && prev.id === d.conversationId
+            ? {
+                ...prev,
+                status: d.status ?? prev.status,
+                lastMessageAt: d.lastMessageAt ?? prev.lastMessageAt,
+              }
+            : prev,
+        );
+      }),
+      adminRealtime.onTypingStarted((d) => {
+        if (d.conversationId === selectedIdRef.current) setIsCustomerTyping(true);
+      }),
+      adminRealtime.onTypingStopped((d) => {
+        if (d.conversationId === selectedIdRef.current) setIsCustomerTyping(false);
+      }),
+    ];
+
+    return () => {
+      unsub.forEach((u) => u());
+      adminRealtime.disconnect();
+    };
+  }, [user, refreshConversationList, refreshDetail]);
+
   return (
     <div className="p-4 sm:p-6 max-w-7xl mx-auto">
       {/* Page header */}
@@ -260,6 +444,10 @@ export default function ConversationInbox() {
         </button>
         <div className="min-w-0">
           <h1 className="text-lg font-display font-bold text-navy dark:text-surface">Inbox</h1>
+          <span
+            className={`ml-2 inline-block w-2.5 h-2.5 rounded-full ${wsReady ? 'bg-green-500' : 'bg-red-500'}`}
+            title={wsReady ? 'Live (WebSocket tersambung)' : 'Offline (WebSocket terputus)'}
+          />
           <p className="text-sm text-muted">Percakapan customer</p>
         </div>
       </div>
@@ -342,6 +530,11 @@ export default function ConversationInbox() {
                                   <Bot className="w-3 h-3" />{conv.aiResponseCount}
                                 </span>
                               )}
+                              {conv.unreadCount && conv.unreadCount > 0 && (
+                                <span className="flex items-center justify-center min-w-[18px] h-[18px] text-[9px] font-bold text-white bg-red-600 rounded-full">
+                                  {conv.unreadCount}
+                                </span>
+                              )}
                             </div>
                           </div>
                         </div>
@@ -397,7 +590,7 @@ export default function ConversationInbox() {
               )}
             </div>
 
-            {/* Action buttons (take over / resume) */}
+            {/* Action buttons (take over / resume / resolve) */}
             {selected && (
               <div className="px-4 py-2 border-b border-line dark:border-dline flex items-center gap-2">
                 {!isTakenOver && (
@@ -418,6 +611,13 @@ export default function ConversationInbox() {
                     {resuming ? 'Melanjutkan...' : 'Lanjutkan AI'}
                   </button>
                 )}
+                <button
+                  onClick={handleResolve}
+                  disabled={resolving}
+                  className="text-xs font-medium text-green-700 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 px-2.5 py-1 rounded-lg hover:bg-green-100 disabled:opacity-50 transition"
+                >
+                  {resolving ? 'Menyelesaikan...' : 'Selesaikan'}
+                </button>
               </div>
             )}
 
@@ -437,6 +637,11 @@ export default function ConversationInbox() {
                 </div>
               ) : detail ? (
                 <div className="p-4 space-y-4">
+                  {isCustomerTyping && (
+                    <div className="text-xs text-muted dark:text-gray-400 mb-1" aria-label="customer typing">
+                      Pelanggan sedang mengetik…
+                    </div>
+                  )}
                   {detail.history.map((msg) => {
                     const isUser = msg.role === 'user';
                     const isAgent = msg.role === 'agent';
