@@ -396,6 +396,7 @@ model Customer {
   storeId       String
   phone         String?
   webUid        String?  @unique
+  pushSubscription Json?  // FASE 4: persistent Web Push subscription (VAPID). server-authoritative; scoped by storeId+webUid (no cross-tenant).
   name          String?
   originCity    String?
   nameSource    String?  // 'self_stated' | 'pushname'

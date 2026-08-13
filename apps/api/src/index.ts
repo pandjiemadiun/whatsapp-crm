@@ -47,6 +47,7 @@ import redirectRouter from './routes/redirect.js';
 import { startHealthCheckInterval } from './business/health.service.js';
 import { messageProcessorService } from './services/message-processor.service.js';
 import { realtimeService } from './services/realtime.service.js';
+import { notificationService } from './services/notification.service.js';
 import { healthMonitorService } from './services/health-monitor.service.js';
 import { scheduleBackups } from './bootstrap/scheduleBackups.js';
 import { scheduleFollowUps } from './bootstrap/scheduleFollowUps.js';
@@ -169,6 +170,10 @@ app.use(errorHandler);
 // Web Realtime Foundation (FASE 1) — Socket.IO on the SAME http.Server as Express.
 const httpServer = http.createServer(app);
 realtimeService.init(httpServer, corsAllowedOrigins);
+
+// FASE 4 — Web Push notification SIGNAL service. Subscribes to `message.created`;
+// push is secondary to Socket.IO (no duplicate). Does not touch the delivery engine.
+notificationService.init();
 
 httpServer.listen(PORT, async () => {
   logger.info(`🚀 GARUDA API running on port ${PORT}`);
