@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useParams } from 'react-router-dom'
-import api from '../services/api'
+import api, { createChatSocket } from '../services/api'
+import type { Socket } from 'socket.io-client'
 import ChatBubble from './ChatBubble'
 
 type Store = {
@@ -13,6 +14,8 @@ type HistoryMsg = {
   role: 'user' | 'assistant' | 'system'
   content: string
   source?: string | null
+  type?: 'text' // FASE 1: selalu text (structured mapping → FASE 2)
+  createdAt?: string
 }
 
 // --- P-PWA.15: install-prompt state (localStorage, 7-day window) ---
@@ -57,12 +60,16 @@ export default function ChatPage() {
   const { slug } = useParams<{ slug: string }>()
   const [store, setStore] = useState<Store | null>(null)
   const [messages, setMessages] = useState<HistoryMsg[]>([])
+  const [conversationId, setConversationId] = useState<string | null>(null)
   const [webUid, setWebUid] = useState<string | null>(null)
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(true)
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [isAdminTyping, setIsAdminTyping] = useState(false)
   const [isTyping, setIsTyping] = useState(false)
+  // Dedup kunci utama: satu messageId → render sekali (HTTP + WS identik).
+  const renderedIds = useRef<Set<string>>(new Set())
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null)
   const [installBannerOpen, setInstallBannerOpen] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -110,8 +117,15 @@ export default function ChatPage() {
         const histRes = await api.get(
           `/pwa/${slug}/history?uid=${encodeURIComponent(webUid)}`,
         )
-        // envelope sama: { success:true, data:{ history } } — baca di .data.
-        if (!cancelled) setMessages(histRes.data?.data?.history ?? [])
+        // envelope sama: { success:true, data:{ history, conversationId } } — baca di .data.
+        const histData = histRes.data?.data ?? {}
+        const hist: HistoryMsg[] = histData.history ?? []
+        if (!cancelled) {
+          setMessages(hist)
+          // seed dedup set supaya WS event.created yang sama tidak double-render.
+          renderedIds.current = new Set(hist.map((m) => m.id).filter(Boolean) as string[])
+          setConversationId(histData.conversationId ?? null)
+        }
       } catch (e: any) {
         if (!cancelled) {
           if (e?.response?.status === 404) setStore(null)
@@ -130,8 +144,91 @@ export default function ChatPage() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
+  // FASE 1 — Web realtime foundation.
+  // Hubungkan WS HANYA bila sudah ada identitas lengkap (slug + webUid + conversationId).
+  // server auth: query slug+uid+conversationId → store + customer + conversation ownership
+  // (multi-tenant isolated, lihat realtime.service.ts authGuard).
+  useEffect(() => {
+    if (!slug || !webUid || !conversationId) return
+
+    const socket: Socket = createChatSocket({ slug, uid: webUid, conversationId })
+
+    socket.on('connect', () => {})
+
+    // message.created: HTTP messageId = WS data.id (HARD RULE #3) → dedup.
+    socket.on('message.created', (data: {
+      id: string
+      sender: string
+      type?: string
+      content: string
+      source?: string
+      confidence?: number | null
+      createdAt?: string
+    }) => {
+      // hanya proses balasan assistant yang masuk via WS (customer bubble via HTTP optimis)
+      if (data.sender !== 'assistant') return
+      if (renderedIds.current.has(data.id)) return // dedup HTTP+WS
+      renderedIds.current.add(data.id)
+      setMessages((m) => [...m, {
+        id: data.id,
+        role: 'assistant',
+        content: data.content,
+        source: data.source ?? null,
+        type: 'text',
+        createdAt: data.createdAt,
+      }])
+      setIsAdminTyping(false)
+      bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    })
+
+    // admin/customer typing indicator (FASE 1 foundation)
+    socket.on('typing.started', (d: { party?: string }) => {
+      if (d?.party === 'human_agent') setIsAdminTyping(true)
+    })
+    socket.on('typing.stopped', (d: { party?: string }) => {
+      if (d?.party === 'human_agent') setIsAdminTyping(false)
+    })
+
+    socket.on('connect_error', (err: Error & { message: string }) => {
+      // unauthorized → WS mati; ChatPage tetap pakai HTTP/response.
+      if (err?.message?.startsWith('unauthorized')) {
+        // WS otorisasi ulang otomatis saat conversationId tersedia lagi.
+      }
+    })
+
+    socket.io?.on('reconnect', () => {
+      // history catch-up: ambil history, append missing (dedup by id)
+      api.get(`/pwa/${slug}/history?uid=${encodeURIComponent(webUid)}`)
+        .then((r) => {
+          const hist: HistoryMsg[] = r.data?.data?.history ?? []
+          const missing = hist.filter((m) => m.id && !renderedIds.current.has(m.id))
+          missing.forEach((m) => { if (m.id) renderedIds.current.add(m.id) })
+          if (missing.length) setMessages((prev) => [...prev, ...missing])
+        })
+        .catch(() => {})
+    })
+
+    return () => {
+      socket.close()
+    }
+  }, [slug, webUid, conversationId])
+
+  // FASE 1 — customer typing → POST /typing → EventBus → room admin (store:{storeId}:admin).
+  // Throttle sisi client 1s; server juga throttle 1s.
+  const customerTypingTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const reportTyping = (typing: boolean) => {
+    if (!slug || !webUid || !conversationId) return
+    if (customerTypingTimer.current) clearTimeout(customerTypingTimer.current)
+    customerTypingTimer.current = setTimeout(() => {
+      customerTypingTimer.current = null
+      api.post(`/pwa/${slug}/typing`, { uid: webUid, conversationId, typing })
+        .catch(() => {})
+    }, 300) // debounce kirim
+  }
+
   // 4. clear timer bila komponen unmount (hindari memory leak + setState pasca-unmount)
   useEffect(() => clearTypingTimer, [])
+
 
   // P-PWA.15: tangkap beforeinstallprompt (Chrome/Edge/Android) untuk banner
   // "Tambah ke Beranda". Safari/iOS TIDAK memicu event ini -> di situ banner menampilkan
@@ -178,6 +275,17 @@ export default function ChatPage() {
         message: text,
       })
       const body = res.data
+
+      // Conversation ID baru saja dibuat (first message) → perbarui state & ikatan WS.
+      if (body?.conversationId && body.conversationId !== conversationId) {
+        setConversationId(body.conversationId)
+      }
+      // messageId = conversation_history.id (HARD RULE #3). Seed dedup supaya WS
+      // 'message.created' dengan id yang sama tidak double-render.
+      if (body?.messageId) {
+        renderedIds.current.add(body.messageId)
+      }
+
       const elapsed = Date.now() - sendStartedAt.current
       // 3. balasan muncul pada max(targetDisplayTime, waktu response datang).
       //    delay = target - elapsed (0 bila AI lebih lambat dari target).
@@ -188,6 +296,7 @@ export default function ChatPage() {
         clearTypingTimer()
         setIsTyping(false)
         setSending(false)
+        reportTyping(false)
         setMessages((m) => [
           ...m,
           {
@@ -209,13 +318,17 @@ export default function ChatPage() {
           clearTypingTimer()
           setIsTyping(false)
           setSending(false)
-          setMessages((m) => [...m, { role: 'assistant', content: body.content }])
+          reportTyping(false)
+          setMessages((m) => [...m, { id: body.messageId, role: 'assistant', content: body.content }])
+          bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
         } else {
           typingTimer.current = setTimeout(() => {
             clearTypingTimer()
             setIsTyping(false)
             setSending(false)
-            setMessages((m) => [...m, { role: 'assistant', content: body.content }])
+            reportTyping(false)
+            setMessages((m) => [...m, { id: body.messageId, role: 'assistant', content: body.content }])
+            bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
             typingTimer.current = null
           }, delay)
         }
@@ -291,6 +404,11 @@ export default function ChatPage() {
           ))
         )}
         {isTyping && <ChatBubble role="assistant" isTyping />}
+        {isAdminTyping && (
+          <div className="text-xs text-gray-500 mb-1" aria-label="admin typing">
+            Admin sedang mengetik…
+          </div>
+        )}
         {error && (
           <div className="text-red-600 text-sm p-2">{error}</div>
         )}
@@ -302,7 +420,11 @@ export default function ChatPage() {
         <input
           className="flex-1 border rounded px-3 py-2 text-sm outline-none"
           value={input}
-          onChange={(e) => setInput(e.target.value)}
+          onChange={(e) => {
+            setInput(e.target.value)
+            // customer typing → /typing → EventBus → room admin (store:{storeId}:admin)
+            reportTyping(e.target.value.length > 0)
+          }}
           disabled={sending}
           placeholder="Ketik pesan..."
           onKeyDown={(e) => {

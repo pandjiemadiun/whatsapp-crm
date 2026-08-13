@@ -1,9 +1,9 @@
 import { Router, Request, Response } from 'express';
 import { prisma } from '../infrastructure/prisma.js';
-import { conversationService } from '../business/conversation.service.js';
-import { messageQueueService } from '../services/message-queue.service.js';
 import { conversationLimiter } from '../middleware/rate-limiters.js';
 import { adapters } from '../adapters/container.js';
+import { conversationDeliveryService } from '../services/conversation-delivery.service.js';
+import { eventBus } from '../services/event-bus.service.js';
 
 const router = Router();
 
@@ -127,7 +127,7 @@ router.get('/:storeSlug/history', async (req: Request, res: Response) => {
       },
     });
 
-    res.json({ success: true, data: { history } });
+    res.json({ success: true, data: { history, conversationId: conversation.id } });
   } catch (err) {
     adapters.logger.error('PWA history error', err as Error);
     res.status(500).json({ error: 'Failed to fetch history' });
@@ -207,50 +207,113 @@ router.post('/:storeSlug/message', conversationLimiter, async (req: Request, res
     }
     const conversationId = conversation!.id;
 
-    // --- Mutex per-conversation SEBELUM panggil engine ---
-    // Pola PERSIS sama seperti message-processor.service.ts:161-171.
-    // Mencegah race condition bila 2 request POST /message dengan uid+conversationId
-    // sama dikirim nyaris bersamaan: salah satu gagal acquire -> 429 (retry).
-    const release = messageQueueService.acquireLock(conversationId);
-    if (!release) {
+    // --- Mutex + Engine + Event dipindah ke conversationDeliveryService (FASE 1) ---
+    // HARD RULE (owner): routes/pwa.ts TIDAK BOLEH memanggil acquireLock().
+    // conversationDeliveryService.processWebRequest() adalah SATU lock owner per
+    // Web request. Engine (processCustomerMessage) tetap compose+persist; delivery
+    // hanya mengamati result, publish event, kemudian merilis lock.
+    const result = await conversationDeliveryService.processWebRequest({
+      storeId: store.id,
+      customerId,
+      conversationId,
+      message,
+    });
+
+    if (result.kind === 'locked') {
+      // 429 — request lain sedang memproses conversation yang sama (dedup concurrency).
       return res
         .status(429)
         .json({ error: 'Conversation is being processed, please retry', conversationId });
     }
 
-    try {
-      const result = await conversationService.processCustomerMessage(
-        store.id,
-        customerId,
-        conversationId,
-        message,
-        'web'
-      );
-
-      if (!result || !result.message.content) {
-        // result null = human_takeover / tidak ada balasan AI (bukan error 500)
-        return res.json({
-          success: true,
-          message: null,
-          status: 'pending_human',
-          conversationId,
-        });
-      }
-
+    if (result.kind === 'pending_human') {
+      // result null = human_takeover / tidak ada balasan AI (bukan error 500)
       return res.json({
         success: true,
+        message: null,
+        status: 'pending_human',
         conversationId,
-        content: result.message.content,
-        source: result.source,
-        confidence: result.confidence,
-        timestamp: result.message.createdAt,
       });
-    } finally {
-      release();
     }
+
+    // kind === 'ok' — messageId = result.message.id = conversation_history.id (SATU identity)
+    return res.json({
+      success: true,
+      messageId: result.messageId, // = conversation_history.id = WS event.data.id (HARD RULE #3)
+      conversationId,
+      type: 'text', // FASE 1: default text (structured mapping -> FASE 2)
+      content: result.content,
+      source: result.source,
+      confidence: result.confidence,
+      timestamp: result.createdAt,
+    });
   } catch (err) {
     adapters.logger.error('PWA message error', err as Error);
     res.status(500).json({ error: 'Failed to process message' });
+  }
+});
+
+// POST /api/pwa/:storeSlug/typing — customer typing indicator (FASE 1 contract).
+// Body: { uid: string, conversationId: string, typing: boolean }.
+// Publish typing.started/stopped ke EventBus -> realtime -> room admin
+// (store:{storeId}:admin). Server-side throttle 1s (ephemeral event, tidak dipersist).
+const typingThrottle = new Map<string, number>();
+const TYPING_THROTTLE_MS = 1000;
+router.post('/:storeSlug/typing', async (req: Request, res: Response) => {
+  try {
+    const { storeSlug } = req.params;
+    const { uid, conversationId, typing } = req.body as {
+      uid?: string;
+      conversationId?: string;
+      typing?: boolean;
+    };
+    if (!storeSlug || !uid || !conversationId || typeof typing !== 'boolean') {
+      return res.status(400).json({ error: 'uid, conversationId, and typing are required' });
+    }
+
+    const store = await prisma.store.findUnique({
+      where: { slug: storeSlug, deletedAt: null },
+      select: { id: true },
+    });
+    if (!store) return res.status(404).json({ error: 'Store not found' });
+
+    const customer = await prisma.customer.findFirst({
+      where: { webUid: uid, storeId: store.id, deletedAt: null },
+      select: { id: true },
+    });
+    if (!customer) return res.status(401).json({ error: 'Unauthorized customer' });
+
+    const conv = await prisma.conversation.findFirst({
+      where: {
+        id: conversationId,
+        storeId: store.id,
+        customerId: customer.id,
+        channel: 'web',
+        deletedAt: null,
+      },
+      select: { id: true },
+    });
+    if (!conv) return res.status(401).json({ error: 'Unauthorized conversation' });
+
+    const throttleKey = `typing:${conversationId}`;
+    const now = Date.now();
+    const last = typingThrottle.get(throttleKey);
+    if (last !== undefined && now - last < TYPING_THROTTLE_MS) {
+      return res.status(429).json({ error: 'Typing throttled', conversationId });
+    }
+    typingThrottle.set(throttleKey, now);
+    setTimeout(() => typingThrottle.delete(throttleKey), TYPING_THROTTLE_MS).unref();
+
+    eventBus.publish({
+      event: typing ? 'typing.started' : 'typing.stopped',
+      storeId: store.id,
+      data: { conversationId, party: 'customer', channel: 'web' },
+      ts: Date.now(),
+    });
+    res.json({ success: true });
+  } catch (err) {
+    adapters.logger.error('PWA typing error', err as Error);
+    res.status(500).json({ error: 'Failed to report typing' });
   }
 });
 
