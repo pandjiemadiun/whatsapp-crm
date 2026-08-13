@@ -14,7 +14,9 @@ type HistoryMsg = {
   role: 'user' | 'assistant' | 'system'
   content: string
   source?: string | null
-  type?: 'text' // FASE 1: selalu text (structured mapping → FASE 2)
+  /** FASE 2: structured type/payload (kanonis sama WS message.created + HTTP). */
+  type?: string
+  payload?: unknown
   createdAt?: string
 }
 
@@ -164,6 +166,7 @@ export default function ChatPage() {
       source?: string
       confidence?: number | null
       createdAt?: string
+      payload?: unknown
     }) => {
       // hanya proses balasan assistant yang masuk via WS (customer bubble via HTTP optimis)
       if (data.sender !== 'assistant') return
@@ -174,7 +177,8 @@ export default function ChatPage() {
         role: 'assistant',
         content: data.content,
         source: data.source ?? null,
-        type: 'text',
+        type: data.type ?? 'text', // FASE 2: kanonis dari engine (default text)
+        payload: data.payload ?? null,
         createdAt: data.createdAt,
       }])
       setIsAdminTyping(false)
@@ -319,7 +323,7 @@ export default function ChatPage() {
           setIsTyping(false)
           setSending(false)
           reportTyping(false)
-          setMessages((m) => [...m, { id: body.messageId, role: 'assistant', content: body.content }])
+          setMessages((m) => [...m, { id: body.messageId, role: 'assistant', content: body.content, type: body.type ?? 'text', payload: body.payload ?? null }])
           bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
         } else {
           typingTimer.current = setTimeout(() => {
@@ -327,7 +331,7 @@ export default function ChatPage() {
             setIsTyping(false)
             setSending(false)
             reportTyping(false)
-            setMessages((m) => [...m, { id: body.messageId, role: 'assistant', content: body.content }])
+            setMessages((m) => [...m, { id: body.messageId, role: 'assistant', content: body.content, type: body.type ?? 'text', payload: body.payload ?? null }])
             bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
             typingTimer.current = null
           }, delay)
