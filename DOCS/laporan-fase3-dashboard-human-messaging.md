@@ -248,6 +248,8 @@ Test #28 (admin menerima event setelah disconnect→reconnect).
 | PWA build | `npx vite build` | ✅ built (dist/assets) |
 | Dashboard typecheck | `cd apps/dashboard && npx tsc -p tsconfig.app.json --noEmit` | ✅ 0 error |
 | Dashboard build | `npx vite build` | ✅ built (>500 kB chunk = peringatan rollup, bukan error) |
+| Dashboard typecheck | `cd apps/dashboard && npx tsc -p tsconfig.app.json --noEmit` | ✅ 0 error |
+| Dashboard build | `npx vite build` | ✅ built (>500 kB chunk = peringatan rollup, bukan error) |
 | FASE 1 smoke | `npx tsx --env-file=../../.env scripts/smoke-fase1-realtime.ts` | ✅ 13 pass, 0 fail |
 | FASE 2 tests | `npx tsx --env-file=../../.env --test --test-force-exit src/tests/structured-message.test.ts` | ✅ 22 pass, 0 fail |
 | FASE 3 tests | `npx tsx --env-file=../../.env scripts/smoke-fase3-chatbox.ts` | ✅ 49 pass, 0 fail (49 assertions / ~30 use‑case) |
@@ -268,6 +270,33 @@ Test #28 (admin menerima event setelah disconnect→reconnect).
   `conversation.status='human_takeover'` (pending_human path). WA gateway **ditimbang**
   (monkeypatch `fonnteService.sendMessage` / `gowaAdapter.sendMessage`) — tidak ada panggilan
   jaringan eksternal.
+
+---
+
+## Hasil commit FASE 3
+
+```
+commit 467ecef524f1e816fe6a58fe462e8118be9fc572 (HEAD)
+feat(chatbox): FASE 3 dashboard human messaging
+
+ 11 files changed, 1846 insertions(+), 52 deletions(-)
+ DOCS/laporan-fase3-dashboard-human-messaging.md        | 279 +++++
+ DOCS/laporan-fase3-inspection.md                      | 152 ++++
+ apps/api/scripts/smoke-fase3-chatbox.ts               | 460 ++++++
+ apps/api/src/routes/conversations.ts                  | 223 +++-
+ apps/api/src/routes/pwa.ts                            |  87 +
+ apps/api/src/services/conversation-delivery.service.ts|  85 +-
+ apps/dashboard/package-lock.json                      |  88 +-
+ apps/dashboard/package.json                           |   3 +-
+ apps/dashboard/src/pages/ConversationInbox.tsx        | 225 +++-
+ apps/dashboard/src/services/realtime.ts               | 214 +
+ apps/pwa/src/components/ChatPage.tsx                  |  82 ++-
+```
+
+- **Commit hash:** `467ecef`
+- **Cakupan:** 11 file FASE 3 — tidak ada `.env`, `dist/`, `logs/`, atau dokumen lama.
+- **Protected files:** 0 modified sejak HEAD.
+- **pm2:** tidak di‑restart.
 
 ---
 
