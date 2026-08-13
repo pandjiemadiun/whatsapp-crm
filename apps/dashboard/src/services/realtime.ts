@@ -13,7 +13,7 @@
 import { io, type Socket } from 'socket.io-client';
 
 const WS_PATH = '/api/ws';
-const WS_BASE_ORIGIN = import.meta.env.DEV ? 'http://localhost:3000' : '';
+const WS_BASE_ORIGIN = (import.meta as any)?.env?.DEV ? 'http://localhost:3000' : '';
 
 export type SenderParty = 'assistant' | 'customer' | 'human_agent';
 
