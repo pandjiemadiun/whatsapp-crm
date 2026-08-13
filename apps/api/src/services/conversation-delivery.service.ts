@@ -120,7 +120,10 @@ export const conversationDeliveryService = {
     // Sumber otoritatif SATU‑SATUNYA = result.metadata.reason (engine-authored lewat
     // buildResult). Tidak ada → text. Jika UPDATE gagal → tetap text, TIDAK ada INSERT
     // kedua, dan request tidak gagal (failure-safe).
-    const structured: StructuredMessage = mapStructured(result);
+    // FASE 2 (patch): mapStructured async — classify (pure) + enrichment read-only
+    // (conversationContext.orderService/productService) untuk options/cart items/stock+imageUrl.
+    // Enrichment throw → text (failure-safe). Tetap tiada lock tambahan, tiada INSERT kedua.
+    const structured: StructuredMessage = await mapStructured(result, conversationId);
     let messageType = structured.messageType;
     let messagePayload: Record<string, unknown> | null = structured.messagePayload;
     try {

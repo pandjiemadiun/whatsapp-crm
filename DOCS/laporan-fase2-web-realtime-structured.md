@@ -5,18 +5,20 @@
 
 ## Ringkasan eksekutif
 
-Structured mapping **authority-only**: engine tidak pernah menuliskan
-`conversation_history.messageType` (kolom ada, selalu NULL) dan tidak mengekspor
-product/cart/order/checkout/button/image payload pada `result`. Sinyal otoritatif
-satu‑satunya yang sampai ke delivery = `result.metadata.reason` (closed‑set, di‑authoring
-`buildResult` di `business/conversation.service.ts`) + `result.message.content` +
-`result.metadata.cartOpsExecuted`.
+Structured mapping **authority-only** + **enrichment read-only**: engine tidak pernah menuliskan
+`conversation_history.messageType` (kolom ada, selalu NULL). Sinyal otoritatif engine yang sampai
+ke delivery adalah (a) `result.metadata.reason` (closed‑set, `buildResult`/`buildModifyCartResult`
+di `business/conversation.service.ts`), (b) `result.source` + `result.metadata.matchedNames /
+matchedPrices / productIds` untuk produk (`fallback.service` `tryProduct` → `productService.searchProducts`
+DB match, **bukan keyword**), c) + `result.message.content` / `cartOpsExecuted`.
 
 Delivery **UPDATE baris YANG SAMA** (`id = result.message.id`) — bukan INSERT kedua —
 mengisi `messageType` + `metadata.messagePayload` (merge‑preserve), lalu publish
 `message.created` **setelah** UPDATE dengan representasi kanonik yang SAMA untuk HTTP +
-WS. Fallback `text` bila tidak ada sinyal authoritatif. Tidak ada heuristic
-string/keyword/regex/AI‑source.
+WS. Enrichment payload (ops / item cart / stock+imageUrl) dibaca **read-only** dari state
+authoritative engine yang sudah persisted (`conversationContextService.getPendingClarification`,
+`orderService.getOrdersByConversation` draft order, `productService.getProductById`) — diluar
+lock, tidak ada INSERT tambahan, dan gagal → `text` (failure-safe, HARD RULE #9).
 
 ---
 
@@ -29,27 +31,32 @@ Hasil *inspection* terhadap repository (bukan asumsi):
 | `conversation_history.messageType` (schema.prisma:176, `String?`) | Kolom ada, **tidak pernah ditulis engine** (grep: satu‑satu `MessageType` di repo ada di `message-queue.service.ts:12` — itu WA *media* type `text\|image\|video\|audio\|document`, BUKAN structured message type) | — (kolom kosong) |
 | `conversation_history.metadata` (schema.prisma:181, `Json?`) | Engine `saveMessage` (:1084) menuliskan `message.metadata`; `buildResult` (:1008) **tidak set `msg.metadata`** → asisten message ber‑metadata `undefined`/NULL | — |
 | `result.metadata.reason` (engine, `buildResult` option.metadata) | closed‑set authoritatif: `clarification_asked`, `modify_cart`, `escalation_clarification_retry_exceeded`, `resolver_retry`, `resolver_no_llm`, `rollback`, `dead_end_fallback` (atau *undefined* untuk AI reply_draft) | ✅ authoritatif |
+| `result.source` + `result.metadata.matchedNames / matchedPrices / productIds` (`fallback.service` `tryProduct`, `fallback.service.ts:315`, `createResult` meletakkannya ke result‑level :874) | Engine `productService.searchProducts` (DB) — produk cocog, bukan keyword/regex; `createResult` menaruh ke `result.metadata` (result‑level) **dan** `result.message.metadata` (persist pada row) | ✅ authoritatif (product / product_list) |
 | `result.message.content` | Teks balasan engine (content) | ✅ authoritatif (content) |
-| `result.metadata.cartOpsExecuted` | Jumlah cart_ops yang dieksekusi (engine :790) | ✅ authoritatif |
+| `result.metadata.cartOpsExecuted` | Jumlah cart_ops yang dieksekusi (engine :790) | ✅ authoritatif (supporting signal) |
+| state persisted engine untuk enrichment | `conversation_context.extractedEntities.pendingClarification.options` (clarification), draft `Order.items+totalPrice` (keranjang), `Product.stock/primaryImageUrl` (stok/gambar) | ✅ authoritatif (dibaca read‑only) |
 | `result.metadata.intent` (hanya AI reply_draft) | Intent LLM, **tidak dipakai** klasifikasi (HARD RULE #16: `source==='ai'` bukan bukti) | ❌ tidak dipakai |
-| `InterpreterResult.cart_ops` / `llmResult.clarification.options` | Dieksekusi (DB) / disimpan ke `conversation_context` — **tidak terbawa ke `result`** | ❌ tidak tersedia di delivery |
 
 ### Structured types found (authoritative source per tipe)
 
 | Tipe kontrak | Sumber otoritatif di repo | Tersedia di delivery? |
 |---|---|---|
 | `text` | Default; `result.message.content` + `result.source` | ✅ selalu |
-| `quick_reply` | `result.metadata.reason === 'clarification_asked'` (engine :655), opsi disimpan ke context (`setPendingClarification` :650) | ✅ reason tersedia (ops = FASE 2+ enrichment) |
-| `cart` | `reason === 'modify_cart'` (buildModifyCartResult :988) + `cartOpsExecuted`; state keranjang di DB | ✅ reason + count; DB‑items enrichment = FASE 2+ |
-| `handoff` | `reason === 'escalation_clarification_retry_exceeded'` (engine :467/:582) atau `human_takeover` (result null → `pending_human`, FASE 1 publish `conversation.handoff`) | ✅ reason tersedia |
-| `product` | Tidak ada payload product di `result` (InterpreterResult.products tidak terbawa) | ❌ → text |
-| `product_list` | Tidak ada | ❌ → text |
-| `order` | `orderService.finalizeDraftOrder` (engine :778) tidak menghasilkan message type/order_result di `result` | ❌ → text |
-| `checkout` | Tidak ada sinyal di `result` | ❌ → text |
-| `button` | Tidak ada | ❌ → text |
-| `image` | Tidak ada | ❌ → text |
-| `payment` | Tidak ada | ❌ → text |
-| `notification` | FASE 4 (event `notification.created` sudah didefinisikan di `event-bus.service.ts:25`, belum dipakai delivery Web) | ❌ → text |
+| `quick_reply` | `reason === 'clarification_asked'` (engine :655) → opsi otoritatif dari `conversationContextService.getPendingClarification` (`conversation_context.extractedEntities.pendingClarification.options`, engine `setPendingClarification` :650) — **bukan** `InterpreterResult.clarification.options` langsung (tidak terbawa ke `result`),
+ melainkan state yang disimpan engine. **HARD RULE (patch FINAL): hanya `quick_reply` bila
+ options tersedia & non‑kosong; bila `undefined`/`length===0` → `text` (jangan fabricate options
+ dari content/keyword/regex/LLM).** | ✅ implemented (ops = enrichment read) |
+| `cart` | `reason === 'modify_cart'` (buildModifyCartResult :988) + `cartOpsExecuted`; state keranjang otoritatif = draft `Order` (`orderService.getOrdersByConversation` → `orderStatus:'draft'`) `items` + `totalPrice`. `cartOpsExecuted` hanya supporting signal. Jika draft order tidak ada items → **downgrade `text`** | ✅ implemented (enrichment read) |
+| `handoff` | `reason === 'escalation_clarification_retry_exceeded'` (engine :467/:568) **authoritative engine escalation** — bukan keyword; `human_takeover` (result null → `pending_human`, FASE 1 `conversation.handoff`) | ✅ implemented |
+| `product` | `result.source === ResponseSource.PRODUCT` **dan** `result.metadata.matchedNames` ≥1 (engine `tryProduct` DB‑match, `fallback.service.ts:315`, `createResult` meletakkan ke `result.metadata` result‑level :874); payload `{id,name,price,stock,imageUrl}` — `id/name/price` dari metadata, `stock/imageUrl` dari `productService.getProductById` (public fields only; tidak expose `costUSD`/`margin`) | ✅ implemented (enrichment read) |
+| `product_list` | `result.source === PRODUCT` + `matchedNames` ≥2 (multi‑candidate disambiguation listing, engine otoritatif; bukan array hasil text parsing) | ✅ implemented (enrichment read) |
+| `order` | `finalizeDraftOrder` (order.service.ts:165) tidak menghasilkan order_result message type pada `result` (status order hanya ditanya lewat tier `ORDER_STATUS` FAQ‑like) | ❌ → text |
+| `checkout` | Tidak ada sinyal di `result` (finalize hanya transisi status draft→waiting_address) | ❌ → text |
+| `button` | `composer-v2` grep `action\|button\|quick_reply\|suggestion\|payload` = kosong | ❌ → text |
+| `catalog` | `result.source === ResponseSource.CATALOG` (`tryCatalog` :238) hanya `productCount` (`:261`), tidak ada item array → text | ❌ → text |
+| `image` | Tidak ada sumber image authoritative | ❌ → text |
+| `payment` | Backend authoritative; tidak dibuat dari frontend | ❌ → text |
+| `notification` | FASE 4 (event `notification.created` didefinisikan `event-bus.service.ts:25`, belum dipakai delivery Web) | ❌ → text |
 
 **Existing `messageType` ownership:** engine **tidak** pernah menulis kolom ini
 (selalu NULL). Per HARD RULE #4, pemilik akhir = **delivery layer** yang
@@ -66,11 +73,13 @@ jika ada, lalu menambah `messagePayload`.
 | TYPE | AUTHORITATIVE SOURCE | IMPLEMENTED / FALLBACK | REASON |
 |---|---|---|---|
 | `text` | default (tidak ada reason authoritatif) | ✅ implemented (default) | FASE 0 contract; engine default |
-| `quick_reply` | `result.metadata.reason === 'clarification_asked'` | ✅ implemented | Engine *authoritatively* memutuskan bertanya (SOP); closed‑set reason |
-| `cart` | `result.metadata.reason === 'modify_cart'` + `cartOpsExecuted` | ✅ implemented | Engine mengeksekusi cart_ops (DB) — authoritatif |
+| `quick_reply` | `reason === 'clarification_asked'` | ✅ implemented | Engine *authoritatively* memutuskan bertanya (SOP); opsi di‑enrich dari state persisted context (`getPendingClarification`). **Jika options `undefined`/kosong → downgrade `text`** (HARD RULE — jangan fabricate) |
+
+**HANDOFF verification (patch FINAL):** `reason='escalation_clarification_retry_exceeded'` dihasilkan **hanya** di jalur eskalasi — pada `conversation.service.ts:455` engine sudah memanggil `await this.markHumanTakeover(conversationId)` (human takeover **aktif**), menyimpan pesan asisten `source:HUMAN` (escalate reply), lalu `buildResult({source:HUMAN, content:escalateReply, metadata:{reason:'escalation_clarification_retry_exceeded'}})` (:472). Reason ini **tidak** muncul pada respons non‑handoff normal. ⇒ **authoritative handoff → tetap `handoff`**, tanpa rubah engine.
+| `cart` | `reason === 'modify_cart'` + `cartOpsExecuted` | ✅ implemented | Engine mengeksekusi cart_ops (DB); item/total di‑enrich dari draft order (`getOrdersByConversation`) |
 | `handoff` | `reason === 'escalation_clarification_retry_exceeded'` | ✅ implemented | Engine authoritatively eskalasi ke manusia |
-| `product` | — | FALLBACK `text` | Tidak ada payload product di result; dilarang search produk untuk klasifikasi (HARD RULE #15) |
-| `product_list` | — | FALLBACK `text` | Tidak ada |
+| `product` | `result.source === PRODUCT` + `matchedNames` | ✅ implemented (enrich `stock`/`imageUrl`) | Engine DB‑match (`searchProducts`), bukan keyword |
+| `product_list` | `result.source === PRODUCT` + `matchedNames` ≥2 | ✅ implemented (enrich per‑item) | Multi‑candidate disambiguation listing engine‑otoritatif |
 | `order` | — | FALLBACK `text` | Tidak ada order_result di result untuk Web |
 | `checkout` | — | FALLBACK `text` | Tidak ada sinyal checkout di result |
 | `button` | — | FALLBACK `text` | Tidak ada |
@@ -78,27 +87,30 @@ jika ada, lalu menambah `messagePayload`.
 | `payment` | — | FALLBACK `text` | Backend authoritative; tidak dibuat dari frontend |
 | `notification` | — | FALLBACK `text` | FASE 4 |
 
-**Pengingatan FASE 2+ (opsional, tidak dikerjakan di FASE 2 untuk menghindari business‑logic di delivery):** payload `quick_reply` belum memuat opsi (ops ada di `conversation_context` via `getPendingClarification`); payload `cart` belum memuat item (ada di DB). FASE 2 patut diperluas bila opsi/item diperlukan klien — dengan tetap membaca **state engine yang sudah ada** (bukan heuristic).
+**Pengingat arsitektur (patch FINAL):** enrichment DB read (`getContext` / `getOrdersByConversation` / `getProductById`) **read‑only**, **di luar lock**, **tanpa INSERT**; `cart` kosong → downgrade `text`; `quick_reply` options kosong → downgrade `text`; `product`/`product_list` hanya mengekspor public fields (`id,name,price,stock,imageUrl`), tidak `costUSD`/`margin`/metadata internal.
 
 ---
 
-## 3. Files Created
+## 3. Files Created / Modified (patch, on top of `8a1c0f7`)
+
+File‑file *baru* relatif baseline FASE 1 (`8e75e37`) sudah dibuat di commit FASE 2
+`8a1c0f7` (`mapper.ts` + `test.ts` + `report`). **Patch ini hanya MODIFIKASI** 3 file
+sumber + laporan berikut ini (lihat §8 Git):
 
 | File | Kegunaan |
 |---|---|
-| `apps/api/src/services/structured-message.mapper.ts` | Pure mapper `mapStructured(result)` → authority‑only; tidak DB, tidak engine |
-| `apps/api/src/tests/structured-message.test.ts` | T1, T2, T4, T6, T6B, T7, T8, T9, T10, T12, T14 (+ handoff) |
-| `DOCS/laporan-fase2-web-realtime-structured.md` | Laporan ini |
+| `apps/api/src/services/structured-message.mapper.ts` | `classifyStructured` (pure, sync) memutuskan **type** dari sinyal engine; `mapStructured(result, conversationId)` async melakukan enrichment read-only (`getPendingClarification`/`getOrdersByConversation`/`getProductById`) untuk melengkapi payload (ops/item/stock+imageUrl) |
+| `apps/api/src/services/conversation-delivery.service.ts` | `await mapStructured(result, conversationId)` (enrichment read-only **setelah lock dilepas**); UPDATE same row `messageType`/`metadata.messagePayload` (merge‑preserve, try/catch→text); publish `message.created` setelah UPDATE |
+| `apps/api/src/tests/structured-message.test.ts` | Pure: T1, T6, T6B, T2-classify, T4-classify, handoff, T3-classify, T3-list-classify, BUTTON/order/checkout/catalog; Integration (enrichment): T2-int (ops), T4-int (items+total), T4b-int (empty→text), T3-int (product), T3-list-int (product_list), T7, T8, T9, T10, T12, T14 |
+| `DOCS/laporan-fase2-web-realtime-structured.md` | Laporan ini (patch section) |
 
-## 4. Files Modified
+## 4. Pre‑Existing Modified Files (dari FASE 2 asli `8a1c0f7`, tidak disentuh patch ini)
 
-| File | Perubahan |
+| File | Perubahan (FASE 2 asli) |
 |---|---|
-| `apps/api/src/services/conversation-delivery.service.ts` | `mapStructured` + UPDATE same row `messageType`/`metadata.messagePayload` (merge‑preserve, try/catch→text); `MessageCreatedData.payload`; `DeliveryResult['ok'].type/.payload`; publish `message.created` **setelah** UPDATE |
-| `apps/api/src/routes/pwa.ts` | POST `/message` response `type: result.type, payload: result.payload`; GET `/history` select `messageType,metadata` + normalisasi ke shape kanonis `{id,role,content,source,type,payload,createdAt}` |
-| `apps/pwa/src/components/ChatPage.tsx` | `HistoryMsg.type?:string; payload?:unknown`; WS listener memakai `data.type`/`data.payload`; send‑success append `type`/`payload` dari response |
-
-> `apps/pwa/src/services/api.ts` tidak berubah (axios typeless; `type`/`payload` mengalir via `res.data`).
+| `apps/api/src/routes/pwa.ts` | POST `/message` response `type`/`payload`; GET `/history` select `messageType,metadata` + normalisasi kanonis `{id,role,content,source,type,payload,createdAt}` |
+| `apps/pwa/src/components/ChatPage.tsx` | `HistoryMsg.type?; payload?`; WS listener `data.type`/`data.payload`; send‑success append `type`/`payload` |
+| `apps/pwa/src/services/api.ts` | (tidak berubah; axios typeless, `type`/`payload` via `res.data`) |
 
 ## 5. Protected Files — konfirmasi TIDAK disentuh
 
@@ -119,7 +131,8 @@ jika ada, lalu menambah `messagePayload`.
 | `apps/dashboard/src/contexts/AuthContext.tsx` | ✅ TIDAK disentuh |
 | `apps/dashboard/src/services/api.ts` | ✅ TIDAK disentuh |
 
-`git diff --stat` melalui commit FASE 2: hanya 5 file source + report. Tidak ada diff pada file protected (cek `git diff --stat` di §16).
+`git diff --stat` patch ini: hanya 3 file source + report. Tidak ada diff pada file protected
+(cek `git diff --stat` di §16).
 
 ## 6. Persistence Proof (INSERT once → UPDATE same row)
 
@@ -129,7 +142,7 @@ ENGINE (processCustomerMessage)
         │  conversation_history.id = msg.id
         │
 DELIVERY (conversation-delivery.service.processWebRequest) — SETELAH engine return + release lock
-  └─ mapStructured(result)            [pure, authority-only]
+  └─ mapStructured(result, conversationId)      [classify (pure) + enrichment read-only di luar lock]
   └─ prisma.conversationHistory.findUnique({ id: msg.id })      [read existing row]
   └─ prisma.conversationHistory.UPDATE({
         where: { id: msg.id },                                   [UPDATE SAME ROW]
@@ -138,7 +151,14 @@ DELIVERY (conversation-delivery.service.processWebRequest) — SETELAH engine re
   └─ eventBus.publish('message.created', { id: msg.id, type, payload, ... })  [setelah UPDATE]
 ```
 
-**Bukti tak ada INSERT kedua:** (a) `mapStructured` pure, tak panggil prisma; (b) delivery **hanya** memanggil `findUnique` + `update` — `grep` delivery file tidak ada `conversationHistory.create`. (c) T8: `row count` sebelum = 1, setelah = 1 (engine distub; tidak ada saveMessage kedua). (d) T14: saat `update` dibutuhkan‑kan, tak ada INSERT — baris tetap ada, type fallback text.
+**Bukti tak ada INSERT kedua:** (a) enrichment membaca read‑only
+(`getContext`/`getOrdersByConversation`/`getProductById`) — **tidak pernah
+`conversationHistory.create`**; (b) delivery **hanya** memanggil `findUnique` +
+`update` pada `conversation_history` (`grep` delivery tidak ada `.create`).
+(c) T8: `row count` sebelum = 1, setelah = 1 (engine distub; tidak ada saveMessage
+kedua). (d) T14: saat `update` dibutuhkan‑kan, tak ada INSERT — baris tetap ada, type
+fallback text. (e) Enrichment gagal → `text` (try/catch), tidak ada INSERT kedua
+(HARD RULE #9).
 
 Query delivery (verification):
 ```bash
@@ -154,8 +174,12 @@ const existingMeta = existing?.metadata  // row existing metadata
 const mergedMeta = { ...existingMeta };   // preserve ALL existing keys
 if (messagePayload !== null) mergedMeta.messagePayload = messagePayload; // + payload
 ```
-Bukti (test T7): baris di‑seed dengan `metadata: { foo:'bar', existingField:true }`; setelah delivery (reason `clarification_asked` → quick_reply) row.metadata =
-`{ foo:'bar', existingField:true, messagePayload:{ reason:'clarification_asked', content:'...' } }` — `foo`/`existingField` **terselamatkan**, `messagePayload` ditambahkan (bukan overwrite).
+Bukti (test T7): baris di‑seed dengan `metadata: { foo:'bar', existingField:true }`; setelah delivery
+(reason `clarification_asked`, enrichment `getContext` **distub** mengembalikan opsi)
+row.metadata =
+`{ foo:'bar', existingField:true, messagePayload:{ reason:'clarification_asked', question:'...', options:[...] } }` —
+`foo`/`existingField` **terselamatkan**, `messagePayload` ditambahkan (bukan overwrite). T2b memastikan bila
+opts kosong → downgrade `text` (messagePayload tidak ada).
 
 ## 8. Message Identity (HARD RULE #3)
 
@@ -180,12 +204,16 @@ Test T10: `http.type === ws.type` dan `JSON.stringify(http.payload) === JSON.str
 | TEST | COMMAND | RESULT |
 |---|---|---|
 | T1 plain text | `tsx --env-file=../../.env --test src/tests/structured-message.test.ts` (sub T1) | ✅ pass |
-| T2 quick_reply | T2 sub | ✅ pass |
-| T3 product_list | tidak ada authoritative → text | ✅ T1/T6 mewakili |
-| T4 cart | T4 sub | ✅ pass |
-| T5 button/quick_reply | quick_reply = T2 | ✅ pass |
+| T2 quick_reply type | T2-classify sub | ✅ pass |
+| T2b quick_reply NO options → text | T2b-int sub | ✅ pass |
+| T2-int quick_reply options == authoritative context | T2-int sub | ✅ pass |
+| T3 product (source=PRODUCT + matchedNames, enrich stock/imageUrl) | T3-classify + T3-int sub | ✅ pass |
+| T3-list product_list (≥2 matchedNames, enrich) | T3-list-classify + T3-list-int | ✅ pass |
+| T4 cart (type + items + total) | T4-classify + T4-int (items+total) | ✅ pass |
+| T4b cart kosong → downgrade text | T4b-int | ✅ pass |
+| T5 button/order/checkout/catalog → text | klasifikasi button → text (composer-v2 grep kosong) | ✅ pass |
 | T6 no‑authoritative “ada sosis?” → text | T6 + T6B | ✅ pass |
-| T7 existing metadata preserved | T7 | ✅ pass |
+| T7 existing metadata preserved + options | T7 | ✅ pass |
 | T8 same row (no 2nd insert) | T8 | ✅ pass |
 | T9 DB id = HTTP = WS | T9 | ✅ pass |
 | T10 HTTP=WS canonical | T10 | ✅ pass |
@@ -194,7 +222,7 @@ Test T10: `http.type === ws.type` dan `JSON.stringify(http.payload) === JSON.str
 | T13 tenant isolation | FASE 1 smoke (cross‑tenant) | ✅ pass |
 | T14 failure safety (update throw → text, no 2nd insert) | T14 | ✅ pass |
 
-**Suite FASE 2:** `tests 13, pass 13, fail 0` (12 subtests + parent).
+**Suite FASE 2:** `tests 22, pass 22, fail 0` (21 subtests + parent).
 
 ## 11. Regression (FASE 1 tetap bekerja)
 
@@ -231,36 +259,34 @@ NONE. Tidak ada: migration, second INSERT, schema change, WA change, notificatio
 
 ## 16. Git
 
+**Patch ini** (commit `feat(chatbox): FASE 2 structured payload — authoritative quick_reply/cart/product`)
+dibandingkan baseline commit FASE 2 `8a1c0f7`. Hanya **4 file** (3 source modify + 1 report modify):
+
 ```
-git status --short  (staging hanya FASE 2)
+git status --short  (staging hanya PATCH ini)
  M .env                                    ← tidak distage (RAILS)
- M apps/api/dist/**                        ← pre‑existing dirty; tidak distage (RAILS)
+ M apps/api/dist/**                        ← pre-existing dirty; tidak distage (RAILS)
  M apps/api/logs/*                         ← tidak distage (RAILS)
- M apps/api/src/routes/pwa.ts
+ M apps/api/src/services/structured-message.mapper.ts
  M apps/api/src/services/conversation-delivery.service.ts
- M apps/pwa/src/components/ChatPage.tsx
-?? apps/api/src/services/structured-message.mapper.ts
-?? apps/api/src/tests/structured-message.test.ts
-?? DOCS/laporan-fase2-web-realtime-structured.md
+ M apps/api/src/tests/structured-message.test.ts
+ M DOCS/laporan-fase2-web-realtime-structured.md
 ```
 `git diff --check` → bersih (tidak ada whitespace error).
 
-Stage seluruh file sumber FASE 2 + report (eksklusi `.env`/`dist`/`logs`):
+Stage hanya 4 file di atas (eksklusi `.env`/`dist`/`logs`/protected):
 ```
 git add apps/api/src/services/structured-message.mapper.ts \
-        apps/api/src/tests/structured-message.test.ts \
         apps/api/src/services/conversation-delivery.service.ts \
-        apps/api/src/routes/pwa.ts \
-        apps/pwa/src/components/ChatPage.tsx \
+        apps/api/src/tests/structured-message.test.ts \
         DOCS/laporan-fase2-web-realtime-structured.md
 ```
-Commit (hash dilampirkan setelah eksekusi):
+Commit hash dilampirkan setelah eksekusi:
 ```
 commit <HASH>
-Author: ...
-    feat(chatbox): FASE 2 structured message mapping (authority-only, same-row update)
+    feat(chatbox): FASE 2 structured payload — authoritative quick_reply/cart/product
 ```
-`git diff --stat` commit: **4 modified + 2 new source/test + 1 report = 7 file**; tidak termasuk `.env`/`dist`/`logs`/protected.
+`git diff --stat` patch commit: **4 file modified**; tidak termasuk `.env`/`dist`/`logs`/protected.
 
 ## 17. BLOCKERS
 
