@@ -3,6 +3,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import express from 'express';
 import cors from 'cors';
+import http from 'http';
 import { prisma } from './infrastructure/prisma.js';
 
 // Global BigInt serialization (Prisma returns BigInt for numeric fields)
@@ -45,6 +46,7 @@ import healthRouter from './routes/health.js';
 import redirectRouter from './routes/redirect.js';
 import { startHealthCheckInterval } from './business/health.service.js';
 import { messageProcessorService } from './services/message-processor.service.js';
+import { realtimeService } from './services/realtime.service.js';
 import { healthMonitorService } from './services/health-monitor.service.js';
 import { scheduleBackups } from './bootstrap/scheduleBackups.js';
 import { scheduleFollowUps } from './bootstrap/scheduleFollowUps.js';
@@ -164,7 +166,11 @@ app.use((_req, res) => {
 // Global error handler (must be last middleware)
 app.use(errorHandler);
 
-app.listen(PORT, async () => {
+// Web Realtime Foundation (FASE 1) — Socket.IO on the SAME http.Server as Express.
+const httpServer = http.createServer(app);
+realtimeService.init(httpServer, corsAllowedOrigins);
+
+httpServer.listen(PORT, async () => {
   logger.info(`🚀 GARUDA API running on port ${PORT}`);
 
   // Pre-load encryption key from Cloudflare Worker / env var
@@ -249,6 +255,7 @@ app.listen(PORT, async () => {
 process.on('SIGTERM', async () => {
   logger.info('SIGTERM received, shutting down gracefully...');
   await messageProcessorService.shutdown();
+  realtimeService.shutdown();
   await prisma.$disconnect();
   process.exit(0);
 });
@@ -256,6 +263,7 @@ process.on('SIGTERM', async () => {
 process.on('SIGINT', async () => {
   logger.info('SIGINT received, shutting down gracefully...');
   await messageProcessorService.shutdown();
+  realtimeService.shutdown();
   await prisma.$disconnect();
   process.exit(0);
 });

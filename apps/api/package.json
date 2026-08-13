@@ -13,7 +13,7 @@
     "test:analytics": "tsx --env-file=../../.env --test --test-force-exit src/tests/analytics.e2e.test.ts",
     "test:batch": "tsx --env-file=../../.env --test --test-force-exit src/tests/batch-magic-paste.e2e.test.ts",
     "test:all": "tsx --test --test-force-exit src/tests/date-range.test.ts src/tests/analytics.e2e.test.ts src/tests/batch-magic-paste.e2e.test.ts",
-  "test:chat": "node --experimental-vm-modules ./node_modules/.bin/jest --config jest.config.cjs",
+    "test:chat": "node --experimental-vm-modules ./node_modules/.bin/jest --config jest.config.cjs",
     "test:golden": "tsx --env-file=../../.env --test --test-force-exit src/tests/golden-dataset.test.ts",
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate dev",
@@ -43,6 +43,7 @@
     "redis": "^5.0.0",
     "sanitize-html": "^2.17.6",
     "sharp": "^0.35.3",
+    "socket.io": "^4.8.3",
     "winston": "^3.19.0",
     "yargs": "^18.1.0",
     "zod": "^4.4.3"
