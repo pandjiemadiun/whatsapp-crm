@@ -2,8 +2,6 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 import { useParams } from 'react-router-dom'
 import api, { createChatSocket } from '../services/api'
 import type { Socket } from 'socket.io-client'
-import { useCart, cartStore } from '../store/cartStore'
-import { formatPrice } from '../utils/format'
 import ChatBubble from './ChatBubble'
 import EmptyState, { type QuickActionType } from './EmptyState'
 import Modal from './Modal'
@@ -14,20 +12,15 @@ import type { ChatMessage, ChatProduct, StructuredMessageType, ProductPayload } 
 
 type Store = {
   name?: string | null
+  slug?: string | null
   profilePhotoUrl?: string | null
   description?: string | null
+  businessCategory?: string | null
+  operatingHours?: { summary?: string | null } | null
+  isActive?: boolean | null
 }
 
 type HistoryMsg = ChatMessage
-
-type OrderRow = {
-  id: string;
-  totalPrice: number | null;
-  currency: string;
-  orderStatus: string;
-  items?: unknown;
-  createdAt: string;
-};
 
 function getInitials(name: string): string {
   const parts = name.trim().split(/\s+/).slice(0, 2)
@@ -102,13 +95,8 @@ export default function ChatPage() {
 
   // BUG 5: view state — 'storefront' shows EmptyState WITHOUT deleting messages.
   const [view, setView] = useState<'chat' | 'storefront'>('chat')
-  // BUG 4: modal state for Riwayat / Bantuan / Hapus Chat konfirmasi.
-  const [modal, setModal] = useState<'history' | 'faq' | 'confirm-delete' | null>(null)
-  const [orders, setOrders] = useState<OrderRow[]>([])
-  const [faqs, setFaqs] = useState<Array<{ id: string; question: string; answer: string }>>([])
-
-  // BUG 3: reactive cart (shared with storefront "Tambah").
-  const cart = useCart()
+  // G2-E.3.2 §7/§8/§9: menu only keeps real, released actions (Hubungi Admin + Hapus Chat).
+  const [modal, setModal] = useState<'confirm-delete' | null>(null)
 
   const typingTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const targetDisplayMs = useRef<number>(0)
@@ -440,29 +428,24 @@ export default function ChatPage() {
     [],
   )
 
-  // BUG 3: "+ Keranjang" / "Tambah" — shared client cart (storefront + chat).
+  // G2-E.3.2 §10/§11/§12: "+ Keranjang" / "Tambah" must NOT use a client cart.
+  // The PWA has no authoritative cart read today (see §10E), so there is no
+  // client-side cart/counter/badge. +Keranjang sends the authoritative backend
+  // cart-add via the existing /message channel ("tambah <product> ke keranjang"
+  // → conversation engine → CartAuthority). The backend's own reply is rendered
+  // as a chat bubble; nothing is fabricated client-side.
   const handleAddToCart = useCallback(
     (product: ProductPayload) => {
-      const name = product.name ?? 'Produk'
-      cartStore.addItem({ id: product.id ?? '', name, price: product.price })
-      if (view === 'chat') {
-        const snap = cartStore.peek()
-        appendAssistant({
-          type: 'cart',
-          content: 'Keranjangmu:',
-          payload: { items: snap.items, total: snap.total },
-        })
-      } else {
-        const snap = cartStore.peek()
-        showToast(`+ ${name} · ${snap.count} item · ${formatPrice(snap.total)}`)
-      }
+      if (!product.name || inputDisabled) return
+      void onSend(`tambah ${product.name} ke keranjang`)
     },
-    [view, appendAssistant],
+    [onSend, inputDisabled],
   )
 
-  // BUG 3: "Produk Lain" — produk lain di kategori sama. ChatProduct tidak
-  // membawa category, jadi pakai produk tersedia lainnya (fallback); kosong →
-  // pesan fallback (jangan render grid kosong).
+  // G2-E.3.2 §3: "Produk Lain" — products carry no `category` field, so "other
+  // products in the same category" falls back to all available products fetched
+  // from GET /products (authoritative store data). Empty → honest fallback msg.
+  // (No category chips rendered because no category data exists.)
   const handleShowRelated = useCallback(
     (product: ProductPayload) => {
       const others = (products || []).filter((p) => p.id !== product.id)
@@ -489,27 +472,9 @@ export default function ChatPage() {
     [products, appendAssistant],
   )
 
-  // BUG 4: Riwayat Pesanan — GET /orders (reuse public endpoint).
-  const handleHistory = useCallback(async () => {
-    if (!webUid || !slug) {
-      showToast('Belum ada pesanan')
-      return
-    }
-    try {
-      const r = await api.get(`/pwa/${slug}/orders?uid=${encodeURIComponent(webUid)}`)
-      setOrders(r.data?.data?.orders ?? [])
-      setModal('history')
-    } catch (e: any) {
-      if (e?.response?.status === 401) {
-        setOrders([])
-        setModal('history')
-      } else {
-        showToast('Gagal memuat riwayat pesanan')
-      }
-    }
-  }, [slug, webUid])
-
-  // BUG 4: Hubungi Admin — POST /handoff (reuse engine eskalasi convention).
+  // G2-E.3.2 §9: Hubungi Admin — POST /handoff (reuse engine escalation convention;
+  // composeEscalateReply + human_takeover + eventBus — the same convention the
+  // engine uses for auto-escalation). Real flow, not a fake admin.
   const handleContactAdmin = useCallback(async () => {
     if (!webUid || !slug) return
     try {
@@ -539,20 +504,9 @@ export default function ChatPage() {
     }
   }, [slug, webUid, conversationId, appendAssistant])
 
-  // BUG 4: Bantuan — GET /faq.
-  const handleFaq = useCallback(async () => {
-    if (!slug) return
-    try {
-      const r = await api.get(`/pwa/${slug}/faq`)
-      setFaqs(r.data?.data?.faqs ?? [])
-      setModal('faq')
-    } catch {
-      setFaqs([])
-      setModal('faq')
-    }
-  }, [slug])
-
-  // BUG 4: Hapus Chat — POST /clear, reset state, kembali ke storefront.
+  // G2-E.3.2 §7/§8: "Riwayat Pesanan" & "Bantuan" are NOT released PWA features —
+  // hidden (no fake endpoints/data).
+  // Hapus Chat — POST /clear (destructive, behind confirm modal).
   const handleClearChat = useCallback(async () => {
     if (!webUid || !slug) {
       setMessages([])
@@ -659,12 +613,25 @@ export default function ChatPage() {
           </button>
         )}
         <div className="relative flex-shrink-0">
-          <div
-            className="w-11 h-11 rounded-full flex items-center justify-center text-white font-serif font-semibold text-base border-2 border-background"
-            style={{ background: 'linear-gradient(160deg, #3a6e52, #1E3A2B)' }}
-          >
-            {getInitials(store.name || 'T')}
-          </div>
+          {/* §4: merchant avatar = store.profilePhotoUrl (authoritative). Fallback:
+              generic gradient + initials (never a product/mock image). */}
+          {store.profilePhotoUrl ? (
+            <img
+              src={store.profilePhotoUrl}
+              alt={store.name || 'Merchant'}
+              className="w-11 h-11 rounded-full object-cover border-2 border-background"
+              onError={(e) => {
+                (e.currentTarget as HTMLImageElement).style.display = 'none'
+              }}
+            />
+          ) : (
+            <div
+              className="w-11 h-11 rounded-full flex items-center justify-center text-white font-serif font-semibold text-base border-2 border-background"
+              style={{ background: 'linear-gradient(160deg, #3a6e52, #1E3A2B)' }}
+            >
+              {getInitials(store.name || 'T')}
+            </div>
+          )}
           <div
             className="absolute -bottom-0.5 -right-0.5 w-[18px] h-[18px] rounded-full flex items-center justify-center border-2 border-background"
             style={{ background: 'var(--marigold)' }}
@@ -681,20 +648,23 @@ export default function ChatPage() {
           </div>
           <div className="flex items-center gap-1.5 mt-0.5">
             <span className="w-1.5 h-1.5 rounded-full bg-success flex-shrink-0" />
-            <span className="text-[11px] text-muted-foreground font-medium">Online · Balas &lt; 5 menit</span>
+            {/* §2: render only authoritative status data. operatingHours.summary is
+                real; response-time ("Balas < 5 menit") & literal "Online" are NOT
+                in the schema → hidden. */}
+            {(store.operatingHours?.summary || (store.isActive && 'Aktif')) ? (
+              <span className="text-[11px] text-muted-foreground font-medium">
+                {store.operatingHours?.summary || 'Aktif'}
+              </span>
+            ) : null}
           </div>
         </div>
 
         <div className="flex items-center gap-1.5 flex-shrink-0 relative">
+          {/* §10/§12: no frontend cart badge. Tap → open chat + ask the backend
+              authoritatively ("lihat keranjang" → engine → CartAuthority). */}
           <button
             type="button"
-            onClick={() => {
-              if (cart.count === 0) {
-                showToast('Keranjang masih kosong')
-              } else {
-                showToast(`${cart.count} item · ${formatPrice(cart.total)}`)
-              }
-            }}
+            onClick={() => { setView('chat'); void onSend('lihat keranjang') }}
             className="w-9 h-9 rounded-full flex items-center justify-center text-primary hover:bg-muted transition-colors"
             aria-label="Keranjang"
           >
@@ -703,11 +673,6 @@ export default function ChatPage() {
               <circle cx="20" cy="21" r="1" />
               <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6" />
             </svg>
-            {cart.count > 0 ? (
-              <span className="absolute -top-0.5 -right-0.5 w-4 h-4 rounded-full text-white text-[9px] font-bold font-mono flex items-center justify-center" style={{ background: 'var(--clay)' }}>
-                {cart.count}
-              </span>
-            ) : null}
           </button>
 
           <button
@@ -728,38 +693,19 @@ export default function ChatPage() {
             <>
               <div className="fixed inset-0 z-40" onClick={() => setMenuOpen(false)} />
               <div className="menu-dropdown open absolute top-12 right-4 z-50 bg-white rounded-2xl shadow-xl border border-border p-1.5 w-52">
+                {/* §9: Hubungi Admin — triggers the EXISTING escalation convention (/handoff). */}
                 <div
                   className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm font-semibold text-foreground cursor-pointer hover:bg-muted transition-colors"
-                  onClick={() => { setMenuOpen(false); handleHistory() }}
-                >
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M9 14l2 2 4-4" />
-                    <rect x="3" y="4" width="18" height="17" rx="2" />
-                    <path d="M3 9h18" />
-                  </svg>
-                  Riwayat Pesanan
-                </div>
-                <div
-                  className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm font-semibold text-foreground cursor-pointer hover:bg-muted transition-colors"
-                  onClick={() => { setMenuOpen(false); handleContactAdmin() }}
+                  onClick={() => { setMenuOpen(false); void handleContactAdmin() }}
                 >
                   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                     <path d="M3 11a9 9 0 0 1 18 0v5a3 3 0 0 1-3 3h-1a3 3 0 0 1-3-3v-2a3 3 0 0 1 3-3h4M3 11v5a3 3 0 0 0 3 3h1a3 3 0 0 0 3-3v-2a3 3 0 0 0-3-3H3" />
                   </svg>
                   Hubungi Admin
                 </div>
-                <div
-                  className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm font-semibold text-foreground cursor-pointer hover:bg-muted transition-colors"
-                  onClick={() => { setMenuOpen(false); handleFaq() }}
-                >
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <circle cx="12" cy="12" r="9" />
-                    <path d="M9.5 9a2.5 2.5 0 0 1 4.7 1.2c0 1.6-2.2 1.8-2.2 3.3" />
-                    <circle cx="12" cy="17" r=".4" fill="currentColor" />
-                  </svg>
-                  Bantuan
-                </div>
                 <div className="h-px bg-border mx-1 my-1" />
+                {/* Hapus Chat — destructive; shown behind confirm modal (history kept
+                    until confirmed). Distinct from the back-button nav (§5/§6). */}
                 <div
                   className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm font-semibold cursor-pointer hover:bg-red-50 transition-colors"
                   style={{ color: 'var(--clay)' }}
@@ -790,7 +736,7 @@ export default function ChatPage() {
             </svg>
           </div>
           <div className="flex-1 min-w-0">
-            <p className="text-white text-xs font-bold leading-tight">Pasang Depot Kinasih di layar utama HP-mu</p>
+            <p className="text-white text-xs font-bold leading-tight">Pasang {store.name || 'Toko'} di layar utama HP-mu</p>
             <span className="text-white/70 text-[11px]">Buka lebih cepat, terasa seperti aplikasi asli</span>
           </div>
           <button
@@ -825,7 +771,7 @@ export default function ChatPage() {
           chat view renders the MessageList (history preserved when going back). */}
       {view === 'storefront' ? (
         <EmptyState
-          store={{ name: store.name, profilePhotoUrl: store.profilePhotoUrl }}
+          store={{ name: store.name, profilePhotoUrl: store.profilePhotoUrl, operatingHours: store.operatingHours, isActive: store.isActive }}
           products={products}
           onQuickAction={handleQuickAction}
           onProductTap={handleProductTap}
@@ -836,7 +782,7 @@ export default function ChatPage() {
           messages={messages}
           bottomRef={bottomRef}
           showEmptyState={true}
-          store={{ name: store.name, profilePhotoUrl: store.profilePhotoUrl }}
+          store={{ name: store.name, profilePhotoUrl: store.profilePhotoUrl, operatingHours: store.operatingHours, isActive: store.isActive }}
           products={products}
           onQuickAction={handleQuickAction}
           onQuickReply={handleQuickReply}
@@ -874,41 +820,8 @@ export default function ChatPage() {
         />
       )}
 
-      {/* BUG 4: modals — Riwayat Pesanan / Bantuan / Hapus Chat konfirmasi */}
-      <Modal
-        title="Riwayat Pesanan"
-        open={modal === 'history'}
-        onClose={() => setModal(null)}
-      >
-        {orders.length === 0 ? (
-          <p className="text-sm text-muted-foreground">Belum ada riwayat pesanan. Silakan lakukan pemesanan di toko.</p>
-        ) : (
-          <ul className="space-y-2">
-            {orders.map((o) => (
-              <li key={o.id} className="border border-border rounded-xl p-2">
-                <div className="font-semibold text-sm text-foreground">#{o.id.slice(0, 8)} · {formatPrice(o.totalPrice)}</div>
-                <div className="text-[11px] text-muted-foreground">{o.orderStatus} · {new Date(o.createdAt).toLocaleDateString('id-ID')}</div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </Modal>
-
-      <Modal title="Bantuan" open={modal === 'faq'} onClose={() => setModal(null)}>
-        {faqs.length === 0 ? (
-          <p className="text-sm text-muted-foreground">Belum ada FAQ untuk toko ini. Hubungi admin untuk pertanyaan lain.</p>
-        ) : (
-          <ul className="space-y-3">
-            {faqs.map((f) => (
-              <li key={f.id}>
-                <p className="text-sm font-semibold text-foreground">{f.question}</p>
-                <p className="text-sm text-foreground/80">{f.answer}</p>
-              </li>
-            ))}
-          </ul>
-        )}
-      </Modal>
-
+      {/* G2-E.3.2 §7/§8: "Riwayat Pesanan" & "Bantuan" hidden (not released —
+          no fake endpoints/data). Only the destructive Hapus Chat confirm remains. */}
       <Modal
         title="Hapus Chat?"
         open={modal === 'confirm-delete'}
