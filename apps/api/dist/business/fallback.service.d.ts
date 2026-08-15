@@ -16,9 +16,13 @@ export declare class FallbackService {
     private getStoreProfile;
     private createResult;
     /**
-     * Append item yang dibahas ke extractedEntities.discussedItems.
+     * Append item yang dibahas ke discussedItems.
      * Dipanggil setelah tryProduct mengembalikan hasil (single match atau ambiguous).
-     * Caps last 10 entries (drop oldest), gunakan upsert untuk race-safe.
+     * Caps last 10 entries (drop oldest), gunakan atomicCas untuk race-safe.
+     *
+     * G2-D.6: Canonical (workspace_v2) is PRIMARY authority. Reads existing
+     * discussedItems from canonical _compat for dedup. Writes to canonical via
+     * writeV1DiscussedItems, then mirrors to extractedEntities for backward compat.
      */
     private saveDiscussedItems;
     /**

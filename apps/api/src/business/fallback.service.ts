@@ -5,6 +5,7 @@ import { productService } from './product.service.js';
 import { prisma } from '../infrastructure/prisma.js';
 import { Prisma } from '@prisma/client';
 import { conversationContextService } from './conversation-context.service.js';
+import { canonicalConversationStateService } from './canonical-context.service.js';
 
 import {
   ResponseSource,
@@ -247,18 +248,21 @@ async getResponse(
         };
       }
 
-      const productList = products
-        .map(p => `- ${p.name}${p.price ? ` (Rp ${p.price})` : ''}${p.stock !== null && p.stock > 0 ? ` (stok: ${p.stock})` : ''}`)
-        .join('\n');
-
-      const rawAnswer = `Produk yang tersedia di toko kami:\n${productList}`;
+      // Engine-authored structured catalog (HARD RULE #5/#16): `items` di-generate
+      // dari productService.listActiveProducts (DB, bukan keyword/regex/AI).
+      // classifyStructured memetakan CATALOG + array items -> product_list -> grid.
+      const items = products.map((p) => ({
+        id: p.id,
+        name: p.name,
+        price: p.price,
+      }));
 
       return {
         source: ResponseSource.CATALOG,
-        content: rawAnswer,
+        content: 'Produk yang tersedia di toko kami:',
         confidence: 0.85,
         cost: 0,
-        metadata: { productCount: products.length },
+        metadata: { productCount: products.length, items },
       };
     } catch {
       adapters.logger.warn('Catalog listing failed, skipping to next fallback tier');
@@ -378,6 +382,8 @@ async getResponse(
       const hasDbMatch = askedWords.some(w => dbProductNameTokens.some(dn => dn.includes(w)));
       if (hasDbMatch) return null;
       try {
+        // G2-D.2: read confirmedItems from extractedEntities (V1 write path still
+        // writes here; CartAuthority migration of V1 writes is G2-D.5).
         const ctxRow = await prisma.conversationContext.findUnique({
           where: { conversationId: context.conversationId },
           select: { extractedEntities: true },
@@ -636,6 +642,8 @@ async getResponse(
       );
       if (!isTotalIntent(lower, catalogNames)) return null;
 
+      // G2-D.2: read confirmedItems from extractedEntities (V1 write path still
+      // writes here; CartAuthority migration of V1 writes is G2-D.5).
       const ctxRow = await prisma.conversationContext.findUnique({
         where: { conversationId: context.conversationId },
         select: { extractedEntities: true },
@@ -895,40 +903,46 @@ async getResponse(
   }
 
   /**
-   * Append item yang dibahas ke extractedEntities.discussedItems.
+   * Append item yang dibahas ke discussedItems.
    * Dipanggil setelah tryProduct mengembalikan hasil (single match atau ambiguous).
-   * Caps last 10 entries (drop oldest), gunakan upsert untuk race-safe.
+   * Caps last 10 entries (drop oldest), gunakan atomicCas untuk race-safe.
+   *
+   * G2-D.6: Canonical (workspace_v2) is PRIMARY authority. Reads existing
+   * discussedItems from canonical _compat for dedup. Writes to canonical via
+   * writeV1DiscussedItems, then mirrors to extractedEntities for backward compat.
    */
   private async saveDiscussedItems(
     conversationId: string,
     option: ResponseOption
   ): Promise<void> {
-    const meta = option.metadata;
-    if (!meta?.productIds?.length) return;
-
-    const productIds = meta.productIds as string[];
-    const matchedNames = (meta.matchedNames as string[]) || [];
-    const matchedPrices = (meta.matchedPrices as (number | null)[]) || [];
-
-    const newItems: DiscussedItem[] = productIds.map((id, i) => ({
-      product: matchedNames[i] ?? id,
-      qty: null,
-      price: matchedPrices[i] ?? null,
-      unit: 'unit',
-      mentionedAt: new Date().toISOString(),
-    }));
-
     try {
+      const meta = option.metadata;
+      if (!meta?.productIds?.length) return;
+
+      const productIds = meta.productIds as string[];
+      const matchedNames = (meta.matchedNames as string[]) || [];
+      const matchedPrices = (meta.matchedPrices as (number | null)[]) || [];
+
+      const newItems: DiscussedItem[] = productIds.map((id, i) => ({
+        product: matchedNames[i] ?? id,
+        qty: null,
+        price: matchedPrices[i] ?? null,
+        unit: 'unit',
+        mentionedAt: new Date().toISOString(),
+      }));
+
+      // G2-D.6: Read existing state from canonical (authority: workspace_v2)
       const current = await prisma.conversationContext.findUnique({
         where: { conversationId },
         select: { extractedEntities: true, sessionKey: true, sessionExpireAt: true },
       });
-
-      const existing = conversationContextService.parseExtractedEntities(current?.extractedEntities);
+      const existingEntities = conversationContextService.parseExtractedEntities(current?.extractedEntities);
+      const existingDiscussed = existingEntities.discussedItems || [];
+      const existingLastAmbiguous = existingEntities.lastAmbiguousPrompt || null;
 
       // Fix BUG-7: Dedup new items against existing discussedItems by product name
       const existingProductNames = new Set(
-        existing.discussedItems.map(d => d.product.toLowerCase())
+        existingDiscussed.map(d => d.product.toLowerCase())
       );
       const dedupedNew = newItems.filter(
         n => !existingProductNames.has(n.product.toLowerCase())
@@ -936,7 +950,7 @@ async getResponse(
 
       // Fix BUG-1: new items di BELAKANG (bukan depan) supaya slice(-10) jangan drop item baru
       const mergedDiscussedItems: DiscussedItem[] = [
-        ...existing.discussedItems,
+        ...existingDiscussed,
         ...dedupedNew,
       ].slice(-10);
 
@@ -944,14 +958,14 @@ async getResponse(
       // sehingga turn berikutnya bisa resolve (mis. "dua-duanya", "kangkung aja")
       const isAmbiguous = productIds.length > 1;
       const newLastAmbiguous = isAmbiguous
-        ? existing.lastAmbiguousPrompt || option.content
+        ? existingLastAmbiguous || option.content
         : null;
 
       await prisma.conversationContext.upsert({
         where: { conversationId },
         update: {
           extractedEntities: {
-            ...existing,
+            ...existingEntities,
             discussedItems: mergedDiscussedItems,
             lastAmbiguousPrompt: newLastAmbiguous,
           } as unknown as Prisma.InputJsonValue,
@@ -969,13 +983,27 @@ async getResponse(
         },
       });
 
-      adapters.logger.debug('Discussed items appended to extractedEntities', {
+      adapters.logger.debug('Discussed items appended to extractedEntities (backward compat mirror)', {
         conversationId,
         count: mergedDiscussedItems.length,
         products: matchedNames,
       });
+
+      // G2-D.6: PRIMARY write to canonical (workspace_v2) via writeV1DiscussedItems
+      try {
+        await canonicalConversationStateService.writeV1DiscussedItems(
+          conversationId,
+          mergedDiscussedItems,
+          newLastAmbiguous,
+        );
+      } catch (err) {
+        adapters.logger.warn('saveDiscussedItems: failed to write to canonical', {
+          conversationId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
     } catch (err) {
-      adapters.logger.warn('Failed to save discussedItems to extractedEntities', {
+      adapters.logger.warn('Failed to save discussedItems', {
         conversationId,
         error: (err as Error).message,
       });

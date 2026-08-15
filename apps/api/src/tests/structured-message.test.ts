@@ -24,6 +24,7 @@ import assert from 'node:assert/strict';
 import { prisma } from '../infrastructure/prisma.js';
 import { conversationService } from '../business/conversation.service.js';
 import { conversationContextService } from '../business/conversation-context.service.js';
+import { canonicalConversationStateService } from '../business/canonical-context.service.js';
 import { orderService } from '../business/order.service.js';
 import { productService } from '../business/product.service.js';
 import {
@@ -51,14 +52,15 @@ let unsubMessageCreated: (() => void) | null = null;
 
 // Authoritative clarification options (stubbed context) untuk T2-int/T7/T9/T10.
 const TEST_OPTIONS = [{ id: 'opt-1', label: 'Sosis', cartOps: [], action: 'add' }];
+const testPendingClarification: any = {
+  question: 'Mau sosis atau ayam?',
+  options: TEST_OPTIONS,
+  expected_type: 'choice',
+  retry_count: 0,
+};
 const contextWithOptions: any = {
   extractedEntities: {
-    pendingClarification: {
-      question: 'Mau sosis atau ayam?',
-      options: TEST_OPTIONS,
-      expected_type: 'choice',
-      retry_count: 0,
-    },
+    pendingClarification: testPendingClarification,
   },
 };
 
@@ -263,22 +265,18 @@ test('FASE 2 structured-message', async (t) => {
         { id: 'opt-sosis', label: 'Sosis', cartOps: [{ productId: 'p1', quantity: 1, action: 'add' }], action: 'add' },
         { id: 'opt-ayam', label: 'Ayam', action: 'add' },
       ];
-      const ctxStub = {
-        extractedEntities: {
-          pendingClarification: {
-            question: 'Mau sosis atau ayam?',
-            options,
-            expected_type: 'choice',
-            retry_count: 0,
-          },
-        },
+      const pendingStub: any = {
+        question: 'Mau sosis atau ayam?',
+        options,
+        expected_type: 'choice',
+        retry_count: 0,
       };
       const r = makeResult({ id: 'm-t2i', reason: 'clarification_asked', content: 'Mau sosis atau ayam?', source: ResponseSource.SOP });
       await seedRow(r);
       stubEngine(r);
       capturedRef.env = null;
       try {
-        await withStub(conversationContextService, 'getContext', (async () => ctxStub) as any, async () => {
+        await withStub(canonicalConversationStateService, 'getV1PendingClarification', (async () => pendingStub) as any, async () => {
           const res = await conversationDeliveryService.processWebRequest({
             storeId: STORE_ID, customerId: CUST_ID, conversationId: CONV_ID, message: 'msg',
           });
@@ -306,8 +304,8 @@ test('FASE 2 structured-message', async (t) => {
       stubEngine(r);
       capturedRef.env = null;
       try {
-        // Stub: tidak ada pending clarification di context (options undefined / kosong)
-        await withStub(conversationContextService, 'getContext', (async () => null) as any, async () => {
+        // Stub: tidak ada pending clarification (G2-D.2: canonical read returns null)
+        await withStub(canonicalConversationStateService, 'getV1PendingClarification', (async () => null) as any, async () => {
           const res = await conversationDeliveryService.processWebRequest({
             storeId: STORE_ID, customerId: CUST_ID, conversationId: CONV_ID, message: 'msg',
           });
@@ -316,7 +314,7 @@ test('FASE 2 structured-message', async (t) => {
           assert.equal((res as Extract<DeliveryResult, { kind: 'ok' }>).payload, null);
         });
         // also explicit: pendingClarification ada tapi options kosong
-        await withStub(conversationContextService, 'getContext', (async () => ({ extractedEntities: { pendingClarification: { question: 'q', options: [], expected_type: 'choice', retry_count: 0 } } }) as any) as any, async () => {
+        await withStub(canonicalConversationStateService, 'getV1PendingClarification', (async () => ({ question: 'q', options: [], expected_type: 'choice', retry_count: 0 } as any)) as any, async () => {
           const res = await conversationDeliveryService.processWebRequest({
             storeId: STORE_ID, customerId: CUST_ID, conversationId: CONV_ID, message: 'msg',
           });
@@ -444,7 +442,7 @@ test('FASE 2 structured-message', async (t) => {
       capturedRef.env = null;
       stubEngine(r);
       try {
-        await withStub(conversationContextService, 'getContext', (async () => contextWithOptions) as any, async () => {
+        await withStub(canonicalConversationStateService, 'getV1PendingClarification', (async () => testPendingClarification) as any, async () => {
           const res = await conversationDeliveryService.processWebRequest({
             storeId: STORE_ID, customerId: CUST_ID, conversationId: CONV_ID, message: 'customer msg',
           });
@@ -490,7 +488,7 @@ test('FASE 2 structured-message', async (t) => {
       capturedRef.env = null;
       stubEngine(r);
       try {
-        await withStub(conversationContextService, 'getContext', (async () => contextWithOptions) as any, async () => {
+        await withStub(canonicalConversationStateService, 'getV1PendingClarification', (async () => testPendingClarification) as any, async () => {
           const res = await conversationDeliveryService.processWebRequest({
             storeId: STORE_ID, customerId: CUST_ID, conversationId: CONV_ID, message: 'msg',
           });
@@ -513,7 +511,7 @@ test('FASE 2 structured-message', async (t) => {
       capturedRef.env = null;
       stubEngine(r);
       try {
-        await withStub(conversationContextService, 'getContext', (async () => contextWithOptions) as any, async () => {
+        await withStub(canonicalConversationStateService, 'getV1PendingClarification', (async () => testPendingClarification) as any, async () => {
           const res = await conversationDeliveryService.processWebRequest({
             storeId: STORE_ID, customerId: CUST_ID, conversationId: CONV_ID, message: 'msg',
           });

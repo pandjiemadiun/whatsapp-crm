@@ -93,7 +93,7 @@ export default function NotificationPrompt({
       type="button"
       onClick={enable}
       disabled={loading}
-      className="ml-2 text-xs px-2 py-1 rounded border border-blue-600 text-blue-700 hover:bg-blue-50 disabled:opacity-50"
+           className="ml-2 text-xs px-2 py-1 rounded border border-primary text-primary hover:bg-primary/5 disabled:opacity-50"
       aria-label="Aktifkan notifikasi push"
       title="Dapatkan notifikasi saat belum online"
     >

@@ -3,6 +3,7 @@ import { prisma } from '../infrastructure/prisma.js';
 import { adapters } from '../adapters/container.js';
 import { ApiError } from '../errors/ApiError.js';
 import { ErrorCodes } from '../constants/errorCodes.js';
+import { canonicalConversationStateService } from './canonical-context.service.js';
 /** Jumlah maksimal pesan yang disimpan di lastMessages */
 const MAX_CONTEXT_MESSAGES = 10;
 /** Durasi sesi default (menit) */
@@ -108,26 +109,16 @@ export class ConversationContextService {
         if (persisted) {
             adapters.logger.debug('Extracted entities updated', { conversationId, tracked: persisted.trackedEntities?.length ?? 0 });
         }
-    }
-    /**
-     * Persist WorkspaceV2 (v3.2) ke kolom terpisah `workspace_v2` (JSON nullable).
-     * T1 fix (P3.1): workspace v2 tidak pernah tersimpan sebelumnya — semua "persist"
-     * lewat updateExtractedEntities yang NO-OP karena type mismatch (WorkspaceV2
-     * object tidak punya .length, sehingga guard `if (!entities.length) return`
-     * langsung return). Kolom baru memutuskan v2 dari legacy extractedEntities.
-     *
-     * T4 fix (P3.4): write lewat atomicCas (optimistic lock @updatedAt) sehingga
-     * dua turn v2 yang hampir bersamaan tidak saling menimpa diam-diam.
-     */
-    async updateWorkspaceV2(conversationId, workspace) {
-        await this.atomicCas(conversationId, 'updateWorkspaceV2', async (row) => {
-            const result = await prisma.conversationContext.updateMany({
-                where: { conversationId, updatedAt: row.updatedAt },
-                data: { workspace_v2: workspace },
+        // G2-D.4: mirror trackedEntities ke canonical _compat (authority: canonical state)
+        try {
+            await canonicalConversationStateService.writeV1TrackedEntities(conversationId, persisted?.trackedEntities ?? entities);
+        }
+        catch (err) {
+            adapters.logger.warn('updateExtractedEntities: failed to mirror to canonical', {
+                conversationId,
+                error: err instanceof Error ? err.message : String(err),
             });
-            return { count: result.count, value: null };
-        });
-        adapters.logger.debug('Workspace v2 persisted', { conversationId });
+        }
     }
     /**
      * Set intent pengguna pada context.
@@ -187,6 +178,9 @@ export class ConversationContextService {
      * Update info pengiriman (nama penerima & alamat) di extractedEntities.
      * Via atomicCas (T4 fix) — tidak menimpa field lain (confirmedItems/
      * pendingClarification/trackedEntities).
+     *
+     * G2-D.4: ALSO writes to canonical resolved_facts via writeV1ShippingInfo.
+     * Canonical is the authority; extractedEntities is compatibility mirror.
      */
     async updateShippingInfo(conversationId, recipientName, shippingAddress) {
         const updated = await this.atomicCas(conversationId, 'updateShippingInfo', async (row) => {
@@ -201,6 +195,16 @@ export class ConversationContextService {
             });
             return { count: result.count, value: result.count > 0 };
         });
+        // G2-D.4: mirror to canonical resolved_facts
+        try {
+            await canonicalConversationStateService.writeV1ShippingInfo(conversationId, recipientName ?? null, shippingAddress ?? null);
+        }
+        catch (err) {
+            adapters.logger.warn('updateShippingInfo: failed to mirror to canonical', {
+                conversationId,
+                error: err instanceof Error ? err.message : String(err),
+            });
+        }
         if (updated) {
             adapters.logger.debug('Shipping info updated in context', { conversationId, recipientName, shippingAddress });
         }
@@ -211,10 +215,34 @@ export class ConversationContextService {
      * default kosong (array tidak lagi ditulis — P3.3 kanonik OBJECT).
      * Membawa `trackedEntities` + `previousMutation` agar penulis object lain
      * (modifyCart/setPendingClarification/fallback) tidak menimppadnya.
+     *
+     * G2-D-L-018 fix: Preserve dynamic/unknown fields (customerCity, customerName,
+     * customerPhone, dll) yang tidak ada di typed ExtractedEntities interface.
+     * Tanpa preservation ini, write-back via atomicCas akan menghilangkan field
+     * dinamis yang ditulis oleh V1 path lain (seperti customerCity dari
+     * fallback.service.ts:717). Dynamic fields disimpan di `_unknown` — penulis
+     * yang sudah dimigrasi ke canonical (G2-D.4) tidak lagi butuh ini, tapi
+     * penulis yang belum dimigrasi (modifyCart, restoreCart — G2-D.5) tetap aman.
      */
     parseExtractedEntities(raw) {
         if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
             const parsed = raw;
+            const knownKeys = {
+                discussedItems: true,
+                confirmedItems: true,
+                lastAmbiguousPrompt: true,
+                recipientName: true,
+                shippingAddress: true,
+                pendingClarification: true,
+                previousMutation: true,
+                trackedEntities: true,
+            };
+            const _unknown = {};
+            for (const key of Object.keys(parsed)) {
+                if (!knownKeys[key]) {
+                    _unknown[key] = parsed[key];
+                }
+            }
             return {
                 discussedItems: Array.isArray(parsed.discussedItems) ? parsed.discussedItems : [],
                 confirmedItems: Array.isArray(parsed.confirmedItems) ? parsed.confirmedItems : [],
@@ -224,6 +252,7 @@ export class ConversationContextService {
                 pendingClarification: parsed.pendingClarification || null,
                 previousMutation: parsed.previousMutation ?? null,
                 trackedEntities: Array.isArray(parsed.trackedEntities) ? parsed.trackedEntities : [],
+                ...(Object.keys(_unknown).length > 0 ? { _unknown } : {}),
             };
         }
         return {
@@ -334,6 +363,22 @@ export class ConversationContextService {
             adapters.logger.info('Pending clarification set', { conversationId, question: clarification.question });
             return { count: res.count, value: null };
         });
+        // G2-D.4: canonical mirror (authority: workspace_v2)
+        try {
+            await canonicalConversationStateService.writeV1PendingClarification(conversationId, {
+                question: clarification.question,
+                options: clarification.options,
+                expected_type: clarification.expected_type,
+                asked_at: new Date().toISOString(),
+                retry_count: 0,
+            });
+        }
+        catch (err) {
+            adapters.logger.warn('setPendingClarification: failed to mirror to canonical', {
+                conversationId,
+                error: err instanceof Error ? err.message : String(err),
+            });
+        }
     }
     /** BAGIAN 2.2 — Get pending clarification (if any) */
     getPendingClarification(entities) {
@@ -351,6 +396,16 @@ export class ConversationContextService {
             adapters.logger.info('Pending clarification cleared', { conversationId });
             return { count: res.count, value: null };
         });
+        // G2-D.4: canonical mirror (authority: workspace_v2)
+        try {
+            await canonicalConversationStateService.clearV1PendingClarification(conversationId);
+        }
+        catch (err) {
+            adapters.logger.warn('clearPendingClarification: failed to mirror to canonical', {
+                conversationId,
+                error: err instanceof Error ? err.message : String(err),
+            });
+        }
     }
     /** BAGIAN 2.4 — Increment retry_count; return true if exceeded (>1) */
     async incrementClarificationRetry(conversationId) {
@@ -368,6 +423,18 @@ export class ConversationContextService {
             });
             return { count: res.count, value: pc.retry_count > 1 };
         });
+        // G2-D.4: canonical mirror (authority: workspace_v2)
+        if (exceeded !== null) {
+            try {
+                await canonicalConversationStateService.incrementV1PendingRetry(conversationId);
+            }
+            catch (err) {
+                adapters.logger.warn('incrementClarificationRetry: failed to mirror to canonical', {
+                    conversationId,
+                    error: err instanceof Error ? err.message : String(err),
+                });
+            }
+        }
         return exceeded ?? false;
     }
     /** BAGIAN 1.4 — Rollback: restore cart to a previous snapshot */
@@ -409,6 +476,15 @@ export class ConversationContextService {
      * / error DB → log & kembalikan `null` (tidak throw — sama seperti method
      * sejenis yang ada).
      */
+    /**
+     * Atomic read-modify-write for extractedEntities (backward-compat legacy column).
+     * G2-D.6: Exposed as public so callers in conversation.service.ts can do atomic
+     * legacy mirror writes (storePreviousMutation, clearPreviousMutation) instead
+     * of non-atomic findUnique+update that risks lost updates.
+     */
+    async atomicCasExtractedEntities(conversationId, operation, writer) {
+        return this.atomicCas(conversationId, operation, writer);
+    }
     async atomicCas(conversationId, operation, writer) {
         for (let attempt = 0; attempt <= ATOMIC_MAX_ATTEMPTS; attempt++) {
             let row;

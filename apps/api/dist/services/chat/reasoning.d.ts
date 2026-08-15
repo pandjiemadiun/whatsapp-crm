@@ -59,7 +59,8 @@ export declare function convertPositionalSupersedes(result: InterpreterResultV2)
  *      - ok=false, retryable → attempt 2 (with validator feedback)
  *        - ok → return reasoned (llmCalls=2)
  *        - ok=false → fallback (llmCalls=2)
- *      - ok=false, terminal (I-V2-4/I-V2-6) → fallback (llmCalls=1, JANGAN retry)
+ *      - ok=false, terminal I-V2-4 (retry exceeded) → fallback (llmCalls=1, JANGAN retry)
+ *      - ok=false, terminal I-V2-6 (low selection confidence) → clarification_trigger → 'reasoned' w/ plannedActs=[] (llmCalls=1, JANGAN retry)
  *      - transport error → retry sekali, fallback jika gagal (llmCalls=1|2)
  *
  * I8: maksimal 1 LLM call per attempt; fast path = 0 LLM.

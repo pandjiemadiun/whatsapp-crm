@@ -4,6 +4,12 @@ import { conversationLimiter } from '../middleware/rate-limiters.js';
 import { adapters } from '../adapters/container.js';
 import { conversationDeliveryService } from '../services/conversation-delivery.service.js';
 import { eventBus } from '../services/event-bus.service.js';
+import { productService } from '../business/product.service.js';
+import { ApiError } from '../errors/ApiError.js';
+import { ErrorCodes } from '../constants/errorCodes.js';
+import { ResponseSource } from '../domain/types.js';
+import { faqService } from '../business/faq.service.js';
+import { composeEscalateReply } from '../services/chat/composer-v2.js';
 
 const router = Router();
 
@@ -150,6 +156,97 @@ router.get('/:storeSlug/history', async (req: Request, res: Response) => {
   } catch (err) {
     adapters.logger.error('PWA history error', err as Error);
     res.status(500).json({ error: 'Failed to fetch history' });
+  }
+});
+
+// GET /api/pwa/:storeSlug/products — public product catalog for PWA first-open discovery.
+// Reuses productService.getProductsByStore (same authority, same isActive filter).
+// Maps to ChatProduct shape (id, name, description, price, stock, primaryImageUrl).
+router.get('/:storeSlug/products', async (req: Request, res: Response) => {
+  try {
+    const { storeSlug } = req.params;
+
+    const store = await prisma.store.findUnique({
+      where: { slug: storeSlug, deletedAt: null },
+      select: { id: true },
+    });
+    if (!store) {
+      return res.status(404).json({ error: 'Store not found' });
+    }
+
+    const limit = Math.min(Math.max(1, Number(req.query.limit) || 20), 60);
+    const offset = Math.max(0, Number(req.query.offset) || 0);
+
+    const { products, total } = await productService.getProductsByStore(store.id, {
+      limit,
+      offset,
+      sortBy: 'name',
+      order: 'asc',
+    });
+
+    const mappedProducts = products.map((p: any) => ({
+      id: p.id,
+      name: p.name,
+      description: p.description ?? null,
+      price: p.price,
+      stock: p.stock,
+      primaryImageUrl: p.primaryImageUrl ?? null,
+    }));
+
+    res.json({
+      success: true,
+      data: {
+        products: mappedProducts,
+        pagination: {
+          limit,
+          offset,
+          total,
+          hasMore: offset + mappedProducts.length < total,
+        },
+      },
+    });
+  } catch (err) {
+    adapters.logger.error('PWA products error', err as Error);
+    res.status(500).json({ error: 'Failed to fetch products' });
+  }
+});
+
+// GET /api/pwa/:storeSlug/products/:productId — public product detail for PWA product card tap.
+// Reuses productService.getProductById (authoritative). Returns public fields only.
+router.get('/:storeSlug/products/:productId', async (req: Request, res: Response) => {
+  try {
+    const { storeSlug, productId } = req.params;
+
+    const store = await prisma.store.findUnique({
+      where: { slug: storeSlug, deletedAt: null },
+      select: { id: true },
+    });
+    if (!store) {
+      return res.status(404).json({ error: 'Store not found' });
+    }
+
+    const product = await productService.getProductById(productId);
+    if (!product || product.storeId !== store.id) {
+      return res.status(404).json({ error: 'Product not found' });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        id: product.id,
+        name: product.name,
+        description: product.description ?? null,
+        price: product.price,
+        stock: product.stock,
+        primaryImageUrl: product.primaryImageUrl ?? null,
+      },
+    });
+  } catch (err: any) {
+    if (err instanceof ApiError && err.code === ErrorCodes.ERR_NOT_FOUND) {
+      return res.status(404).json({ error: err.message });
+    }
+    adapters.logger.error('PWA product detail error', err as Error);
+    res.status(500).json({ error: 'Failed to fetch product detail' });
   }
 });
 
@@ -505,6 +602,249 @@ router.post('/:storeSlug/unsubscribe', async (req: Request, res: Response) => {
   } catch (err) {
     adapters.logger.error('PWA unsubscribe error', err as Error);
     res.status(500).json({ error: 'Failed to clear subscription' });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Shared Web session resolver (P-PWA.5): store + customer(by webUid) + web conversation.
+// Dipakai endpoint-endpoint publik berikutnya agar resolve logic tidak tersebar.
+interface WebSession {
+  storeId: string;
+  customerId: string;
+  conversationId: string;
+}
+
+async function resolveWebSession(
+  storeSlug: string,
+  uid: string | undefined,
+  convId?: string,
+): Promise<WebSession | null> {
+  const store = await prisma.store.findUnique({
+    where: { slug: storeSlug, deletedAt: null },
+    select: { id: true },
+  });
+  if (!store) return null;
+  if (!uid) return null;
+  const customer = await prisma.customer.findFirst({
+    where: { webUid: uid, storeId: store.id, deletedAt: null },
+    select: { id: true },
+  });
+  if (!customer) return null;
+  const where: {
+    id?: string;
+    storeId: string;
+    customerId: string;
+    channel: string;
+    deletedAt: null;
+  } = { storeId: store.id, customerId: customer.id, channel: 'web', deletedAt: null };
+  if (convId) where.id = convId;
+  const conversation = await prisma.conversation.findFirst({ where, select: { id: true } });
+  if (!conversation) return null;
+  return { storeId: store.id, customerId: customer.id, conversationId: conversation.id };
+}
+
+/** Resolve-or-create Web session (mirror /message). Dipakai /handoff supaya
+ *  "Hubungi Admin" bisa dipanggil meski customer/conversation belum ada. */
+async function getOrCreateWebSession(
+  storeId: string,
+  uid: string,
+  convId?: string,
+): Promise<WebSession> {
+  let customer = await prisma.customer.findFirst({
+    where: { webUid: uid, storeId, deletedAt: null },
+    select: { id: true },
+  });
+  if (!customer) {
+    try {
+      customer = await prisma.customer.create({ data: { storeId, webUid: uid, phone: null } });
+    } catch (e: any) {
+      if (e?.code === 'P2002') {
+        customer = await prisma.customer.findFirst({ where: { webUid: uid, storeId }, select: { id: true } });
+        if (!customer) throw e;
+      } else {
+        throw e;
+      }
+    }
+  }
+
+  const where: { id?: string; storeId: string; customerId: string; channel: string; deletedAt: null } =
+    { storeId, customerId: customer.id, channel: 'web', deletedAt: null };
+  if (convId) where.id = convId;
+  let conversation = await prisma.conversation.findFirst({ where, select: { id: true } });
+  if (!conversation) {
+    conversation = await prisma.conversation.create({
+      data: { storeId, customerId: customer.id, channel: 'web', customerPhone: null, status: 'open' },
+    });
+  }
+  return { storeId, customerId: customer.id, conversationId: conversation.id };
+}
+
+// GET /api/pwa/:storeSlug/orders?uid=<webUid> — riwayat pesanan customer (publik, webUid).
+router.get('/:storeSlug/orders', async (req: Request, res: Response) => {
+  try {
+    const { storeSlug } = req.params;
+    const uid = Array.isArray(req.query.uid) ? req.query.uid[0] : req.query.uid;
+    const session = await resolveWebSession(storeSlug, typeof uid === 'string' ? uid : undefined);
+    if (!session) {
+      const store = await prisma.store.findUnique({ where: { slug: storeSlug, deletedAt: null }, select: { id: true } });
+      if (!store) return res.status(404).json({ error: 'Store not found' });
+      return res.status(401).json({ error: 'Unauthorized customer' });
+    }
+
+    const orders = await prisma.order.findMany({
+      where: { storeId: session.storeId, customerId: session.customerId, deletedAt: null },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        totalPrice: true,
+        currency: true,
+        orderStatus: true,
+        items: true,
+        createdAt: true,
+        confirmedAt: true,
+      },
+    });
+    res.json({ success: true, data: { orders } });
+  } catch (err) {
+    adapters.logger.error('PWA orders error', err as Error);
+    res.status(500).json({ error: 'Failed to fetch orders' });
+  }
+});
+
+// GET /api/pwa/:storeSlug/faq — FAQ publik toko (untuk view Bantuan).
+router.get('/:storeSlug/faq', async (req: Request, res: Response) => {
+  try {
+    const { storeSlug } = req.params;
+    const store = await prisma.store.findUnique({
+      where: { slug: storeSlug, deletedAt: null },
+      select: { id: true },
+    });
+    if (!store) return res.status(404).json({ error: 'Store not found' });
+
+    const faqs = await faqService.findAll(store.id);
+    const mapped = (faqs ?? []).map((f: { id: string; question: string; answer: string; category?: string | null }) => ({
+      id: f.id,
+      question: f.question,
+      answer: f.answer,
+      category: f.category ?? null,
+    }));
+    res.json({ success: true, data: { faqs: mapped } });
+  } catch (err) {
+    adapters.logger.error('PWA faq error', err as Error);
+    res.status(500).json({ error: 'Failed to fetch faq' });
+  }
+});
+
+// POST /api/pwa/:storeSlug/handoff — human takeover (Hubungi Admin).
+// Reuse existing eskalasi convention (escalateStatusUpdate / composeEscalateReply)
+// + eventBus publish (message.created + conversation.handoff + conversation.updated).
+// Realtime service memforward ke room customer (store:{storeId}:conv:{conversationId})
+// sehingga PWA listener `conversation.handoff` berputasi — dan response juga
+// konsisten secara optimis (state updated di sisi server).
+router.post('/:storeSlug/handoff', async (req: Request, res: Response) => {
+  try {
+    const { storeSlug } = req.params;
+    const { uid, conversationId: convId } = req.body as { uid?: string; conversationId?: string };
+    const store = await prisma.store.findUnique({ where: { slug: storeSlug, deletedAt: null }, select: { id: true } });
+    if (!store) return res.status(404).json({ error: 'Store not found' });
+    if (!uid) return res.status(400).json({ error: 'uid is required' });
+
+    // Resolve-or-create agar "Hubungi Admin" jalan meski belum pernah chat.
+    const session = await getOrCreateWebSession(store.id, uid, convId);
+
+    const escalateReply = composeEscalateReply();
+    const now = new Date();
+    const messageRow = await prisma.$transaction(async (tx) => {
+      await tx.conversation.update({
+        where: { id: session.conversationId },
+        data: { status: 'human_takeover', humanTakeoverAt: now },
+      });
+      return tx.conversationHistory.create({
+        data: {
+          conversationId: session.conversationId,
+          role: 'assistant',
+          content: escalateReply,
+          source: ResponseSource.HUMAN,
+          messageType: 'handoff',
+          metadata: { messagePayload: { reason: 'escalation_clarification_retry_exceeded', content: escalateReply } },
+          createdAt: now,
+        },
+      });
+    });
+
+    eventBus.publish({
+      event: 'message.created',
+      storeId: session.storeId,
+      data: {
+        id: messageRow.id,
+        conversationId: session.conversationId,
+        sender: 'assistant',
+        type: 'handoff',
+        payload: { reason: 'escalation_clarification_retry_exceeded', content: escalateReply },
+        content: escalateReply,
+        source: ResponseSource.HUMAN,
+        confidence: 0.9,
+        createdAt: now,
+      },
+      ts: Date.now(),
+    });
+    eventBus.publish({
+      event: 'conversation.handoff',
+      storeId: session.storeId,
+      data: { conversationId: session.conversationId, status: 'human_takeover' },
+      ts: Date.now(),
+    });
+    eventBus.publish({
+      event: 'conversation.updated',
+      storeId: session.storeId,
+      data: { conversationId: session.conversationId, status: 'human_takeover', lastMessageAt: now },
+      ts: Date.now(),
+    });
+
+    res.json({
+      success: true,
+      conversationId: session.conversationId,
+      status: 'human_takeover',
+      message: {
+        id: messageRow.id,
+        type: 'handoff',
+        content: escalateReply,
+        source: ResponseSource.HUMAN,
+        payload: { reason: 'escalation_clarification_retry_exceeded', content: escalateReply },
+      },
+    });
+  } catch (err) {
+    adapters.logger.error('PWA handoff error', err as Error);
+    res.status(500).json({ error: 'Failed to handoff' });
+  }
+});
+
+// POST /api/pwa/:storeSlug/clear — hapus riwayat chat web conversation.
+// Hard-delete conversation_history rows (schema tidak ada deletedAt pada history)
+// + reset status conversation ke 'open'. Dipanggil setelah konfirmasi modal.
+router.post('/:storeSlug/clear', async (req: Request, res: Response) => {
+  try {
+    const { storeSlug } = req.params;
+    const { uid, conversationId: convId } = req.body as { uid?: string; conversationId?: string };
+    const session = await resolveWebSession(storeSlug, uid, convId);
+    if (!session) {
+      const store = await prisma.store.findUnique({ where: { slug: storeSlug, deletedAt: null }, select: { id: true } });
+      if (!store) return res.status(404).json({ error: 'Store not found' });
+      if (!uid) return res.status(400).json({ error: 'uid is required' });
+      return res.status(401).json({ error: 'Unauthorized customer' });
+    }
+
+    await prisma.$transaction([
+      prisma.conversationHistory.deleteMany({ where: { conversationId: session.conversationId } }),
+      prisma.conversation.update({
+        where: { id: session.conversationId },
+        data: { status: 'open', humanTakeoverAt: null, resolvedAt: null },
+      }),
+    ]);
+    res.json({ success: true, conversationId: session.conversationId });
+  } catch (err) {
+    adapters.logger.error('PWA clear error', err as Error);
+    res.status(500).json({ error: 'Failed to clear chat' });
   }
 });
 

@@ -1,0 +1,1 @@
+{"version":3,"file":"vapid.config.d.ts","sourceRoot":"","sources":["../../src/config/vapid.config.ts"],"names":[],"mappings":"AAAA;;;;;;;;GAQG;AAEH,MAAM,WAAW,WAAW;IAC1B,SAAS,EAAE,MAAM,CAAC;IAClB,UAAU,EAAE,MAAM,CAAC;IACnB,OAAO,EAAE,MAAM,CAAC;CACjB;AAED,wBAAgB,cAAc,IAAI,WAAW,GAAG,IAAI,CASnD"}

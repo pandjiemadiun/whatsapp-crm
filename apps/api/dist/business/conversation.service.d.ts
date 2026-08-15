@@ -3,7 +3,7 @@ interface ConversationListItem {
     id: string;
     customerId: string;
     customerName: string | null;
-    customerPhone: string;
+    customerPhone: string | null;
     status: string;
     lastMessageAt: Date | null;
     aiResponseCount: number;
@@ -19,7 +19,7 @@ interface ConversationDetail extends ConversationListItem {
     }>;
 }
 export declare class ConversationService {
-    processCustomerMessage(storeId: string, customerId: string, conversationId: string, customerMessage: string): Promise<ResponseResult | null>;
+    processCustomerMessage(storeId: string, customerId: string, conversationId: string, customerMessage: string, channel?: 'whatsapp' | 'web'): Promise<ResponseResult | null>;
     /**
      * Bungkus teks balasan MODIFY_CART menjadi ResponseResult standar.
      */
@@ -35,15 +35,28 @@ export declare class ConversationService {
     private buildPipelineContext;
     /**
      * Execute (add / remove) validated cart_ops ke DB, lalu sync ke draft order.
-     * Untuk remove, snapshot cart sebelum mutasi agar negasi -> rollback masih
-     * memungkinkan. I15: hanya dipanggil setelah validateCartOps mengembalikan valid.
+     * Menggunakan CartAuthority.executeOps sebagai single authoritative path
+     * yang menulis OrderItem rows, Order.items JSON, dan confirmedItems JSON
+     * atomically dalam satu $transaction.
+     * I15: hanya dipanggil setelah validateCartOps mengembalikan valid.
      */
     private executeCartOps;
     /**
-     * Baca snapshot keranjang terkonfirmasi dari DB (extractedEntities).
+     * Baca snapshot keranjang terkonfirmasi.
+     * G2-D.2 Part C: V1 cart read. V1 writes still go to extractedEntities.confirmedItems
+     * (write migration is G2-D.5). getCartAsConfirmedItems would miss V1 writes that
+     * haven't created draft Orders yet. Until writes migrate, read from extractedEntities
+     * to stay consistent with V1 modifyCart writes.
+     * TODO (G2-D.5): After V1 modifyCart → CartAuthority, switch to getCartAsConfirmedItems.
      */
     private getCartFromDb;
-    /** BAGIAN 2.4 — Store previousCart snapshot untuk rollback */
+    /**
+     * BAGIAN 2.4 — Store previousCart snapshot untuk rollback.
+     *
+     * G2-D.6: Canonical (workspace_v2) is PRIMARY authority via
+     * writeV1PreviousMutation. The extractedEntities write is backward-compat
+     * mirror (kept for legacy readers/tests, atomic via atomicCas).
+     */
     private storePreviousMutation;
     /** BAGIAN 2.5 — Render cart state dari DB (bukan dari memory) */
     private renderCartSummary;
@@ -73,7 +86,7 @@ export declare class ConversationService {
     /**
      * Buat percakapan baru + inisialisasi context-nya sekaligus.
      */
-    createConversation(storeId: string, customerId: string, customerPhone: string, customerName?: string): Promise<ConversationWithContext>;
+    createConversation(storeId: string, customerId: string, customerPhone: string, customerName?: string, channel?: 'whatsapp' | 'web'): Promise<ConversationWithContext>;
     /**
      * Simpan pesan ke conversation_history DAN sinkronkan ke context
      * (appendMessage + refreshSession).
@@ -94,6 +107,12 @@ export declare class ConversationService {
     private logPipelineAudit;
     private flattenPendingOps;
     private deriveResolvedCartOps;
+    /**
+     * Clear previousMutation snapshot.
+     *
+     * G2-D.6: Canonical (workspace_v2) is PRIMARY via clearV1PreviousMutation.
+     * The extractedEntities write is backward-compat mirror (atomic CAS).
+     */
     private clearPreviousMutation;
 }
 export declare const conversationService: ConversationService;

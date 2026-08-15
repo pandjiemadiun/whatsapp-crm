@@ -1,16 +1,19 @@
+import { Prisma } from '@prisma/client';
 import { adapters } from '../adapters/container.js';
 import { fallbackService } from './fallback.service.js';
 import { orderService } from './order.service.js';
+import { cartAuthority } from './cart-authority.js';
 import { conversationContextService } from './conversation-context.service.js';
 import { prisma } from '../infrastructure/prisma.js';
 import { productService } from './product.service.js';
+import { canonicalConversationStateService } from './canonical-context.service.js';
 import { normalize } from '../services/chat/normalizer.js';
 import { runOneCall, validateCartOpsAgainstDb, truncateTo2Sentences } from '../services/chat/interpreter.js';
 import { getStoreEngine } from '../services/chat/engine-config.js';
 import { understand } from '../services/chat/reasoning.js';
 import { planActs } from '../services/chat/planner.js';
 import { validate } from '../services/chat/validator-v2.js';
-import { loadWorkspace, saveWorkspace, incrementDeferredTurns, shouldAutoDrop, dropPending, mapLegacyEntitiesToWorkspace, hasLegacyState } from '../services/chat/workspace.js';
+import { loadWorkspace, saveWorkspace, incrementDeferredTurns, shouldAutoDrop, dropPending } from '../services/chat/workspace.js';
 import { composeReply, composeEscalateReply, escalateStatusUpdate } from '../services/chat/composer-v2.js';
 import { resolvePending } from '../services/chat/pendingClarification.js';
 import { shouldRunShadow } from '../services/chat/shadow-config.js';
@@ -130,31 +133,24 @@ export class ConversationService {
       };
 
       try {
-        // 1. Load workspace — sumber kebenaran: kolom `workspace_v2` (P3.1).
-        //    T3 fix (P3.2): bila conversation baru saja switch v1->v2 dan
-        //    workspace_v2 masih kosong, migrasi SEKALI dari legacy
-        //    `extractedEntities` lalu persist ke workspace_v2 agar turn
-        //    berikutnya pakai workspace_v2 (tidak re-map legacy lagi).
-        const ctxRow = await prisma.conversationContext.findUnique({
-            where: { conversationId },
-            select: { workspace_v2: true, extractedEntities: true }
-        });
-
+        // 1. Load workspace — sumber kebenaran: canonical boundary (G2-D.3).
+        //    V2 engine tidak baca workspace_v2 secara langsung.
+        //    CanonicalConversationStateService.getV2Workspace() membaca melalui
+        //    canonical boundary, dengan legacy fallback ke extractedEntities bila
+        //    workspace_v2 kosong (V1→V2 transition), kemudian konversi ke
+        //    WorkspaceV2 untuk V2 engine. V2 writers tidak berubah hanya
+        //    pada G2-D.5 (saveWorkspaceV2 → canonical boundary). READ path
+        //    sudah dimigrasi ke canonical boundary.
         let workspace: WorkspaceV2;
-        if (ctxRow?.workspace_v2) {
-            // Source of truth terisi (setelah P3.1) -> pakai langsung.
-            workspace = loadWorkspace(JSON.stringify(ctxRow.workspace_v2));
+        const loaded = await canonicalConversationStateService.getV2Workspace(conversationId);
+        if (loaded) {
+            // Canonical boundary mengembalikan WorkspaceV2 yang sudah merge
+            // canonical state (pendings, resolved_facts, options_presented,
+            // conversation_summary) + V2-specific draft_cart dari workspace_v2.
+            workspace = loaded;
         } else {
-            // workspace_v2 kosong: cek legacy extractedEntities (v1 state).
-            const legacy = conversationContextService.parseExtractedEntities(ctxRow?.extractedEntities);
-            if (hasLegacyState(legacy)) {
-                workspace = mapLegacyEntitiesToWorkspace(legacy);
-                // Persist migrasi ke workspace_v2 jadi sumber kebenaran per-sementara.
-                await conversationContextService.updateWorkspaceV2(conversationId, workspace);
-            } else {
-                // Kolom kosong & legacy pun kosong -> WorkspaceV2 default (conversation baru).
-                workspace = loadWorkspace('{}');
-            }
+            // Context tidak ada (baru dibuat) → WorkspaceV2 default.
+            workspace = loadWorkspace('{}');
         }
         
         // 2. Auto-drop deferred pending
@@ -202,11 +198,16 @@ export class ConversationService {
           const replyText = payload?.message?.content || payload?.reply || payload?.content || 'Maaf kak, saya kurang paham.';
 
           const result = this.buildResult(conversationId, {
-            source: ResponseSource.AI,
+            source: payload?.source || ResponseSource.AI,
             content: replyText,
-            confidence: 0.9,
-            cost: 0,
-            metadata: { engine: 'v2', outcome: reasoningOutcome.outcome, llmCalls: reasoningOutcome.llmCalls },
+            confidence: payload?.confidence ?? 0.9,
+            cost: payload?.cost ?? 0,
+            metadata: {
+              engine: 'v2',
+              outcome: reasoningOutcome.outcome,
+              llmCalls: reasoningOutcome.llmCalls,
+              ...(payload?.metadata || {}),
+            },
           });
 
           await this.saveMessage({ id: crypto.randomUUID(), conversationId, sender: 'customer', content: customerMessage, createdAt: new Date() } as ConversationMessage);
@@ -245,9 +246,12 @@ export class ConversationService {
           }
 
           try {
-            // Save workspace ke kolom `workspace_v2` (T1 fix P3.1 — bukan lewat updateExtractedEntities yang NO-OP)
-            const resolvedWs = saveWorkspace(workspace);
-            await conversationContextService.updateWorkspaceV2(conversationId, JSON.parse(resolvedWs));
+            // G2-D.5: V2 engine write → canonical boundary (primary write → workspace_v2)
+            // CanonicalConversationStateService.saveWorkspaceV2() memetakan:
+            //   - canonical fields (pendings, resolved_facts, intent, options_presented, etc.) → updateCanonical (atomic CAS)
+            //   - V2 transient (draft_cart) → adapter write to workspace_v2 JSON (NOT canonical cart)
+            // V2 engine tidak lagi menulis workspace_v2 secara langsung (updateWorkspaceV2 removed).
+            await canonicalConversationStateService.saveWorkspaceV2(conversationId, workspace);
 
             // Compose reply dengan total dari DB cart
             const resolvedCart = await this.getCartFromDb(conversationId);
@@ -332,10 +336,9 @@ export class ConversationService {
           }
         }
         
-         try {
-          // 5. Save workspace ke kolom `workspace_v2` (T1 fix P3.1 — bukan lewat updateExtractedEntities yang NO-OP)
-          const updatedWorkspace = saveWorkspace(workspace);
-          await conversationContextService.updateWorkspaceV2(conversationId, JSON.parse(updatedWorkspace));
+          try {
+           // G2-D.5: V2 engine write → canonical boundary (primary write → workspace_v2)
+           await canonicalConversationStateService.saveWorkspaceV2(conversationId, workspace);
 
           // 6. Compose reply pakai composer-v2
           const composed = composeReply({
@@ -389,16 +392,15 @@ export class ConversationService {
 
     // ── END ENGINE BRANCHING ──
 
-    // Extract customerCity from context entities
+    // Extract customerCity from canonical state (G2-D.2 V1 read migration)
     let customerCity: string | null = null;
     try {
-      const ctxRow = await prisma.conversationContext.findUnique({
-        where: { conversationId },
-        select: { extractedEntities: true },
-      });
-      const raw = ctxRow?.extractedEntities as Record<string, unknown> | null;
-      if (raw && typeof raw.customerCity === 'string') {
-        customerCity = raw.customerCity as string;
+      const raw = (await canonicalConversationStateService.getFactWithLegacyFallback(
+        conversationId,
+        'customerCity',
+      )) as string | undefined;
+      if (typeof raw === 'string') {
+        customerCity = raw;
       }
     } catch {
       // non-critical
@@ -414,17 +416,14 @@ export class ConversationService {
     // ── BAGIAN 2: Pending clarification resolver — runs FIRST, before normalizer (0 LLM) ──
     // I10: afirmatif/negasi menutup klarifikasi V0 LLM. Menggunakan resolvePending
     // (pure, action-based) dari chat/pendingClarification.js.
-    const pendingRow = await prisma.conversationContext.findUnique({
-      where: { conversationId },
-      select: { extractedEntities: true },
-    });
-    const entities = conversationContextService.parseExtractedEntities(pendingRow?.extractedEntities);
-    const pending = conversationContextService.getPendingClarification(entities);
-    const rawEntities = (pendingRow?.extractedEntities as Record<string, unknown>) || {};
-    const previousMutation = rawEntities.previousMutation as
-      | { cartSnapshot: unknown[]; message: string }
-      | null
-      | undefined;
+    //
+    // G2-D.2: V1 read migrasi ke canonical boundary (workspace_v2 → extractedEntities fallback).
+    const pending = await canonicalConversationStateService.getV1PendingClarification(
+      conversationId,
+    );
+    const previousMutation = await canonicalConversationStateService.getV1PreviousMutation(
+      conversationId,
+    );
 
     if (pending) {
       stagesReached.push('resolver');
@@ -473,9 +472,11 @@ export class ConversationService {
         });
       }
 
-      // Clear pending — applies for both EXECUTE and ROLLBACK
-      await conversationContextService.clearPendingClarification(conversationId);
-      await this.clearPreviousMutation(conversationId);
+       // Clear pending — applies for both EXECUTE and ROLLBACK
+       await conversationContextService.clearPendingClarification(conversationId);
+       // G2-D.4: clearPendingClarification now mirrors to canonical internally
+       await this.clearPreviousMutation(conversationId);
+       // G2-D.4: clearPreviousMutation now mirrors to canonical internally
 
       if (resolved.action === 'EXECUTE') {
         finalIntent = 'execute_pending';
@@ -543,6 +544,8 @@ export class ConversationService {
       // RETRY — belum jelas, increment retry dan re-ask
       finalIntent = 'retry';
       const exceeded = await conversationContextService.incrementClarificationRetry(conversationId);
+      // G2-D.2 CLEANUP: increment canonical retry count too
+      await canonicalConversationStateService.incrementV1PendingRetry(conversationId);
       if (exceeded) {
         finalIntent = 'escalate';
         // TASK C1 (Stage 2): tandai human_takeover agar owner dapat alert di
@@ -646,12 +649,12 @@ export class ConversationService {
         }
     
         if (llmResult.clarification) {
-          // Simpan pending BEFORE kirim pertanyaan (BAGIAN 2.2)
           await conversationContextService.setPendingClarification(conversationId, {
             question: llmResult.clarification.question,
             options: llmResult.clarification.options,
             expected_type: llmResult.clarification.expected_type,
           });
+          // G2-D.4: setPendingClarification now mirrors to canonical internally
           result = this.buildResult(conversationId, {
             source: ResponseSource.SOP,
             content: llmResult.clarification.question,
@@ -775,8 +778,10 @@ export class ConversationService {
     await conversationContextService.refreshSession(conversationId);
     
     // Done-ordering signal → finalize draft order to waiting_address
+    // Delegates to CartAuthority.checkout which enforces stock validation,
+    // storeId filtering, and state machine transition via transitionOrder.
     if (orderService.detectDoneOrdering(normalizedMsg)) {
-      await orderService.finalizeDraftOrder(conversationId);
+      await orderService.finalizeDraftOrder(conversationId, context.storeId);
     }
     
     // ── Audit log (DoD FASE 5) ──
@@ -825,12 +830,18 @@ export class ConversationService {
     customerName: string | null,
     storeProducts: PipelineContext['storeProducts']
   ): Promise<PipelineContext> {
+    // G2-D.2: V1 cart read — read from extractedEntities.confirmedItems (consistent with
+    // V1 modifyCart writes; migration to CartAuthority is G2-D.5 after writes migrate).
+    // G2-D.2: V1 pending read via canonical boundary.
     const ctxRow = await prisma.conversationContext.findUnique({
       where: { conversationId },
       select: { extractedEntities: true },
     });
     const entities = conversationContextService.parseExtractedEntities(ctxRow?.extractedEntities);
     const cart = entities.confirmedItems || [];
+    const pendingClarification = await canonicalConversationStateService.getV1PendingClarification(
+      conversationId,
+    );
 
     // activeOrder: prefer 'draft' (current working cart, harga dari DB) over
     // other non-terminal statuses. 'pending' (mis. hasil createOrder katalog)
@@ -870,7 +881,7 @@ export class ConversationService {
       customerName,
       cart,
       activeOrder: activeOrder as PipelineContext['activeOrder'],
-      pendingClarification: entities.pendingClarification ?? null,
+      pendingClarification: pendingClarification ?? null,
       llmCalledThisTurn: false,
       storeProducts,
     };
@@ -878,8 +889,10 @@ export class ConversationService {
 
   /**
    * Execute (add / remove) validated cart_ops ke DB, lalu sync ke draft order.
-   * Untuk remove, snapshot cart sebelum mutasi agar negasi -> rollback masih
-   * memungkinkan. I15: hanya dipanggil setelah validateCartOps mengembalikan valid.
+   * Menggunakan CartAuthority.executeOps sebagai single authoritative path
+   * yang menulis OrderItem rows, Order.items JSON, dan confirmedItems JSON
+   * atomically dalam satu $transaction.
+   * I15: hanya dipanggil setelah validateCartOps mengembalikan valid.
    */
   private async executeCartOps(
     ops: CartOp[],
@@ -888,40 +901,26 @@ export class ConversationService {
   ): Promise<ConfirmedItem[]> {
     const { conversationId, storeId, customerId } = pipelineCtx;
 
-    const hasRemove = ops.some((o) => o.type === 'remove');
-    let cartBefore: ConfirmedItem[] = [];
-    if (hasRemove) {
-      cartBefore = await this.getCartFromDb(conversationId);
-      await this.storePreviousMutation(
+    if (ops.length > 0) {
+      return await cartAuthority.executeOps(
+        ops,
+        storeId,
+        customerId,
         conversationId,
-        cartBefore.map((i) => ({ product: i.product, qty: i.qty ?? null, price: i.price ?? null })),
-        message
       );
     }
 
-    let items: ConfirmedItem[] = cartBefore;
-    for (const op of ops) {
-      if (op.type === 'add') {
-        items = await conversationContextService.modifyCart(conversationId, 'add', {
-          addedProduct: op.product,
-          qty: op.qty,
-          price: op.price,
-        });
-      } else if (op.type === 'remove') {
-        items = await conversationContextService.modifyCart(conversationId, 'remove', {
-          cancelledProduct: op.product,
-        });
-      }
-    }
-
-    if (ops.length > 0) {
-      await orderService.syncCartStateToDraftOrder(conversationId, storeId, customerId, items, null);
-    }
-    return items;
+    // Empty ops — return current cart state
+    return await cartAuthority.getCartAsConfirmedItems(conversationId);
   }
 
   /**
-   * Baca snapshot keranjang terkonfirmasi dari DB (extractedEntities).
+   * Baca snapshot keranjang terkonfirmasi.
+   * G2-D.2 Part C: V1 cart read. V1 writes still go to extractedEntities.confirmedItems
+   * (write migration is G2-D.5). getCartAsConfirmedItems would miss V1 writes that
+   * haven't created draft Orders yet. Until writes migrate, read from extractedEntities
+   * to stay consistent with V1 modifyCart writes.
+   * TODO (G2-D.5): After V1 modifyCart → CartAuthority, switch to getCartAsConfirmedItems.
    */
   private async getCartFromDb(conversationId: string): Promise<ConfirmedItem[]> {
     const ctxRow = await prisma.conversationContext.findUnique({
@@ -931,29 +930,45 @@ export class ConversationService {
     return conversationContextService.parseExtractedEntities(ctxRow?.extractedEntities).confirmedItems || [];
   }
 
-  /** BAGIAN 2.4 — Store previousCart snapshot untuk rollback */
+  /**
+   * BAGIAN 2.4 — Store previousCart snapshot untuk rollback.
+   *
+   * G2-D.6: Canonical (workspace_v2) is PRIMARY authority via
+   * writeV1PreviousMutation. The extractedEntities write is backward-compat
+   * mirror (kept for legacy readers/tests, atomic via atomicCas).
+   */
   private async storePreviousMutation(
     conversationId: string,
     cartSnapshot: { product: string; qty?: number | string | null; price?: number | null }[],
     message: string
   ): Promise<void> {
+    // 1. Canonical: PRIMARY write (authority: workspace_v2)
     try {
-      const ctxRow = await prisma.conversationContext.findUnique({
-        where: { conversationId },
-        select: { extractedEntities: true },
+      await canonicalConversationStateService.writeV1PreviousMutation(conversationId, cartSnapshot, message);
+    } catch (err) {
+      adapters.logger.warn('storePreviousMutation: failed to write to canonical', {
+        conversationId,
+        error: err instanceof Error ? err.message : String(err),
       });
-      const entities = (ctxRow?.extractedEntities as Record<string, unknown>) || {};
-      await prisma.conversationContext.update({
-        where: { conversationId },
-        data: {
-          extractedEntities: {
-            ...entities,
-            previousMutation: { cartSnapshot, message },
-          } as any,
-        },
+    }
+
+    // 2. Backward-compat mirror to extractedEntities (atomic CAS)
+    try {
+      await conversationContextService.atomicCasExtractedEntities(conversationId, 'storePreviousMutation', async (row) => {
+        const entities = conversationContextService.parseExtractedEntities(row.extractedEntities);
+        // cartSnapshot is the V1 shape ({product, qty, price}[]); the legacy
+        // extractedEntities mirror field previousMutation.cartSnapshot expects
+        // ConfirmedItem[]. Cast preserves the pre-existing runtime write verbatim
+        // (canonical writeV1PreviousMutation is the primary authority) — type-only.
+        entities.previousMutation = { cartSnapshot: cartSnapshot as unknown as ConfirmedItem[], message };
+        const res = await prisma.conversationContext.updateMany({
+          where: { conversationId, updatedAt: row.updatedAt },
+          data: { extractedEntities: entities as unknown as Prisma.InputJsonValue },
+        });
+        return { count: res.count, value: null };
       });
     } catch (e) {
-      adapters.logger.warn('Failed to store previousMutation', { error: (e as Error).message });
+      adapters.logger.warn('Failed to store previousMutation (legacy mirror)', { error: (e as Error).message });
     }
   }
 
@@ -1426,20 +1441,36 @@ export class ConversationService {
     return ops;
   }
 
-  // ── Clear previousMutation snapshot from extractedEntities ───────────
+  /**
+   * Clear previousMutation snapshot.
+   *
+   * G2-D.6: Canonical (workspace_v2) is PRIMARY via clearV1PreviousMutation.
+   * The extractedEntities write is backward-compat mirror (atomic CAS).
+   */
   private async clearPreviousMutation(conversationId: string): Promise<void> {
+    // 1. Canonical: PRIMARY write (authority: workspace_v2)
     try {
-      const ctxRow = await prisma.conversationContext.findUnique({
-        where: { conversationId },
-        select: { extractedEntities: true },
+      await canonicalConversationStateService.clearV1PreviousMutation(conversationId);
+    } catch (err) {
+      adapters.logger.warn('clearPreviousMutation: failed to write to canonical', {
+        conversationId,
+        error: err instanceof Error ? err.message : String(err),
       });
-      const entities = conversationContextService.parseExtractedEntities(ctxRow?.extractedEntities);
-      await prisma.conversationContext.update({
-        where: { conversationId },
-        data: { extractedEntities: { ...entities, previousMutation: null } as any },
+    }
+
+    // 2. Backward-compat mirror to extractedEntities (atomic CAS)
+    try {
+      await conversationContextService.atomicCasExtractedEntities(conversationId, 'clearPreviousMutation', async (row) => {
+        const entities = conversationContextService.parseExtractedEntities(row.extractedEntities);
+        entities.previousMutation = null;
+        const res = await prisma.conversationContext.updateMany({
+          where: { conversationId, updatedAt: row.updatedAt },
+          data: { extractedEntities: entities as unknown as Prisma.InputJsonValue },
+        });
+        return { count: res.count, value: null };
       });
     } catch (e) {
-      adapters.logger.warn('Failed to clear previousMutation', { error: (e as Error).message });
+      adapters.logger.warn('Failed to clear previousMutation (legacy mirror)', { error: (e as Error).message });
     }
   }
 }
