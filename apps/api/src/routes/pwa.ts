@@ -8,7 +8,6 @@ import { productService } from '../business/product.service.js';
 import { ApiError } from '../errors/ApiError.js';
 import { ErrorCodes } from '../constants/errorCodes.js';
 import { ResponseSource } from '../domain/types.js';
-import { faqService } from '../business/faq.service.js';
 import { composeEscalateReply } from '../services/chat/composer-v2.js';
 
 const router = Router();
@@ -679,63 +678,14 @@ async function getOrCreateWebSession(
   return { storeId, customerId: customer.id, conversationId: conversation.id };
 }
 
-// GET /api/pwa/:storeSlug/orders?uid=<webUid> — riwayat pesanan customer (publik, webUid).
-router.get('/:storeSlug/orders', async (req: Request, res: Response) => {
-  try {
-    const { storeSlug } = req.params;
-    const uid = Array.isArray(req.query.uid) ? req.query.uid[0] : req.query.uid;
-    const session = await resolveWebSession(storeSlug, typeof uid === 'string' ? uid : undefined);
-    if (!session) {
-      const store = await prisma.store.findUnique({ where: { slug: storeSlug, deletedAt: null }, select: { id: true } });
-      if (!store) return res.status(404).json({ error: 'Store not found' });
-      return res.status(401).json({ error: 'Unauthorized customer' });
-    }
-
-    const orders = await prisma.order.findMany({
-      where: { storeId: session.storeId, customerId: session.customerId, deletedAt: null },
-      orderBy: { createdAt: 'desc' },
-      select: {
-        id: true,
-        totalPrice: true,
-        currency: true,
-        orderStatus: true,
-        items: true,
-        createdAt: true,
-        confirmedAt: true,
-      },
-    });
-    res.json({ success: true, data: { orders } });
-  } catch (err) {
-    adapters.logger.error('PWA orders error', err as Error);
-    res.status(500).json({ error: 'Failed to fetch orders' });
-  }
-});
-
-// GET /api/pwa/:storeSlug/faq — FAQ publik toko (untuk view Bantuan).
-router.get('/:storeSlug/faq', async (req: Request, res: Response) => {
-  try {
-    const { storeSlug } = req.params;
-    const store = await prisma.store.findUnique({
-      where: { slug: storeSlug, deletedAt: null },
-      select: { id: true },
-    });
-    if (!store) return res.status(404).json({ error: 'Store not found' });
-
-    const faqs = await faqService.findAll(store.id);
-    const mapped = (faqs ?? []).map((f: { id: string; question: string; answer: string; category?: string | null }) => ({
-      id: f.id,
-      question: f.question,
-      answer: f.answer,
-      category: f.category ?? null,
-    }));
-    res.json({ success: true, data: { faqs: mapped } });
-  } catch (err) {
-    adapters.logger.error('PWA faq error', err as Error);
-    res.status(500).json({ error: 'Failed to fetch faq' });
-  }
-});
-
 // POST /api/pwa/:storeSlug/handoff — human takeover (Hubungi Admin).
+// §9: reuses the EXISTING escalation convention — composeEscalateReply() +
+// status:'human_takeover' + humanTakeoverAt + eventBus.publish(message.created,
+// conversation.handoff, conversation.updated) — identical to the engine's own
+// escalation path (conversation.service markHumanTakeover+composeEscalateReply,
+// lines 445-472). Customer-initiated trigger of a real engine convention; no
+// fake admin profile fabricated. (GET /orders & GET /faq routes were REMOVED —
+// customer order-history & PWA FAQ are NOT released features; see G2-E.3.2 §7/§8.)
 // Reuse existing eskalasi convention (escalateStatusUpdate / composeEscalateReply)
 // + eventBus publish (message.created + conversation.handoff + conversation.updated).
 // Realtime service memforward ke room customer (store:{storeId}:conv:{conversationId})

@@ -6,6 +6,8 @@ export type StoreIdentity = {
   name?: string | null;
   profilePhotoUrl?: string | null;
   phoneNumber?: string | null;
+  operatingHours?: { summary?: string | null } | null;
+  isActive?: boolean | null;
 };
 
 export type QuickActionType = 'products' | 'search' | 'chat';
@@ -20,11 +22,8 @@ export type EmptyStateProps = {
 
 const PREVIEW_COUNT = 6;
 
-export default function EmptyState({ store: _store, products = [], onQuickAction, onProductTap, onAddToCart }: EmptyStateProps) {
+export default function EmptyState({ store, products = [], onQuickAction, onProductTap, onAddToCart }: EmptyStateProps) {
   const [searchQuery, setSearchQuery] = useState('');
-  const [activeCategory, setActiveCategory] = useState('Semua');
-
-  const categories = ['Semua', 'Sayur', 'Bumbu', 'Buah', 'Umbi'];
 
   const filtered = useMemo(() => {
     if (!searchQuery.trim()) return products;
@@ -38,20 +37,16 @@ export default function EmptyState({ store: _store, products = [], onQuickAction
 
   return (
     <div className="flex-1 overflow-y-auto chat-scroll">
-      {/* Hero */}
+      {/* Hero — §2: render only authoritative data. operatingHours.summary is real;
+          rating / order-count / "Buka Setiap Hari" / "Tutup 21.00" have NO data
+          source → hidden (no mock values). */}
       <div className="px-4 pt-3 pb-2">
-        <p className="text-eyebrow" style={{ color: 'var(--clay)' }}>Toko Online · Buka Setiap Hari</p>
+        {store?.operatingHours?.summary ? (
+          <p className="text-eyebrow" style={{ color: 'var(--clay)' }}>{store.operatingHours.summary}</p>
+        ) : null}
         <h1 className="font-serif italic text-xl font-medium text-primary mt-1 leading-tight">
           Segar dari pasar, langsung ke keranjangmu.
         </h1>
-        <div className="flex items-center gap-2 mt-2.5 flex-wrap">
-          <span className="inline-flex items-center gap-1 bg-white border border-border px-2.5 py-1 rounded-full text-[11px] font-bold text-muted-foreground">
-            ⭐ 4.9 · 1.240 pesanan
-          </span>
-          <span className="inline-flex items-center gap-1 bg-white border border-border px-2.5 py-1 rounded-full text-[11px] font-bold text-muted-foreground">
-            🕒 Tutup 21.00
-          </span>
-        </div>
       </div>
 
       {/* Search */}
@@ -63,7 +58,7 @@ export default function EmptyState({ store: _store, products = [], onQuickAction
           </svg>
           <input
             type="text"
-            placeholder="Cari sayur, bumbu, buah…"
+            placeholder="Cari produk…"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="flex-1 border-none bg-transparent text-sm text-foreground placeholder:text-muted-foreground/70 outline-none"
@@ -71,24 +66,8 @@ export default function EmptyState({ store: _store, products = [], onQuickAction
         </div>
       </div>
 
-      {/* Category chips */}
-      <div className="flex gap-2 overflow-x-auto chat-scroll px-4 mt-3 pb-1">
-        {categories.map((cat) => (
-          <button
-            key={cat}
-            type="button"
-            onClick={() => setActiveCategory(cat)}
-            className={`flex-shrink-0 px-4 py-2 rounded-full text-xs font-bold transition-all ${
-              activeCategory === cat
-                ? 'text-white border-0'
-                : 'bg-white text-primary border border-border hover:bg-muted'
-            }`}
-            style={activeCategory === cat ? { background: 'var(--forest)' } : {}}
-          >
-            {cat}
-          </button>
-        ))}
-      </div>
+      {/* §3: no category data available (products carry no `category` field, no
+          categories endpoint) → category chips intentionally omitted. */}
 
       {/* Product grid */}
       <div className="px-4 mt-4">

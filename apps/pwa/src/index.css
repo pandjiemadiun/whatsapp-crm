@@ -3,7 +3,7 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 /* =========================================================================
- * Depot Kinasih — Design Tokens (source of truth: mockup HTML)
+ * Design Tokens (source of truth: storefront mockup HTML) — multi-tenant, no store-specific values
  * ========================================================================= */
 
 :root {
