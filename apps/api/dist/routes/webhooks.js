@@ -98,6 +98,7 @@ router.post('/gowa', async (req, res) => {
             text,
             messageId,
             gateway: 'gowa',
+            channel: 'whatsapp',
             deviceId,
             storeTimezone: store.timezone,
         });
@@ -243,6 +244,7 @@ router.post('/fonnte', async (req, res) => {
                 text,
                 messageId,
                 gateway: 'fonnte',
+                channel: 'whatsapp',
                 token: store.fonnteToken,
                 inboxId: inboxId ? Number(inboxId) : undefined,
                 storeTimezone: store.timezone,

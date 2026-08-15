@@ -113,7 +113,8 @@ function buildValidatorContext(workspace, catalog) {
  *      - ok=false, retryable → attempt 2 (with validator feedback)
  *        - ok → return reasoned (llmCalls=2)
  *        - ok=false → fallback (llmCalls=2)
- *      - ok=false, terminal (I-V2-4/I-V2-6) → fallback (llmCalls=1, JANGAN retry)
+ *      - ok=false, terminal I-V2-4 (retry exceeded) → fallback (llmCalls=1, JANGAN retry)
+ *      - ok=false, terminal I-V2-6 (low selection confidence) → clarification_trigger → 'reasoned' w/ plannedActs=[] (llmCalls=1, JANGAN retry)
  *      - transport error → retry sekali, fallback jika gagal (llmCalls=1|2)
  *
  * I8: maksimal 1 LLM call per attempt; fast path = 0 LLM.
@@ -219,7 +220,7 @@ export async function understand(message, workspace, catalog, history, fallbackS
                 trace,
             };
         }
-        // Terminal (I-V2-4/I-V2-6) → JANGAN retry LLM
+        // Terminal (non-I-V2-6, non-retryable → I-V2-4 or other terminal) → fallback (JANGAN retry)
         add(trace, 'fallback', {
             reason: 'terminal_validation',
             reasons: validation1.reasons,

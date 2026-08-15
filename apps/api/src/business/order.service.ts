@@ -8,6 +8,8 @@ import { productService } from './product.service.js';
 import { conversationContextService } from './conversation-context.service.js';
 import type { OrderItem, OrderWithItems, OrderItemInput, ExtractedEntity, ConfirmedItem, ExtractedEntities } from '../domain/types.js';
 import { ResponseSource } from '../domain/types.js';
+import { transitionOrder } from './order-transition.js';
+import { cartAuthority } from './cart-authority.js';
 
 export class OrderService {
   // ============================================================
@@ -161,16 +163,11 @@ export class OrderService {
   /**
    * Check-out: transition draft order → waiting_address.
    * Called when done-ordering signal detected.
+   * Delegates to CartAuthority.checkout which enforces stock validation,
+   * storeId filtering, and state machine transition via transitionOrder.
    */
-  async finalizeDraftOrder(conversationId: string): Promise<void> {
-    const result = await prisma.order.updateMany({
-      where: { conversationId, orderStatus: 'draft' },
-      data: { orderStatus: 'waiting_address' },
-    });
-    adapters.logger.info('Draft order finalized → waiting_address', {
-      conversationId,
-      ordersUpdated: result.count,
-    });
+  async finalizeDraftOrder(conversationId: string, storeId: string): Promise<string> {
+    return await cartAuthority.checkout(conversationId, storeId);
   }
 
   // ============================================================

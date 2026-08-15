@@ -12,7 +12,6 @@
  *      merekam status, tidak menghasilkan harga/stok. (I15)
  */
 import type { WorkspaceV2, PendingV2, DraftCartOp, ActV2 } from './types-v2.js';
-import type { ExtractedEntities } from '../../domain/types.js';
 /**
  * Parse JSON string menjadi WorkspaceV2.
  * Defensif pada batas boundary JSON: bidang struktural (array/object)
@@ -89,30 +88,4 @@ export declare function getSummary(ws: WorkspaceV2): string;
  * Perbarui ringkasan percakapan.
  */
 export declare function setSummary(ws: WorkspaceV2, summary: string): WorkspaceV2;
-/**
- * Cek apakah legacy extractedEntities masih "ada isi" yang perlu dimigrasi ke v2.
- * Hanya migrasi bila ada confirmedItems atau pendingClarification — field in-itu
- * yang punya padanan v2 (draft_cart / pendings). Field lain (recipientName,
- * shippingAddress, discussedItems) tidak beralih otomatis pada turn pertama
- * kecuali memang ada keranjang/klarifikasi untuk dilanjutkan.
- */
-export declare function hasLegacyState(legacy: ExtractedEntities | null | undefined): boolean;
-/**
- * Migrasi satu arah: legacy ExtractedEntities (kolom `extractedEntities`) ke
- * WorkspaceV2 (kolom `workspace_v2`).
- *
- * Pemetaan (T3 fix — P3.2):
- *   - confirmedItems  -> draft_cart   (action:'add', status:'confirmed', qty_source:'default')
- *   - pendingClarification -> pendings  (status:'active'; question/options/asked_at/retry_count
- *                                       dipetakan ke PendingV2; retry_count -> attempts)
- *   - recipientName / shippingAddress / lastAmbiguousPrompt -> resolved_facts
- *     (v2 tidak punya slot eksplisit; masukkan ke resolved_facts yang generik)
- * Field tanpa padanan (discussedItems, previousMutation) tidak dipetakan —
- * biarkan default kosong.
- *
- * PURE: tidak ada I/O; dipanggil di titik baca conversation.service.ts:141.
- * Hasil mapping ini kemudian di-persist ke `workspace_v2` oleh caller agar turn
- * berikutnya pakai workspace_v2 sebagai sumber kebenaran (tidak re-map legacy).
- */
-export declare function mapLegacyEntitiesToWorkspace(legacy: ExtractedEntities): WorkspaceV2;
 //# sourceMappingURL=workspace.d.ts.map

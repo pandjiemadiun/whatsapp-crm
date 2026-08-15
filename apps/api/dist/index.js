@@ -3,6 +3,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import express from 'express';
 import cors from 'cors';
+import http from 'http';
 import { prisma } from './infrastructure/prisma.js';
 // Global BigInt serialization (Prisma returns BigInt for numeric fields)
 BigInt.prototype.toJSON = function () {
@@ -35,6 +36,7 @@ import analyticsRouter from './routes/analytics.js';
 import adminProductsRoutes from './routes/admin/products.js';
 import bankAccountsRouter from './routes/bank-accounts.js';
 import sopRouter from './routes/sop.js';
+import pwaRouter from './routes/pwa.js';
 import { adminAuthMiddleware } from './middleware/adminAuth.js';
 import { requireAdminRole } from './middleware/adminAuthGuard.js';
 import { initializeDefaultConfigs } from './bootstrap/initializeConfig.js';
@@ -43,6 +45,8 @@ import healthRouter from './routes/health.js';
 import redirectRouter from './routes/redirect.js';
 import { startHealthCheckInterval } from './business/health.service.js';
 import { messageProcessorService } from './services/message-processor.service.js';
+import { realtimeService } from './services/realtime.service.js';
+import { notificationService } from './services/notification.service.js';
 import { healthMonitorService } from './services/health-monitor.service.js';
 import { scheduleBackups } from './bootstrap/scheduleBackups.js';
 import { scheduleFollowUps } from './bootstrap/scheduleFollowUps.js';
@@ -65,8 +69,17 @@ const PORT = process.env.PORT || 3000;
 app.set('trust proxy', Number(process.env.TRUST_PROXY || 1));
 // Middleware JSON & CORS
 app.use(express.json());
+// CORS whitelist: localhost dev TETAP dipakai; origin produksi PWA ditambahkan
+// via env var PWA_ALLOWED_ORIGINS (comma-separated). Jika env var kosong/unset,
+// fallback hanya ke localhost (tidak pernah open/*). Lihat .env.example.
+const LOCALHOST_ORIGINS = ['http://localhost:5173', 'http://localhost:4173'];
+const envOrigins = (process.env.PWA_ALLOWED_ORIGINS || '')
+    .split(',')
+    .map((o) => o.trim())
+    .filter((o) => o.length > 0);
+const corsAllowedOrigins = [...new Set([...LOCALHOST_ORIGINS, ...envOrigins])];
 app.use(cors({
-    origin: ['http://localhost:5173', 'http://localhost:4173'],
+    origin: corsAllowedOrigins,
     credentials: true,
 }));
 // Request correlation ID (must be after CORS, before everything else)
@@ -108,6 +121,8 @@ app.use('/api/products', storeProductsRouter);
 app.use('/api/analytics', analyticsRouter);
 // Public product catalog routes (mounted under /api, path di-handle dalam router)
 app.use('/api', productsRouter);
+// Web Adapter (P-PWA.8) — public endpoints, no auth, CORS untouched (blueprint §5)
+app.use('/api/pwa', pwaRouter);
 // Health Check Endpoint — under /api so dashboard's axios baseURL works
 app.get('/api/health', async (req, res) => {
     try {
@@ -136,7 +151,13 @@ app.use((_req, res) => {
 });
 // Global error handler (must be last middleware)
 app.use(errorHandler);
-app.listen(PORT, async () => {
+// Web Realtime Foundation (FASE 1) — Socket.IO on the SAME http.Server as Express.
+const httpServer = http.createServer(app);
+realtimeService.init(httpServer, corsAllowedOrigins);
+// FASE 4 — Web Push notification SIGNAL service. Subscribes to `message.created`;
+// push is secondary to Socket.IO (no duplicate). Does not touch the delivery engine.
+notificationService.init();
+httpServer.listen(PORT, async () => {
     logger.info(`🚀 GARUDA API running on port ${PORT}`);
     // Pre-load encryption key from Cloudflare Worker / env var
     try {
@@ -215,12 +236,14 @@ app.listen(PORT, async () => {
 process.on('SIGTERM', async () => {
     logger.info('SIGTERM received, shutting down gracefully...');
     await messageProcessorService.shutdown();
+    realtimeService.shutdown();
     await prisma.$disconnect();
     process.exit(0);
 });
 process.on('SIGINT', async () => {
     logger.info('SIGINT received, shutting down gracefully...');
     await messageProcessorService.shutdown();
+    realtimeService.shutdown();
     await prisma.$disconnect();
     process.exit(0);
 });

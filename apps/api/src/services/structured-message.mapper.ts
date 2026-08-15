@@ -5,6 +5,7 @@ import type {
   ResponseResult,
 } from '../domain/types.js';
 import { conversationContextService } from '../business/conversation-context.service.js';
+import { canonicalConversationStateService } from '../business/canonical-context.service.js';
 import { orderService } from '../business/order.service.js';
 import { productService } from '../business/product.service.js';
 import { adapters } from '../adapters/container.js';
@@ -23,7 +24,7 @@ import { adapters } from '../adapters/container.js';
  *
  * Enrichment payload (options / cart items / stock+imageUrl) dibaca **read-only** dari
  * state authoritative engine yang sudah persisted:
- *   - quick_reply.options  ← conversationContextService.getPendingClarification
+ *   - quick_reply.options  ← canonicalConversationStateService.getV1PendingClarification (G2-D.2)
  *   - cart.items/total     ← orderService.getOrdersByConversation (draft order)
  *   - product.stock/imageUrl ← productService.getProductById
  *
@@ -136,9 +137,28 @@ export function classifyStructured(
     }
   }
 
+  // CATALOG intent (engine-authored: ResponseSource.CATALOG from tryCatalog) WITH a
+  // structured `items` array authored by tryCatalog from productService.listActiveProducts
+  // → product_list (>=2) / product (1). HARD RULE #5/#16: hanya sinyal engine-authored
+  // (result.source + meta.items yang di-generate DB, bukan keyword/regex/AI-source).
+  if (result.source === ResponseSource.CATALOG && Array.isArray(meta.items)) {
+    const items = toArray<Record<string, unknown>>(meta.items);
+    if (items.length >= 2) {
+      return {
+        messageType: 'product_list',
+        basePayload: {
+          items: items.map((it) => ({ id: it.id ?? null, name: it.name ?? null, price: it.price ?? null })),
+        },
+      };
+    }
+    if (items.length === 1) {
+      return { messageType: 'product', basePayload: { id: items[0].id ?? null, name: items[0].name ?? null, price: items[0].price ?? null } };
+    }
+  }
+
   // resolver_retry | resolver_no_llm | rollback | dead_end_fallback | dead_end_detected
   // | AI reply_draft (reason undefined, hanya content+source+intent)
-  // | catalog (productCount only) | order_status/total/shipping/payment/faq/cache/knowledge/sop
+  // | catalog (productCount only, TANPA items array) | order_status/total/shipping/payment/faq/cache/knowledge/sop
   // -> text (intent/source tidak dipakai klasifikasi; HARD RULE #16/#5).
   return { messageType: 'text', basePayload: null };
 }
@@ -199,12 +219,11 @@ export async function mapStructured(
 
 // ── Read-only enrichment helpers (authoritative engine state) ──────────────
 
-/** quick_reply options: baca PendingClarification yang sudah disimpan engine (read-only). */
+/** quick_reply options: baca PendingClarification dari canonical state (read-only, G2-D.2). */
 async function fetchClarificationOptions(conversationId: string): Promise<ClarificationOption[]> {
-  const ctx = await conversationContextService.getContext(conversationId);
-  if (!ctx) return [];
-  const pending = conversationContextService.getPendingClarification(ctx.extractedEntities);
-  return pending?.options ?? [];
+  const pending = await canonicalConversationStateService.getV1PendingClarification(conversationId);
+  if (!pending?.options) return [];
+  return pending.options;
 }
 
 /** cart state: draft order (authoritative) milik conversation. */

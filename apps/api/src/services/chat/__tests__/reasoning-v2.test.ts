@@ -304,7 +304,7 @@ describe('understand — LLM reasoning + validator (FASE B4)', () => {
     }
   });
 
-  it('Validator reject terminal (low confidence) → fallback, llmCalls=1, JANGAN retry', async () => {
+  it('Validator reject terminal I-V2-6 (low selection confidence) → clarification_trigger, llmCalls=1, JANGAN retry', async () => {
     const ws = makeWorkspace({ pendings: [] });
     mockResponses = [JSON.stringify(makeTerminalResult())];
 
@@ -313,14 +313,24 @@ describe('understand — LLM reasoning + validator (FASE B4)', () => {
     );
 
     assert.equal(llmCalls, 1);
-    assert.equal(result.outcome, 'fallback_reasoning_failed');
-    // Verifikasi trace menandai terminal, tidak ada llm_attempt_2
-    if (result.outcome === 'fallback_reasoning_failed' && result.trace) {
+    // I-V2-6: terminal (not retryable) → clarification_trigger → 'reasoned'
+    // with empty plannedActs. Bukan 'fallback_reasoning_failed'.
+    // Composer-v2 will handle clarification/reply_draft provided by LLM.
+    assert.equal(result.outcome, 'reasoned');
+    if (result.outcome === 'reasoned') {
+      assert.equal(result.plannedActs.length, 0, 'clarification_trigger → plannedActs kosong');
+      assert.ok(result.trace, 'trace harus tersedia');
+      assert.ok(result.trace.steps.some((s) => s.step === 'clarification_trigger'));
+      // Verifikasi tidak ada llm_attempt_2 (terminal, JANGAN retry)
       assert.equal(
         result.trace.steps.some((s) => s.step === 'llm_attempt_2'),
         false
       );
-      assert.ok(result.trace.steps.some((s) => s.step === 'fallback'));
+      // I-V2-6 path does NOT add 'fallback' step
+      assert.equal(
+        result.trace.steps.some((s) => s.step === 'fallback'),
+        false
+      );
     }
   });
 });

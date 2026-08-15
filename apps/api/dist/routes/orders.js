@@ -1,5 +1,7 @@
 import { Router } from 'express';
 import { authMiddleware } from '../middleware/auth.js';
+import { transitionOrder, ALLOWED_TRANSITIONS } from '../business/order-transition.js';
+import { ApiError } from '../errors/ApiError.js';
 import { adapters } from '../adapters/container.js';
 import { prisma } from '../infrastructure/prisma.js';
 const router = Router();
@@ -77,13 +79,17 @@ router.put('/:id/status', async (req, res) => {
         if (!order) {
             return res.status(404).json({ error: 'Pesanan tidak ditemukan' });
         }
-        const updated = await prisma.order.update({
-            where: { id },
-            data: {
-                orderStatus,
-            },
-        });
-        adapters.logger.info('Order status updated', {
+        // Validate transition from current status using state machine
+        const allowed = ALLOWED_TRANSITIONS[order.orderStatus];
+        if (!allowed || !allowed.has(orderStatus)) {
+            return res.status(400).json({
+                error: `Transisi status ${order.orderStatus} → ${orderStatus} tidak diizinkan`,
+            });
+        }
+        // Delegate to transitionOrder for authoritative state machine transition
+        // which also manages confirmedAt invariant
+        const updated = await transitionOrder(id, orderStatus, { actor: 'system' });
+        adapters.logger.info('Order status updated via transitionOrder', {
             orderId: id,
             from: order.orderStatus,
             to: orderStatus,
@@ -92,6 +98,9 @@ router.put('/:id/status', async (req, res) => {
         res.json({ success: true, data: updated });
     }
     catch (error) {
+        if (error instanceof ApiError) {
+            return res.status(error.statusCode || 500).json({ error: error.message });
+        }
         adapters.logger.error('Failed to update order status', error);
         res.status(500).json({ error: error?.message || 'Failed to update order status' });
     }

@@ -17,6 +17,8 @@ export interface ProcessMessageInput {
     text: string;
     messageId: string;
     gateway: 'gowa' | 'fonnte';
+    channel?: 'whatsapp' | 'web';
+    webUid?: string;
     deviceId?: string;
     token?: string;
     inboxId?: number;

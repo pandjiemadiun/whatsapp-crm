@@ -5,6 +5,7 @@ import { ValidationError } from '../errors/ValidationError.js';
 import { ErrorCodes } from '../constants/errorCodes.js';
 import { productService } from './product.service.js';
 import { conversationContextService } from './conversation-context.service.js';
+import { cartAuthority } from './cart-authority.js';
 export class OrderService {
     /**
      * Deteksi sinyal "selesai pesan".
@@ -131,16 +132,11 @@ export class OrderService {
     /**
      * Check-out: transition draft order → waiting_address.
      * Called when done-ordering signal detected.
+     * Delegates to CartAuthority.checkout which enforces stock validation,
+     * storeId filtering, and state machine transition via transitionOrder.
      */
-    async finalizeDraftOrder(conversationId) {
-        const result = await prisma.order.updateMany({
-            where: { conversationId, orderStatus: 'draft' },
-            data: { orderStatus: 'waiting_address' },
-        });
-        adapters.logger.info('Draft order finalized → waiting_address', {
-            conversationId,
-            ordersUpdated: result.count,
-        });
+    async finalizeDraftOrder(conversationId, storeId) {
+        return await cartAuthority.checkout(conversationId, storeId);
     }
     // ============================================================
     // Phase 1.9.2 — Order CRUD dengan integrasi product & context

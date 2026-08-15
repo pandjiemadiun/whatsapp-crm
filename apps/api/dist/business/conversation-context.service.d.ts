@@ -1,5 +1,4 @@
 import type { ConversationContextData, ConversationContextInput, ConversationMessage, ExtractedEntity, ExtractedEntities, ConfirmedItem, PendingClarification } from '../domain/types.js';
-import type { WorkspaceV2 } from '../services/chat/types-v2.js';
 export declare class ConversationContextService {
     /**
      * Inisialisasi (upsert) context percakapan di tabel conversation_context.
@@ -26,17 +25,6 @@ export declare class ConversationContextService {
      */
     updateExtractedEntities(conversationId: string, entities: ExtractedEntity[]): Promise<void>;
     /**
-     * Persist WorkspaceV2 (v3.2) ke kolom terpisah `workspace_v2` (JSON nullable).
-     * T1 fix (P3.1): workspace v2 tidak pernah tersimpan sebelumnya — semua "persist"
-     * lewat updateExtractedEntities yang NO-OP karena type mismatch (WorkspaceV2
-     * object tidak punya .length, sehingga guard `if (!entities.length) return`
-     * langsung return). Kolom baru memutuskan v2 dari legacy extractedEntities.
-     *
-     * T4 fix (P3.4): write lewat atomicCas (optimistic lock @updatedAt) sehingga
-     * dua turn v2 yang hampir bersamaan tidak saling menimpa diam-diam.
-     */
-    updateWorkspaceV2(conversationId: string, workspace: WorkspaceV2): Promise<void>;
-    /**
      * Set intent pengguna pada context.
      */
     updateUserIntent(conversationId: string, intent: 'browse' | 'purchase' | 'support' | 'inquiry'): Promise<void>;
@@ -52,6 +40,9 @@ export declare class ConversationContextService {
      * Update info pengiriman (nama penerima & alamat) di extractedEntities.
      * Via atomicCas (T4 fix) — tidak menimpa field lain (confirmedItems/
      * pendingClarification/trackedEntities).
+     *
+     * G2-D.4: ALSO writes to canonical resolved_facts via writeV1ShippingInfo.
+     * Canonical is the authority; extractedEntities is compatibility mirror.
      */
     updateShippingInfo(conversationId: string, recipientName?: string | null, shippingAddress?: string | null): Promise<void>;
     /**
@@ -60,8 +51,18 @@ export declare class ConversationContextService {
      * default kosong (array tidak lagi ditulis — P3.3 kanonik OBJECT).
      * Membawa `trackedEntities` + `previousMutation` agar penulis object lain
      * (modifyCart/setPendingClarification/fallback) tidak menimppadnya.
+     *
+     * G2-D-L-018 fix: Preserve dynamic/unknown fields (customerCity, customerName,
+     * customerPhone, dll) yang tidak ada di typed ExtractedEntities interface.
+     * Tanpa preservation ini, write-back via atomicCas akan menghilangkan field
+     * dinamis yang ditulis oleh V1 path lain (seperti customerCity dari
+     * fallback.service.ts:717). Dynamic fields disimpan di `_unknown` — penulis
+     * yang sudah dimigrasi ke canonical (G2-D.4) tidak lagi butuh ini, tapi
+     * penulis yang belum dimigrasi (modifyCart, restoreCart — G2-D.5) tetap aman.
      */
-    parseExtractedEntities(raw: unknown): ExtractedEntities;
+    parseExtractedEntities(raw: unknown): ExtractedEntities & {
+        _unknown?: Record<string, unknown>;
+    };
     /**
      * Hapus context percakapan. Operasi non-kritikal — error dibiarkan
      * tidak dilempar jika context memang tidak ada.
@@ -115,7 +116,26 @@ export declare class ConversationContextService {
      * / error DB → log & kembalikan `null` (tidak throw — sama seperti method
      * sejenis yang ada).
      */
-    private atomicCas;
+    /**
+     * Atomic read-modify-write for extractedEntities (backward-compat legacy column).
+     * G2-D.6: Exposed as public so callers in conversation.service.ts can do atomic
+     * legacy mirror writes (storePreviousMutation, clearPreviousMutation) instead
+     * of non-atomic findUnique+update that risks lost updates.
+     */
+    atomicCasExtractedEntities<T>(conversationId: string, operation: string, writer: (row: {
+        extractedEntities: unknown;
+        updatedAt: Date;
+    }) => Promise<{
+        count: number | null;
+        value: T;
+    }>): Promise<T | null>;
+    atomicCas<T>(conversationId: string, operation: string, writer: (row: {
+        extractedEntities: unknown;
+        updatedAt: Date;
+    }) => Promise<{
+        count: number | null;
+        value: T;
+    }>): Promise<T | null>;
     /** Generate session key deterministik per conversationId */
     private generateSessionKey;
     /** Map row Prisma mentah ke ConversationContextData */

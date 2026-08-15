@@ -33,6 +33,7 @@ router.get('/', async (req, res) => {
             success: true,
             data: {
                 name: store.name,
+                slug: store.slug,
                 email: store.email,
                 phoneNumber: store.phoneNumber,
                 description: store.description,
@@ -59,7 +60,7 @@ router.get('/', async (req, res) => {
 router.put('/', async (req, res) => {
     try {
         const storeId = req.user.storeId;
-        const { name, description, businessCategory, address, phoneNumber, timezone, operatingHours } = req.body;
+        const { name, description, businessCategory, address, phoneNumber, timezone, operatingHours, slug } = req.body;
         const updateData = {};
         if (name !== undefined) {
             if (!name.trim())
@@ -78,6 +79,22 @@ router.put('/', async (req, res) => {
             updateData.timezone = timezone;
         if (operatingHours !== undefined)
             updateData.operatingHours = operatingHours || null;
+        // Slug: hanya update bila dikirim berupa value nonempty. Empty/null/undefined
+        // → biarkan slug lama (merchant bisa mengupdate field lain tanpa sentuh slug).
+        if (slug !== undefined && slug !== null && String(slug).trim() !== '') {
+            const slugStr = String(slug).trim().toLowerCase();
+            // Validasi FORMAT sebelum masuk Prisma: huruf kecil, angka, dash;
+            // tidak boleh diawali/diakhiri dash; tidak ada dash berurut; 3-50 karakter.
+            // Ini validasi format karakter saja — sistem tidak menilai makna semantik
+            // (mis. apakah "toko-0812xxx" berisi nomor WA). Lebih aman dibanding
+            // menunggu Postgres menolak via constraint, memberi error 400 yang jelas.
+            if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slugStr) || slugStr.length < 3 || slugStr.length > 50) {
+                return res.status(400).json({
+                    error: 'Slug tidak valid. Gunakan huruf kecil, angka, dan dash saja (mis. toko-makmur). Panjang 3-50 karakter, tidak boleh diawali/diakhiri dash.',
+                });
+            }
+            updateData.slug = slugStr;
+        }
         const store = await prisma.store.update({ where: { id: storeId }, data: updateData });
         // Auto-generate and save system prompt if not already set
         await promptBuilderService.saveInitialPromptIfMissing(storeId);
@@ -85,6 +102,7 @@ router.put('/', async (req, res) => {
             success: true,
             data: {
                 name: store.name,
+                slug: store.slug,
                 description: store.description,
                 businessCategory: store.businessCategory,
                 address: store.address,
@@ -95,6 +113,14 @@ router.put('/', async (req, res) => {
         });
     }
     catch (error) {
+        // Unique constraint violation (slug dipakai toko lain) → 409.
+        // Pola per-route seperti auth.ts:80-81. Pesan spesifik agar merchant tahu
+        // ini collision slug, BUKAN error internal generik. P2002 ditangkap di level
+        // DB oleh Postgres unique index — tidak ada pre-check SELECT yang bisa
+        // menimbulkan race condition false-negative.
+        if (error?.code === 'P2002') {
+            return res.status(409).json({ error: 'Slug sudah digunakan toko lain, coba yang lain' });
+        }
         adapters.logger.error('Failed to update profile', error);
         res.status(500).json({ error: error?.message || 'Failed to update profile' });
     }

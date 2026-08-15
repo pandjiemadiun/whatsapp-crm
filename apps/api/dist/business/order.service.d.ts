@@ -21,8 +21,10 @@ export declare class OrderService {
     /**
      * Check-out: transition draft order → waiting_address.
      * Called when done-ordering signal detected.
+     * Delegates to CartAuthority.checkout which enforces stock validation,
+     * storeId filtering, and state machine transition via transitionOrder.
      */
-    finalizeDraftOrder(conversationId: string): Promise<void>;
+    finalizeDraftOrder(conversationId: string, storeId: string): Promise<string>;
     /**
      * Ambil pesanan lengkap (termasuk items) by ID.
      */
