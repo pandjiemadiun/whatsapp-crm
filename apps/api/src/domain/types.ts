@@ -340,9 +340,6 @@ export interface InterpreterResult {
   } | null;
 }
 
-/** Legacy alias — kept for backward compat */
-export type InterpreterOutput = InterpreterResult;
-
 /**
  * PipelineContext — runtime context yang dibawa sepanjang 5-stage pipeline.
  * Dibangun sekali di awal processCustomerMessage, tidak persisted ke DB.
