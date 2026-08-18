@@ -2,3 +2,9 @@
 .env
 .commandcode/
 .poolside/
+node_modules/
+.jest-cache/
+apps/*/screenshot-output/
+apps/screenshot-output/
+apps/api/logs/*.log
+marketplace/
