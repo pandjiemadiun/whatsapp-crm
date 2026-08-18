@@ -11,17 +11,17 @@
  *
  * Setiap pesan melewati:
  *   A. tryFastPath (0-LLM) — pending resolver + tier deterministik
- *   B. groqAdapter.generate (LLM interpreter) → validate → planActs
+ *   B. llmGateway.generate (LLM interpreter, sole provider decision point) → validate → planActs
  *   C. composeReply — menghasilkan teks balasan
  *   D. Workspace state persistence (addToDraft, setSummary, setLastBotMessage)
  *
- * I8: semua test di bawah adalah 0-LLM sebenarnya — groqAdapter.generate DI-MOCK.
+ * I8: semua test di bawah adalah 0-LLM sebenarnya — llmGateway.generate DI-MOCK.
  *      fallbackService juga di-stub agar test bersifat hermetik (fast path miss).
  * I13: produk katalog dibaca dari konstanta, ambang confidence dari constant.
  */
 import { describe, it, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { groqAdapter } from '../../../adapters/ai/groq.adapter.js';
+import { llmGateway } from '../../../adapters/ai/llm-gateway.js';
 import { understand } from '../reasoning.js';
 import { composeReply } from '../composer-v2.js';
 import { ResponseSource } from '../../../domain/types.js';
@@ -100,11 +100,11 @@ function makeCartResult(product, qty, qtySource, opts = {}) {
     };
 }
 // ─────────────────────────────────────────────────────────────────────────────
-// Mock: groqAdapter.generate (singleton stub — no real API calls)
+// Mock: llmGateway.generate (singleton stub — no real API calls)
 // ─────────────────────────────────────────────────────────────────────────────
 let llmCallLog;
 let mockResponses;
-const originalGenerate = groqAdapter.generate;
+const originalGenerate = llmGateway.generate;
 const mockGenerate = async (_prompt, _options) => {
     llmCallLog.push('llm-call');
     const content = mockResponses.length > 0 ? mockResponses.shift() : '';
@@ -117,10 +117,10 @@ const mockGenerate = async (_prompt, _options) => {
     };
 };
 before(() => {
-    groqAdapter.generate = mockGenerate;
+    llmGateway.generate = mockGenerate;
 });
 after(() => {
-    groqAdapter.generate = originalGenerate;
+    llmGateway.generate = originalGenerate;
 });
 beforeEach(() => {
     llmCallLog = [];

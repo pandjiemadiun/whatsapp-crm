@@ -503,10 +503,15 @@ export async function handleAddToCart(
       throw err;
     }
 
-    // Build CartOp for CartAuthority.executeOps
+    // Build CartOp for CartAuthority.executeOps.
+    // Structured/validated path: kirim productId langsung (sudah di-resolve
+    // server-side + tenant-scoped di atas) sehingga executeOps skip
+    // round-trip resolveProductByName. `product` tetap diisi sebagai fallback
+    // backward-compat bila suatu saat dipakai jalur tanpa productId.
     const ops: CartOp[] = [{
       type: 'add',
-      product: product.productName, // executeOps resolves by name
+      productId: payload.productId,
+      product: product.productName,
       qty: payload.quantity,
     }];
 

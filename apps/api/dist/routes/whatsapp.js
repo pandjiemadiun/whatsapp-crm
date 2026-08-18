@@ -198,20 +198,6 @@ router.post('/disconnect', async (req, res) => {
         res.status(500).json({ error: error?.message || 'Failed to disconnect' });
     }
 });
-// POST /api/whatsapp/logout — Legacy logout (kept for backward compat)
-router.post('/logout', async (req, res) => {
-    try {
-        const storeId = req.user.storeId;
-        const cfg = await getGowaConfig();
-        const did = deviceId(storeId);
-        await gowaFetch(cfg, `/devices/${did}/logout`, { method: 'POST' }).catch(() => { });
-        res.json({ success: true, message: 'Device logged out' });
-    }
-    catch (error) {
-        adapters.logger.error('GOWA logout failed', error);
-        res.status(500).json({ error: error?.message || 'Failed to logout' });
-    }
-});
 // GET /api/whatsapp/fonnte/status — Unified WhatsApp connection status (SATU SUMBER KEBENARAN)
 router.get('/fonnte/status', async (req, res) => {
     try {

@@ -1110,7 +1110,15 @@ export class CanonicalConversationStateService {
     async saveWorkspaceV2(conversationId, workspace) {
         // 1. Persist canonical state fields (atomic CAS)
         await this.updateCanonical(conversationId, (state) => {
-            state.pendings = workspace.pendings;
+            // G2-D.8-RACE: merge pendings instead of replacing to preserve concurrent
+            // additions. workspace.pendings is a snapshot that may be stale relative
+            // to the DB state loaded by atomicCas. Merging by ID ensures no pending
+            // is lost: existing pendings are preserved, workspace pendings update/add.
+            const existingById = new Map(state.pendings.map((p) => [p.id, p]));
+            for (const p of workspace.pendings) {
+                existingById.set(p.id, p);
+            }
+            state.pendings = Array.from(existingById.values());
             state.resolved_facts = workspace.resolved_facts;
             if (workspace.schema_version)
                 state.schema_version = workspace.schema_version;

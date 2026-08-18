@@ -254,6 +254,22 @@ export class ConversationService {
                         }
                     }
                 }
+                // G2-D.8: persist LLM clarification to canonical workspace_v2.pendings[]
+                // so the next customer turn can resolve it via tryFastPath.
+                const clarification = reasoningOutcome.result?.clarification;
+                if (clarification) {
+                    const pendingId = crypto.randomUUID();
+                    const pending = {
+                        id: pendingId,
+                        question: clarification.question,
+                        options: clarification.options,
+                        status: 'active',
+                        attempts: 0,
+                        deferred_turns: 0,
+                        asked_at: new Date().toISOString(),
+                    };
+                    workspace.pendings.push(pending);
+                }
                 try {
                     // G2-D.5: V2 engine write → canonical boundary (primary write → workspace_v2)
                     await canonicalConversationStateService.saveWorkspaceV2(conversationId, workspace);

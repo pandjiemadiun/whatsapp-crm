@@ -13,6 +13,14 @@ export declare class ProductService {
      */
     getProductsByCategory(categoryId: string): Promise<Product[]>;
     /**
+     * Related products — same store + same category as the source product,
+     * active, non-deleted, excluding the source itself.
+     * Enforces tenant isolation: a cross-tenant productId throws NOT_FOUND.
+     */
+    getRelatedProducts(productId: string, opts: {
+        storeId: string;
+    }): Promise<Product[]>;
+    /**
      * Cari produk dalam toko berdasarkan nama/sku/deskripsi (case-insensitive).
      * Hasil diurutkan: nama cocok lebih dulu, dibatasi 20 item.
      */

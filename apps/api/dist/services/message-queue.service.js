@@ -35,9 +35,8 @@ const ORDER_FUNNEL_PATTERNS = [
 const NEGATION_WORDS = [
     'nggak', 'gak', 'tidak', 'bukan', 'ga', 'tak', 'nggak', 'gak',
 ];
-// TTL untuk dedup cache (5 menit)
-const DEDUP_TTL_MS = 300000;
-const DEDUP_CACHE_MAX = 10000;
+// TTL untuk dedup (5 menit) — Redis-backed, multi-instance safe.
+const DEDUP_TTL_SECONDS = 300;
 // Coalescing window
 const TEXT_COALESCE_MIN = 5000;
 const TEXT_COALESCE_MAX = 15000;
@@ -93,8 +92,8 @@ export function isUrgent(text) {
 export class MessageQueueService {
     constructor() {
         this.processingLocks = new Map();
-        this.dedupeCache = new Map();
-        this.dedupeTimer = null;
+        /** Approximate count of unique messageIds tracked in Redis dedup (lifetime). */
+        this.dedupeTracked = 0;
         this.textBuffers = new Map();
         this.mediaBuffers = new Map();
         this.flushHandler = null;
@@ -114,40 +113,32 @@ export class MessageQueueService {
             this.processingLocks.delete(key);
         };
     }
-    /** Cek & simpan messageId ke dedup cache. Return true jika duplicate. */
-    isDuplicate(messageId) {
-        if (!messageId)
+    /**
+     * Cek & simpan messageId ke Redis dedup (SET key '1' EX 300 NX).
+     * Key: `<storeId>:msg:<messageId>` — tenant-scoped, multi-instance safe.
+     * Return true jika DUPLICATE (key sudah ada).
+     *
+     * Fail-open: jika Redis error, anggap bukan duplicate agar pesan tidak hilang.
+     */
+    async isDuplicate(storeId, messageId) {
+        if (!storeId || !messageId)
             return false;
-        const now = Date.now();
-        if (this.dedupeCache.size >= DEDUP_CACHE_MAX) {
-            for (const [mid, ts] of this.dedupeCache.entries()) {
-                if (now - ts > DEDUP_TTL_MS) {
-                    this.dedupeCache.delete(mid);
-                }
-            }
+        const key = `${storeId}:msg:${messageId}`;
+        try {
+            // Lazy import to avoid a static circular dependency:
+            // container.ts -> redis.adapter.ts -> container.ts (TDZ on `redisAdapter`).
+            const { redisAdapter } = await import('../adapters/cache/redis.adapter.js');
+            const wasSet = await redisAdapter.setIfNotExists(key, '1', DEDUP_TTL_SECONDS);
+            if (wasSet)
+                this.dedupeTracked++;
+            // wasSet=true  → key baru dibuat  → BUKAN duplicate
+            // wasSet=false → key sudah ada     → DUPLICATE
+            return !wasSet;
         }
-        if (this.dedupeCache.has(messageId)) {
-            return true;
+        catch (err) {
+            console.error('Redis dedup failed, failing open (allow)', err);
+            return false;
         }
-        this.dedupeCache.set(messageId, now);
-        if (this.dedupeCache.size > 0 && this.dedupeCache.size % 100 === 0) {
-            this.scheduleCleanup();
-        }
-        return false;
-    }
-    scheduleCleanup() {
-        if (this.dedupeTimer)
-            return;
-        this.dedupeTimer = setTimeout(() => {
-            const now = Date.now();
-            for (const [mid, ts] of this.dedupeCache.entries()) {
-                if (now - ts > DEDUP_TTL_MS) {
-                    this.dedupeCache.delete(mid);
-                }
-            }
-            this.dedupeCache.clear();
-            this.dedupeTimer = null;
-        }, DEDUP_TTL_MS);
     }
     /**
      * Buffer message untuk coalescing.
@@ -290,10 +281,6 @@ export class MessageQueueService {
     }
     /** Cleanup timers (on shutdown) */
     cleanup() {
-        if (this.dedupeTimer) {
-            clearTimeout(this.dedupeTimer);
-            this.dedupeTimer = null;
-        }
         for (const buf of this.textBuffers.values()) {
             clearTimeout(buf.timer);
         }
@@ -303,7 +290,6 @@ export class MessageQueueService {
         }
         this.mediaBuffers.clear();
         this.processingLocks.clear();
-        this.dedupeCache.clear();
         this.flushHandler = null;
     }
     /** Stats for monitoring */
@@ -311,7 +297,7 @@ export class MessageQueueService {
         return {
             activeQueues: this.processingLocks.size,
             activeLocks: this.processingLocks.size,
-            dedupeCacheSize: this.dedupeCache.size,
+            dedupeCacheSize: this.dedupeTracked,
             pendingTextBuffers: this.textBuffers.size,
             pendingMediaBuffers: this.mediaBuffers.size,
         };

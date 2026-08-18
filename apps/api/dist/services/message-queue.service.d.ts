@@ -56,8 +56,8 @@ export declare function isOrderFunnelContext(text: string): boolean;
 export declare function isUrgent(text: string): boolean;
 export declare class MessageQueueService {
     private processingLocks;
-    private dedupeCache;
-    private dedupeTimer;
+    /** Approximate count of unique messageIds tracked in Redis dedup (lifetime). */
+    private dedupeTracked;
     private textBuffers;
     private mediaBuffers;
     private flushHandler;
@@ -65,9 +65,14 @@ export declare class MessageQueueService {
     setFlushHandler(handler: FlushHandler): void;
     /** Acquire mutex for a chat — returns release function or null if locked */
     acquireLock(chatId: string): (() => void) | null;
-    /** Cek & simpan messageId ke dedup cache. Return true jika duplicate. */
-    isDuplicate(messageId: string): boolean;
-    private scheduleCleanup;
+    /**
+     * Cek & simpan messageId ke Redis dedup (SET key '1' EX 300 NX).
+     * Key: `<storeId>:msg:<messageId>` — tenant-scoped, multi-instance safe.
+     * Return true jika DUPLICATE (key sudah ada).
+     *
+     * Fail-open: jika Redis error, anggap bukan duplicate agar pesan tidak hilang.
+     */
+    isDuplicate(storeId: string, messageId: string): Promise<boolean>;
     /**
      * Buffer message untuk coalescing.
      * - Text: jika ada media buffer pending untuk user yang sama, gabungkan sebagai caption

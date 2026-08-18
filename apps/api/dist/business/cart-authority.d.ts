@@ -173,6 +173,15 @@ export declare class CartAuthority {
      * `tx` can be null (standalone query) — used during migration.
      * StoreId is ALWAYS used as a filter (tenant isolation).
      */
+    /**
+     * Resolve a product by its authoritative productId (structured/validated path).
+     *
+     * Tenant-isolated: filters by storeId, enforces isActive + not deleted.
+     * Used when a CartOp carries `productId` directly so we skip the
+     * name-based round-trip (resolveProductByName). Returns null when the
+     * product is missing / not accessible, mirroring resolveProductForCart.
+     */
+    private resolveProductById;
     private resolveProductByName;
     /**
      * Compute total price from OrderItem rows.
