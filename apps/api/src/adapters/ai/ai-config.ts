@@ -12,8 +12,8 @@ export interface AiDefaults {
 }
 
 const FALLBACKS: AiDefaults = {
-  primaryModel: 'gemini-2.0-flash',
-  fallbackModel: 'llama-3.3-70b-versatile',
+  primaryModel: 'gemini-3.6-flash',
+  fallbackModel: 'openai/gpt-oss-120b',
   temperature: 0.7,
   topP: 0.95,
   maxTokensGemini: 2048,

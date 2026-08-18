@@ -1,7 +1,7 @@
 import { AIProvider, AIGenerateOptions, AIResponse, ExtractedIntent } from './types.js';
 /**
  * GroqAdapter - Fast Intent & Entity Extractor (Gatekeeper) & AI Provider
- * Uses Groq's LLaMA 3.3 70B Versatile model (OpenAI-compatible API)
+ * Uses Groq's openai/gpt-oss-120b model (OpenAI-compatible API)
  *
  * Pricing (as of 2025):
  * - Input:  $0.05 per 1M tokens
@@ -21,6 +21,12 @@ export declare class GroqAdapter implements AIProvider {
     getApiKey(): Promise<string | null>;
     getName(): string;
     getModel(): string;
+    /**
+     * GPT-OSS compatibility guard — true only for the openai/gpt-oss-* family.
+     * Local to GroqAdapter so no provider-specific logic leaks into the
+     * Conversation Engine / business layer.
+     */
+    private isGptOssModel;
     generate(prompt: string, options?: AIGenerateOptions): Promise<AIResponse>;
     private parseRetryAfter;
     /**
@@ -36,6 +42,12 @@ export declare class GroqAdapter implements AIProvider {
      * Kategorisasi HTTP status code ke ErrorCategory
      */
     private categorizeHttpError;
+    /**
+     * Observability-only: read & sanitize the provider error body for a non-2xx
+     * response. Captures error.code/type/message only — never the prompt,
+     * customer content, API key, or request headers. Returns '' if unavailable.
+     */
+    private extractProviderError;
 }
 export declare const groqAdapter: GroqAdapter;
 //# sourceMappingURL=groq.adapter.d.ts.map
