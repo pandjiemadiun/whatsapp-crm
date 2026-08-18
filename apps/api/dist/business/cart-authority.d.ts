@@ -65,12 +65,12 @@ export declare class CartAuthority {
      * Remove a line item from the cart by lineItemId.
      * Invariant: line item belongs to this conversation's draft order.
      */
-    removeLine(conversationId: string, lineItemId: string): Promise<CartLine[]>;
+    removeLine(conversationId: string, lineItemId: string, tx?: any): Promise<CartLine[]>;
     /**
      * Update quantity of a line item. qty = 0 deletes the line item.
      * Invariant: quantity >= 0; line item belongs to cart.
      */
-    updateQuantity(conversationId: string, lineItemId: string, qty: number): Promise<CartLine[]>;
+    updateQuantity(conversationId: string, lineItemId: string, qty: number, tx?: any): Promise<CartLine[]>;
     /**
      * Clear all items from the cart. Deletes all OrderItem rows for the
      * conversation's draft order. Does NOT delete the Order row itself

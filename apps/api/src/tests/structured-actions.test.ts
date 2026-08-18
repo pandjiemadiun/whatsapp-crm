@@ -715,6 +715,242 @@ test('§8.14: structured action and natural-language action resolve to same cust
 });
 
 // ═════════════════════════════════════════════════════════════
+// P6-2 — Typed REMOVE_FROM_CART + UPDATE_CART_QUANTITY
+// Reuse the SAME idempotency/lock pattern as ADD_TO_CART (claim →
+// executeClaimedAction, FOR UPDATE + re-check, SAVEPOINT). Delegates to
+// CartAuthority.removeLine / updateQuantity (logic untouched, only an
+// optional tx param added so they run inside the locked transaction).
+// ═════════════════════════════════════════════════════════════
+
+async function getLineItemIdForConversation(convId: string, pid: string): Promise<string> {
+  const item = await prisma.orderItem.findFirst({
+    where: { order: { conversationId: convId, orderStatus: 'draft' }, productId: pid },
+    select: { id: true },
+  });
+  return item!.id;
+}
+
+test('P6.2.1: REMOVE_FROM_CART removes the line item and returns applied', async () => {
+  const conv = await createConversation(storeId, customerId);
+  const ctx = makeActionContext({ conversationId: conv });
+  await executeAction('ADD_TO_CART', makeAddToCartRequest(randomUUID(), 2), ctx);
+  const lineItemId = await getLineItemIdForConversation(conv, productId);
+
+  const rmId = randomUUID();
+  const result = await executeAction(
+    'REMOVE_FROM_CART',
+    { actionId: rmId, type: 'REMOVE_FROM_CART', payload: { lineItemId } },
+    ctx,
+  );
+
+  assert.equal(result.success, true);
+  assert.equal(result.status, 'applied');
+  assert.ok(result.data.result.cart, 'cart must be present');
+  assert.equal(result.data.result.removedLineItemId, lineItemId);
+
+  // DB readback: item gone from cart
+  const remaining = await prisma.orderItem.findMany({
+    where: { order: { conversationId: conv, orderStatus: 'draft' } },
+  });
+  assert.equal(remaining.length, 0, 'line item must be removed from cart');
+});
+
+test('P6.2.2: UPDATE_CART_QUANTITY changes qty and recomputes subtotal/total from DB', async () => {
+  const conv = await createConversation(storeId, customerId);
+  const ctx = makeActionContext({ conversationId: conv });
+  await executeAction('ADD_TO_CART', makeAddToCartRequest(randomUUID(), 1), ctx);
+  const lineItemId = await getLineItemIdForConversation(conv, productId);
+
+  const upId = randomUUID();
+  const result = await executeAction(
+    'UPDATE_CART_QUANTITY',
+    { actionId: upId, type: 'UPDATE_CART_QUANTITY', payload: { lineItemId, quantity: 5 } },
+    ctx,
+  );
+
+  assert.equal(result.success, true);
+  assert.equal(result.status, 'applied');
+  assert.equal(result.data.result.updatedLineItemId, lineItemId);
+  assert.equal(result.data.result.quantity, 5);
+
+  // DB readback: qty + subtotal from DB (unitPrice 25000 * 5 = 125000)
+  const item = await prisma.orderItem.findUnique({ where: { id: lineItemId } });
+  assert.ok(item, 'item must still exist');
+  assert.equal(item.quantity, 5);
+  assert.equal(item.unitPrice, 25000);
+  assert.equal(item.subtotal, 125000);
+
+  const order = await prisma.order.findFirst({ where: { conversationId: conv, orderStatus: 'draft' } });
+  assert.equal(order!.totalPrice, 125000, 'order total must be recomputed from DB');
+  assert.equal(result.data.result.cart.total, 125000);
+});
+
+test('P6.2.3: REMOVE_FROM_CART retry with same actionId → already_applied, no double-execute', async () => {
+  const conv = await createConversation(storeId, customerId);
+  const ctx = makeActionContext({ conversationId: conv });
+  await executeAction('ADD_TO_CART', makeAddToCartRequest(randomUUID(), 2), ctx);
+  const lineItemId = await getLineItemIdForConversation(conv, productId);
+
+  let removeLineCalls = 0;
+  const origRemove = (cartAuthority as any).removeLine.bind(cartAuthority);
+  (cartAuthority as any).removeLine = function (this: any, ...args: any[]) {
+    removeLineCalls++;
+    return origRemove(...args);
+  };
+
+  const rmId = randomUUID();
+  const first = await executeAction(
+    'REMOVE_FROM_CART',
+    { actionId: rmId, type: 'REMOVE_FROM_CART', payload: { lineItemId } },
+    ctx,
+  );
+  assert.equal(first.status, 'applied');
+
+  const beforeRetry = await prisma.orderItem.count({ where: { order: { conversationId: conv } } });
+  assert.equal(beforeRetry, 0, 'item already removed after first call');
+
+  const second = await executeAction(
+    'REMOVE_FROM_CART',
+    { actionId: rmId, type: 'REMOVE_FROM_CART', payload: { lineItemId } },
+    ctx,
+  );
+  assert.equal(second.status, 'already_applied', 'retry must return already_applied');
+
+  const afterRetry = await prisma.orderItem.count({ where: { order: { conversationId: conv } } });
+  assert.equal(afterRetry, 0, 'retry must NOT remove again (no double-execute)');
+
+  // removeLine called exactly once across both attempts
+  assert.equal(removeLineCalls, 1, 'removeLine must execute only once for the same actionId');
+  (cartAuthority as any).removeLine = origRemove;
+
+  const records = await prisma.actionIdempotency.findMany({
+    where: { storeId, customerId, actionType: 'REMOVE_FROM_CART', actionId: rmId },
+  });
+  assert.equal(records.length, 1, 'exactly one idempotency record for the actionId');
+  assert.equal(records[0].status, ActionStatus.COMPLETED);
+});
+
+test('P6.2.4: UPDATE_CART_QUANTITY retry with same actionId → already_applied, no double-update', async () => {
+  const conv = await createConversation(storeId, customerId);
+  const ctx = makeActionContext({ conversationId: conv });
+  await executeAction('ADD_TO_CART', makeAddToCartRequest(randomUUID(), 1), ctx);
+  const lineItemId = await getLineItemIdForConversation(conv, productId);
+
+  let updateQtyCalls = 0;
+  const origUpdate = (cartAuthority as any).updateQuantity.bind(cartAuthority);
+  (cartAuthority as any).updateQuantity = function (this: any, ...args: any[]) {
+    updateQtyCalls++;
+    return origUpdate(...args);
+  };
+
+  const upId = randomUUID();
+  const first = await executeAction(
+    'UPDATE_CART_QUANTITY',
+    { actionId: upId, type: 'UPDATE_CART_QUANTITY', payload: { lineItemId, quantity: 4 } },
+    ctx,
+  );
+  assert.equal(first.status, 'applied');
+
+  const second = await executeAction(
+    'UPDATE_CART_QUANTITY',
+    { actionId: upId, type: 'UPDATE_CART_QUANTITY', payload: { lineItemId, quantity: 4 } },
+    ctx,
+  );
+  assert.equal(second.status, 'already_applied', 'retry must return already_applied');
+
+  const item = await prisma.orderItem.findUnique({ where: { id: lineItemId } });
+  assert.equal(item!.quantity, 4, 'quantity must not be re-applied/doubled on retry');
+  assert.equal(updateQtyCalls, 1, 'updateQuantity must execute only once for the same actionId');
+  (cartAuthority as any).updateQuantity = origUpdate;
+});
+
+test('P6.2.5: REMOVE_FROM_CART tenant mismatch is rejected (structured error, no cross-tenant deletion)', async () => {
+  // Create a line item in a DIFFERENT store's draft order
+  const otherConv = await createConversation(storeIdOther, customerIdOther);
+  const otherOrder = await prisma.order.create({
+    data: {
+      id: `ord-${randomUUID()}`,
+      conversationId: otherConv,
+      storeId: storeIdOther,
+      customerId: customerIdOther,
+      orderStatus: 'draft',
+      totalPrice: 0,
+      currency: 'IDR',
+      items: [],
+    },
+  });
+  const otherItem = await prisma.orderItem.create({
+    data: {
+      orderId: otherOrder.id,
+      productId: productIdOtherStore,
+      productName: 'Produk Toko Lain',
+      quantity: 1,
+      unitPrice: 99999,
+      subtotal: 99999,
+    },
+  });
+
+  const rmId = randomUUID();
+  const result = await executeAction(
+    'REMOVE_FROM_CART',
+    { actionId: rmId, type: 'REMOVE_FROM_CART', payload: { lineItemId: otherItem.id } },
+    makeActionContext(),
+  );
+
+  assert.equal(result.success, false, 'cross-tenant remove must be rejected');
+  assert.ok(result.error, 'structured error must be present');
+  assert.equal(result.status, 'already_applied');
+
+  // Cross-tenant item must remain intact (no deletion)
+  const stillThere = await prisma.orderItem.findUnique({ where: { id: otherItem.id } });
+  assert.ok(stillThere, 'cross-tenant line item must NOT be removed');
+
+  const rec = await prisma.actionIdempotency.findUnique({
+    where: {
+      storeId_customerId_actionType_actionId: {
+        storeId, customerId, actionType: 'REMOVE_FROM_CART', actionId: rmId,
+      },
+    },
+  });
+  assert.ok(rec, 'idempotency record must exist');
+  assert.equal(rec.status, ActionStatus.FAILED, 'tenant mismatch must persist as FAILED');
+});
+
+test('P6.2.6: REMOVE_FROM_CART / UPDATE_CART_QUANTITY with non-existent lineItemId → structured business error, not a crash', async () => {
+  // REMOVE non-existent
+  const rmId = randomUUID();
+  const rmResult = await executeAction(
+    'REMOVE_FROM_CART',
+    { actionId: rmId, type: 'REMOVE_FROM_CART', payload: { lineItemId: randomUUID() } },
+    makeActionContext(),
+  );
+  assert.equal(rmResult.success, false);
+  assert.ok(rmResult.error?.code, 'structured error code required (not a raw crash)');
+  assert.equal(rmResult.status, 'already_applied');
+
+  // UPDATE non-existent
+  const upId = randomUUID();
+  const upResult = await executeAction(
+    'UPDATE_CART_QUANTITY',
+    { actionId: upId, type: 'UPDATE_CART_QUANTITY', payload: { lineItemId: randomUUID(), quantity: 3 } },
+    makeActionContext(),
+  );
+  assert.equal(upResult.success, false);
+  assert.ok(upResult.error?.code, 'structured error code required (not a raw crash)');
+  assert.equal(upResult.status, 'already_applied');
+
+  // Both must be recorded as FAILED, not throw
+  const rmRec = await prisma.actionIdempotency.findUnique({
+    where: { storeId_customerId_actionType_actionId: { storeId, customerId, actionType: 'REMOVE_FROM_CART', actionId: rmId } },
+  });
+  assert.equal(rmRec?.status, ActionStatus.FAILED);
+  const upRec = await prisma.actionIdempotency.findUnique({
+    where: { storeId_customerId_actionType_actionId: { storeId, customerId, actionType: 'UPDATE_CART_QUANTITY', actionId: upId } },
+  });
+  assert.equal(upRec?.status, ActionStatus.FAILED);
+});
+
+// ═════════════════════════════════════════════════════════════
 // §8 Test 17 — Business validation failure: rollback + FAILED
 // ═════════════════════════════════════════════════════════════
 test('§8.17: business validation failure rolls back cart mutation, leaves no partial OrderItem, persists FAILED with structured error', async () => {

@@ -56,6 +56,90 @@ export declare const AddToCartResponseSchema: z.ZodObject<{
     }, z.core.$strip>>;
 }, z.core.$strip>;
 export type AddToCartResponse = z.infer<typeof AddToCartResponseSchema>;
+/** REMOVE_FROM_CART request schema (P6-2 — cart mutation, idempotent).
+ *  Identifier is lineItemId (OrderItem.id) — consistent with existing
+ *  CartAuthority.removeLine()/updateQuantity() which are keyed by lineItemId.
+ *  The line item is re-validated server-side inside the tenant-scoped
+ *  conversation cart, so a client-supplied lineItemId is never trusted as final. */
+export declare const RemoveFromCartRequestSchema: z.ZodObject<{
+    actionId: z.ZodString;
+    type: z.ZodLiteral<"REMOVE_FROM_CART">;
+    payload: z.ZodObject<{
+        lineItemId: z.ZodString;
+    }, z.core.$strip>;
+}, z.core.$strip>;
+export type RemoveFromCartRequest = z.infer<typeof RemoveFromCartRequestSchema>;
+/** REMOVE_FROM_CART response schema — follows §5.4 AddToCartResponse pattern. */
+export declare const RemoveFromCartResponseSchema: z.ZodObject<{
+    success: z.ZodBoolean;
+    actionId: z.ZodString;
+    type: z.ZodLiteral<"REMOVE_FROM_CART">;
+    status: z.ZodEnum<{
+        already_applied: "already_applied";
+        applied: "applied";
+        action_in_progress: "action_in_progress";
+    }>;
+    result: z.ZodOptional<z.ZodObject<{
+        removedLineItemId: z.ZodString;
+        cart: z.ZodObject<{
+            items: z.ZodArray<z.ZodObject<{
+                id: z.ZodString;
+                productId: z.ZodNullable<z.ZodString>;
+                productName: z.ZodString;
+                quantity: z.ZodNumber;
+                unitPrice: z.ZodNumber;
+                subtotal: z.ZodNumber;
+            }, z.core.$strip>>;
+            total: z.ZodNumber;
+        }, z.core.$strip>;
+    }, z.core.$strip>>;
+    error: z.ZodOptional<z.ZodObject<{
+        code: z.ZodString;
+        message: z.ZodString;
+    }, z.core.$strip>>;
+}, z.core.$strip>;
+export type RemoveFromCartResponse = z.infer<typeof RemoveFromCartResponseSchema>;
+/** UPDATE_CART_QUANTITY request schema (P6-2 — cart mutation, idempotent). */
+export declare const UpdateCartQuantityRequestSchema: z.ZodObject<{
+    actionId: z.ZodString;
+    type: z.ZodLiteral<"UPDATE_CART_QUANTITY">;
+    payload: z.ZodObject<{
+        lineItemId: z.ZodString;
+        quantity: z.ZodNumber;
+    }, z.core.$strip>;
+}, z.core.$strip>;
+export type UpdateCartQuantityRequest = z.infer<typeof UpdateCartQuantityRequestSchema>;
+/** UPDATE_CART_QUANTITY response schema — follows §5.4 AddToCartResponse pattern. */
+export declare const UpdateCartQuantityResponseSchema: z.ZodObject<{
+    success: z.ZodBoolean;
+    actionId: z.ZodString;
+    type: z.ZodLiteral<"UPDATE_CART_QUANTITY">;
+    status: z.ZodEnum<{
+        already_applied: "already_applied";
+        applied: "applied";
+        action_in_progress: "action_in_progress";
+    }>;
+    result: z.ZodOptional<z.ZodObject<{
+        updatedLineItemId: z.ZodString;
+        quantity: z.ZodNumber;
+        cart: z.ZodObject<{
+            items: z.ZodArray<z.ZodObject<{
+                id: z.ZodString;
+                productId: z.ZodNullable<z.ZodString>;
+                productName: z.ZodString;
+                quantity: z.ZodNumber;
+                unitPrice: z.ZodNumber;
+                subtotal: z.ZodNumber;
+            }, z.core.$strip>>;
+            total: z.ZodNumber;
+        }, z.core.$strip>;
+    }, z.core.$strip>>;
+    error: z.ZodOptional<z.ZodObject<{
+        code: z.ZodString;
+        message: z.ZodString;
+    }, z.core.$strip>>;
+}, z.core.$strip>;
+export type UpdateCartQuantityResponse = z.infer<typeof UpdateCartQuantityResponseSchema>;
 /** SHOW_RELATED_PRODUCTS request schema (P1 — non-mutating discovery) */
 export declare const ShowRelatedProductsRequestSchema: z.ZodObject<{
     actionId: z.ZodString;
@@ -249,6 +333,24 @@ export interface ActionDefinition<Req, Res> {
  * Delegates to CartAuthority.executeOps with external tx
  */
 export declare function handleAddToCart(request: AddToCartRequest, context: ActionContext): Promise<ActionResult<AddToCartResponse>>;
+/**
+ * REMOVE_FROM_CART Handler (P6-2)
+ * Delegates to CartAuthority.removeLine within the SAME idempotency/lock
+ * pattern as handleAddToCart (claim → executeClaimedAction, FOR UPDATE +
+ * re-check, SAVEPOINT for business errors). removeLine re-validates the
+ * lineItemId ownership server-side (tenant-scoped draft order), so a
+ * cross-tenant / not-in-cart lineItemId yields a structured ITEM_NOT_FOUND
+ * business error (FAILED), never a raw crash.
+ */
+export declare function handleRemoveFromCart(request: RemoveFromCartRequest, context: ActionContext): Promise<ActionResult<RemoveFromCartResponse>>;
+/**
+ * UPDATE_CART_QUANTITY Handler (P6-2)
+ * Delegates to CartAuthority.updateQuantity within the SAME idempotency/lock
+ * pattern as handleAddToCart. updateQuantity re-validates the lineItemId
+ * ownership server-side; qty=0 deletes the line. A not-in-cart / cross-tenant
+ * lineItemId yields a structured ITEM_NOT_FOUND business error (FAILED).
+ */
+export declare function handleUpdateCartQuantity(request: UpdateCartQuantityRequest, context: ActionContext): Promise<ActionResult<UpdateCartQuantityResponse>>;
 /**
  * SHOW_RELATED_PRODUCTS Handler (P1 — non-mutating, read-only).
  *

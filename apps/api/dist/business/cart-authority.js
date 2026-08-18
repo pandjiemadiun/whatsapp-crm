@@ -190,8 +190,9 @@ export class CartAuthority {
      * Remove a line item from the cart by lineItemId.
      * Invariant: line item belongs to this conversation's draft order.
      */
-    async removeLine(conversationId, lineItemId) {
-        return await prisma.$transaction(async (tx) => {
+    async removeLine(conversationId, lineItemId, tx) {
+        const run = async (client) => {
+            const tx = client;
             const order = await this.findDraftOrder(tx, conversationId);
             if (!order) {
                 throw new CartInvariantError('No active cart for this conversation', 'CART_NOT_FOUND');
@@ -217,17 +218,23 @@ export class CartAuthority {
             });
             await this.syncConfirmedItemsJson(tx, conversationId, confirmedItems);
             return items;
-        });
+        };
+        // Reuse caller's transaction when provided (locked idempotency pattern);
+        // otherwise open a fresh one. Core logic unchanged.
+        if (tx)
+            return run(tx);
+        return prisma.$transaction(run);
     }
     /**
      * Update quantity of a line item. qty = 0 deletes the line item.
      * Invariant: quantity >= 0; line item belongs to cart.
      */
-    async updateQuantity(conversationId, lineItemId, qty) {
+    async updateQuantity(conversationId, lineItemId, qty, tx) {
         if (qty < 0) {
             throw new CartInvariantError('Quantity must be >= 0', 'INVALID_QUANTITY');
         }
-        return await prisma.$transaction(async (tx) => {
+        const run = async (client) => {
+            const tx = client;
             const order = await this.findDraftOrder(tx, conversationId);
             if (!order) {
                 throw new CartInvariantError('No active cart for this conversation', 'CART_NOT_FOUND');
@@ -266,7 +273,12 @@ export class CartAuthority {
             });
             await this.syncConfirmedItemsJson(tx, conversationId, confirmedItems);
             return items;
-        });
+        };
+        // Reuse caller's transaction when provided (locked idempotency pattern);
+        // otherwise open a fresh one. Core logic unchanged.
+        if (tx)
+            return run(tx);
+        return prisma.$transaction(run);
     }
     /**
      * Clear all items from the cart. Deletes all OrderItem rows for the
