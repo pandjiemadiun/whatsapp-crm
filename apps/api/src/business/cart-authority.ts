@@ -512,22 +512,29 @@ export class CartAuthority {
       });
 
       for (const op of ops) {
-        // Resolve product name → productId for both add and remove
+        // Resolve product → productId for both add and remove.
+        // Structured/validated path: bila op.productId ada, resolve langsung
+        // (skip resolveProductByName). LLM/natural-language path (tanpa
+        // productId) tetap menggunakan resolveProductByName seperti semula.
         let result: { productId: string; productName: string; unitPrice: number } | null;
-        try {
-          result = await this.resolveProductByName(tx as any, storeId, op.product);
-        } catch (err) {
-          if (err instanceof ProductAmbiguousError) {
-            // DO NOT mutate cart on ambiguous product
-            adapters.logger.warn('CartAuthority: ambiguous product name, skipping op', {
-              product: op.product,
-              storeId,
-              conversationId,
-              candidates: err.candidates,
-            });
-            continue;
+        if (op.productId) {
+          result = await this.resolveProductById(tx as any, storeId, op.productId);
+        } else {
+          try {
+            result = await this.resolveProductByName(tx as any, storeId, op.product);
+          } catch (err) {
+            if (err instanceof ProductAmbiguousError) {
+              // DO NOT mutate cart on ambiguous product
+              adapters.logger.warn('CartAuthority: ambiguous product name, skipping op', {
+                product: op.product,
+                storeId,
+                conversationId,
+                candidates: err.candidates,
+              });
+              continue;
+            }
+            throw err;
           }
-          throw err;
         }
 
         if (op.type === 'add') {
@@ -966,6 +973,34 @@ export class CartAuthority {
    * `tx` can be null (standalone query) — used during migration.
    * StoreId is ALWAYS used as a filter (tenant isolation).
    */
+  /**
+   * Resolve a product by its authoritative productId (structured/validated path).
+   *
+   * Tenant-isolated: filters by storeId, enforces isActive + not deleted.
+   * Used when a CartOp carries `productId` directly so we skip the
+   * name-based round-trip (resolveProductByName). Returns null when the
+   * product is missing / not accessible, mirroring resolveProductForCart.
+   */
+  private async resolveProductById(
+    tx: any,
+    storeId: string,
+    productId: string,
+  ): Promise<{ productId: string; productName: string; unitPrice: number } | null> {
+    const client = tx ?? prisma;
+    const product = await client.product.findUnique({
+      where: { id: productId },
+      select: { id: true, name: true, price: true, storeId: true, isActive: true, deletedAt: true },
+    });
+    if (!product) return null;
+    if (product.storeId !== storeId) return null;
+    if (!product.isActive || product.deletedAt) return null;
+    return {
+      productId: product.id,
+      productName: product.name,
+      unitPrice: product.price,
+    };
+  }
+
   private async resolveProductByName(
     tx: any,
     storeId: string,

@@ -7,6 +7,14 @@ export declare class RedisAdapter {
     del(key: string): Promise<void>;
     keys(pattern: string): Promise<string[]>;
     clearStore(storeId: string): Promise<void>;
+    getTtl(key: string): Promise<number | null>;
+    /**
+     * Atomic SET key value EX ttlSeconds NX.
+     * Returns true if the key was newly set (did NOT previously exist),
+     * false if the key already existed (SET NX was a no-op).
+     * Used by webhook dedup (multi-instance safe — shared Redis counter).
+     */
+    setIfNotExists(key: string, value: string, ttlSeconds?: number): Promise<boolean>;
     close(): Promise<void>;
     ping(): Promise<boolean>;
 }

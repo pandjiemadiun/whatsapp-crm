@@ -23,6 +23,12 @@ redis.on('error', (err) => {
 });
 export class RedisRateLimitStore {
     constructor(prefix, windowMs) {
+        /**
+         * localKeys = false: this store is centralised (Redis), NOT per-instance
+         * in-memory. express-rate-limit uses this to decide whether rate-limit state
+         * is shared across worker processes. For Redis it MUST be false.
+         */
+        this.localKeys = false;
         this.prefix = prefix;
         this.windowMs = windowMs;
     }

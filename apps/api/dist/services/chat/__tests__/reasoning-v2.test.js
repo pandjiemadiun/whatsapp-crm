@@ -4,14 +4,14 @@
  *   npx tsx --env-file=../../.env --test --test-force-exit \
  *     src/services/chat/__tests__/reasoning-v2.test.ts
  *
- * I8: semua test di bawah adalah 0-LLM — groqAdapter.generate DI-MOCK singleton.
- *      fallbackService juga di-stub. Tidak ada panggilan API asli atau DB.
+ * I8: semua test di bawah adalah 0-LLM — llmGateway.generate DI-MOCK (gateway adalah
+ *      sole provider decision point). fallbackService juga di-stub. Tidak ada panggilan API asli atau DB.
  * I13: nilai ambang (SELECTION_CONFIDENCE_THRESHOLD, CLARIFICATION_MAX_ATTEMPTS)
  *      dibaca dari constant, tidak dikode-kan keras.
  */
 import { describe, it, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { groqAdapter } from '../../../adapters/ai/groq.adapter.js';
+import { llmGateway } from '../../../adapters/ai/llm-gateway.js';
 import { understand } from '../reasoning.js';
 import { ResponseSource } from '../../../domain/types.js';
 import { SELECTION_CONFIDENCE_THRESHOLD, } from '../constants-v2.js';
@@ -142,13 +142,13 @@ function makePositionalSupersedesResult() {
     };
 }
 // ─────────────────────────────────────────────────────────────────────────────
-// Mock: groqAdapter.generate (singleton stub)
+// Mock: llmGateway.generate (singleton stub)
 // ─────────────────────────────────────────────────────────────────────────────
 let llmCalls = 0;
 let lastPrompt = '';
 let mockResponses;
 let mockThrow;
-const originalGenerate = groqAdapter.generate;
+const originalGenerate = llmGateway.generate;
 const mockGenerate = async (prompt, _options) => {
     llmCalls++;
     lastPrompt = prompt;
@@ -164,10 +164,10 @@ const mockGenerate = async (prompt, _options) => {
     };
 };
 before(() => {
-    groqAdapter.generate = mockGenerate;
+    llmGateway.generate = mockGenerate;
 });
 after(() => {
-    groqAdapter.generate = originalGenerate;
+    llmGateway.generate = originalGenerate;
 });
 beforeEach(() => {
     llmCalls = 0;

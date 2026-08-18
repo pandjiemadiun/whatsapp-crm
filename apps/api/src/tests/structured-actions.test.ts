@@ -35,8 +35,29 @@ import { randomUUID } from 'node:crypto';
 import { prisma } from '../infrastructure/prisma.js';
 import { executeAction, actionRegistry, AddToCartRequestSchema, handleAddToCart, LEASE_FINAL_MS } from '../business/action-registry.js';
 import { ActionStatus } from '../business/action-registry.js';
+import { cartAuthority } from '../business/cart-authority.js';
 import { ApiError } from '../errors/ApiError.js';
 import { ErrorCodes } from '../constants/errorCodes.js';
+
+/** Spy-once helper: wraps a method, counts calls, restores after fn. */
+async function withSpy<T extends object, K extends keyof T>(
+  obj: T,
+  k: K,
+  fn: () => Promise<void>,
+): Promise<{ calls: number }> {
+  const original = obj[k];
+  const calls = { count: 0 };
+  (obj as any)[k] = function (this: any, ...args: any[]) {
+    calls.count++;
+    return (original as any).apply(this, args);
+  };
+  try {
+    await fn();
+  } finally {
+    (obj as any)[k] = original;
+  }
+  return { calls: calls.count };
+}
 
 const TEST_PREFIX = 'test-action-v2';
 
@@ -333,6 +354,58 @@ test('§8.4: product identity comes from productId, not product-name matching in
   assert.equal(addedItem.productName, productFromDb.name);
   assert.equal(addedItem.quantity, 2);
   assert.equal(addedItem.unitPrice, 25000);
+});
+
+// ═════════════════════════════════════════════════════════════
+// §8 Test 4b — Structured ADD_TO_CART with productId does NOT
+//               round-trip through resolveProductByName.
+// ═════════════════════════════════════════════════════════════
+test('§8.4b: structured ADD_TO_CART (productId) skips resolveProductByName and resolves by id', async () => {
+  const actionId = randomUUID();
+
+  const { calls } = await withSpy(
+    cartAuthority as any,
+    'resolveProductByName',
+    async () => {
+      const result = await executeAction('ADD_TO_CART', makeAddToCartRequest(actionId, 3), makeActionContext());
+      assert.equal(result.success, true);
+      assert.equal(result.data.result.productId, productId);
+    },
+  );
+
+  assert.equal(calls, 0, 'resolveProductByName must NOT be called for structured productId path');
+
+  // Cart tetap kebentuk benar: OrderItem productId/qty sesuai request.
+  const orderItems = await prisma.orderItem.findMany({
+    where: { order: { conversationId, orderStatus: 'draft' } },
+  });
+  const addedItem = orderItems.find((i) => i.productId === productId);
+  assert.ok(addedItem, 'OrderItem must be created with the requested productId');
+  assert.equal(addedItem.quantity, 3);
+  assert.equal(addedItem.unitPrice, 25000);
+});
+
+// ═════════════════════════════════════════════════════════════
+// §8 Test 4c — By-name CartOp (LLM/natural-language fallback)
+//               STILL resolves via resolveProductByName.
+// ═════════════════════════════════════════════════════════════
+test('§8.4c: by-name CartOp still uses resolveProductByName (LLM fallback preserved)', async () => {
+  const byNameConv = await createConversation(storeId, customerId);
+  const { calls } = await withSpy(
+    cartAuthority as any,
+    'resolveProductByName',
+    async () => {
+      const items = await cartAuthority.executeOps(
+        [{ type: 'add', product: 'Produk Test', qty: 1 }],
+        storeId,
+        customerId,
+        byNameConv,
+      );
+      assert.ok(Array.isArray(items));
+    },
+  );
+
+  assert.equal(calls, 1, 'by-name path must still call resolveProductByName');
 });
 
 // ═════════════════════════════════════════════════════════════

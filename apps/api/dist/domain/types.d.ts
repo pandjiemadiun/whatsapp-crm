@@ -258,6 +258,13 @@ export interface CartOp {
     product: string;
     qty?: number;
     price?: number;
+    /**
+     * Opsional productId langsung (structured/validated path).
+     * Bila ada, CartAuthority.resolveProductById() pakai ini langsung
+     * (skip resolveProductByName). Bila tidak ada, fallback ke by-name
+     * agar jalur LLM/natural-language tetap tidak berubah.
+     */
+    productId?: string;
 }
 /** Opsi clarification untuk pending state */
 export interface ClarificationOption {
@@ -319,8 +326,6 @@ export interface InterpreterResult {
         expected_type: 'affirmative' | 'choice' | 'yes_no';
     } | null;
 }
-/** Legacy alias — kept for backward compat */
-export type InterpreterOutput = InterpreterResult;
 /**
  * PipelineContext — runtime context yang dibawa sepanjang 5-stage pipeline.
  * Dibangun sekali di awal processCustomerMessage, tidak persisted ke DB.

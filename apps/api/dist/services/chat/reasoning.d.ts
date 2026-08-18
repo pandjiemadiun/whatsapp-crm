@@ -54,7 +54,7 @@ export declare function convertPositionalSupersedes(result: InterpreterResultV2)
  *      - hit → return resolved/tier (llmCalls=0)
  *      - miss → lanjut ke B
  *   B. LLM single-pass:
- *      - attempt 1: groqAdapter.generate → parse → validate
+ *      - attempt 1: llmGateway.generate → parse → validate
  *      - ok → return reasoned (llmCalls=1)
  *      - ok=false, retryable → attempt 2 (with validator feedback)
  *        - ok → return reasoned (llmCalls=2)

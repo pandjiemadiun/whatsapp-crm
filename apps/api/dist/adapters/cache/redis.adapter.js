@@ -1,5 +1,5 @@
 import Redis from 'ioredis';
-import { adapters } from '../container.js';
+import winstonLogger from '../../utils/logger.js';
 const redis = new Redis({
     host: process.env.REDIS_HOST || 'localhost',
     port: parseInt(process.env.REDIS_PORT || '6379'),
@@ -7,10 +7,10 @@ const redis = new Redis({
     retryStrategy: (times) => Math.min(times * 50, 2000),
 });
 redis.on('connect', () => {
-    adapters.logger.info('📍 Redis connected');
+    winstonLogger.info('📍 Redis connected');
 });
 redis.on('error', (err) => {
-    adapters.logger.error('Redis connection error', err);
+    winstonLogger.error('Redis connection error', err);
 });
 export class RedisAdapter {
     async lpush(key, value) {
@@ -18,7 +18,7 @@ export class RedisAdapter {
             return await redis.lpush(key, value);
         }
         catch (err) {
-            adapters.logger.error(`Redis LPUSH failed: ${key}`, err);
+            winstonLogger.error(`Redis LPUSH failed: ${key}`, err);
             return 0;
         }
     }
@@ -27,7 +27,7 @@ export class RedisAdapter {
             return await redis.lrange(key, start, stop);
         }
         catch (err) {
-            adapters.logger.error(`Redis LRANGE failed: ${key}`, err);
+            winstonLogger.error(`Redis LRANGE failed: ${key}`, err);
             return [];
         }
     }
@@ -36,7 +36,7 @@ export class RedisAdapter {
             await redis.ltrim(key, start, stop);
         }
         catch (err) {
-            adapters.logger.error(`Redis LTRIM failed: ${key}`, err);
+            winstonLogger.error(`Redis LTRIM failed: ${key}`, err);
         }
     }
     async get(key) {
@@ -45,7 +45,7 @@ export class RedisAdapter {
             return data ? JSON.parse(data) : null;
         }
         catch (err) {
-            adapters.logger.error(`Redis GET failed: ${key}`, err);
+            winstonLogger.error(`Redis GET failed: ${key}`, err);
             return null;
         }
     }
@@ -54,7 +54,7 @@ export class RedisAdapter {
             await redis.setex(key, ttlSeconds, JSON.stringify(value));
         }
         catch (err) {
-            adapters.logger.error(`Redis SET failed: ${key}`, err);
+            winstonLogger.error(`Redis SET failed: ${key}`, err);
         }
     }
     async del(key) {
@@ -62,7 +62,7 @@ export class RedisAdapter {
             await redis.del(key);
         }
         catch (err) {
-            adapters.logger.error(`Redis DEL failed: ${key}`, err);
+            winstonLogger.error(`Redis DEL failed: ${key}`, err);
         }
     }
     async keys(pattern) {
@@ -70,7 +70,7 @@ export class RedisAdapter {
             return await redis.keys(pattern);
         }
         catch (err) {
-            adapters.logger.error(`Redis KEYS failed: ${pattern}`, err);
+            winstonLogger.error(`Redis KEYS failed: ${pattern}`, err);
             return [];
         }
     }
@@ -79,11 +79,40 @@ export class RedisAdapter {
             const keys = await this.keys(`knowledge:${storeId}:*`);
             if (keys.length > 0) {
                 await redis.del(...keys);
-                adapters.logger.info(`Redis: cleared ${keys.length} keys for store ${storeId}`);
+                winstonLogger.info(`Redis: cleared ${keys.length} keys for store ${storeId}`);
             }
         }
         catch (err) {
-            adapters.logger.error(`Redis CLEAR failed: ${storeId}`, err);
+            winstonLogger.error(`Redis CLEAR failed: ${storeId}`, err);
+        }
+    }
+    async getTtl(key) {
+        try {
+            const ms = await redis.pttl(key);
+            // -2 = key does not exist, -1 = key exists but has no associated expire
+            if (ms < 0)
+                return null;
+            return Math.round(ms / 1000);
+        }
+        catch (err) {
+            winstonLogger.error(`Redis PTTL failed: ${key}`, err);
+            return null;
+        }
+    }
+    /**
+     * Atomic SET key value EX ttlSeconds NX.
+     * Returns true if the key was newly set (did NOT previously exist),
+     * false if the key already existed (SET NX was a no-op).
+     * Used by webhook dedup (multi-instance safe — shared Redis counter).
+     */
+    async setIfNotExists(key, value, ttlSeconds = 300) {
+        try {
+            const result = await redis.set(key, value, 'EX', ttlSeconds, 'NX');
+            return result === 'OK';
+        }
+        catch (err) {
+            winstonLogger.error(`Redis SET NX failed: ${key}`, err);
+            return false;
         }
     }
     async close() {

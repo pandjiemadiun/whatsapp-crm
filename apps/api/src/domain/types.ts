@@ -277,6 +277,13 @@ export interface CartOp {
   product: string;
   qty?: number;
   price?: number;       // hint saja — akan diganti dengan harga DB
+  /**
+   * Opsional productId langsung (structured/validated path).
+   * Bila ada, CartAuthority.resolveProductById() pakai ini langsung
+   * (skip resolveProductByName). Bila tidak ada, fallback ke by-name
+   * agar jalur LLM/natural-language tetap tidak berubah.
+   */
+  productId?: string;
 }
 
 /** Opsi clarification untuk pending state */

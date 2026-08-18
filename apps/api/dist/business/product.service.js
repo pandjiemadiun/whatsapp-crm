@@ -78,6 +78,37 @@ export class ProductService {
         }
     }
     /**
+     * Related products — same store + same category as the source product,
+     * active, non-deleted, excluding the source itself.
+     * Enforces tenant isolation: a cross-tenant productId throws NOT_FOUND.
+     */
+    async getRelatedProducts(productId, opts) {
+        const source = await prisma.product.findUnique({ where: { id: productId } });
+        if (!source || source.storeId !== opts.storeId || source.deletedAt) {
+            throw new ApiError(ErrorCodes.ERR_NOT_FOUND, 'Product not found');
+        }
+        if (!source.categoryId) {
+            return [];
+        }
+        try {
+            const rows = await prisma.product.findMany({
+                where: {
+                    storeId: opts.storeId,
+                    categoryId: source.categoryId,
+                    isActive: true,
+                    deletedAt: null,
+                    NOT: { id: productId },
+                },
+                orderBy: { createdAt: 'desc' },
+            });
+            return rows.map((r) => this.mapProduct(r));
+        }
+        catch (error) {
+            adapters.logger.error('Failed to fetch related products', error, { productId, storeId: opts.storeId });
+            throw new ApiError(ErrorCodes.ERR_DB, 'Failed to fetch related products');
+        }
+    }
+    /**
      * Cari produk dalam toko berdasarkan nama/sku/deskripsi (case-insensitive).
      * Hasil diurutkan: nama cocok lebih dulu, dibatasi 20 item.
      */
