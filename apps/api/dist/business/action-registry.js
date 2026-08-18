@@ -55,6 +55,78 @@ export const AddToCartResponseSchema = z.object({
         message: z.string(),
     }).optional(),
 });
+/** REMOVE_FROM_CART request schema (P6-2 — cart mutation, idempotent).
+ *  Identifier is lineItemId (OrderItem.id) — consistent with existing
+ *  CartAuthority.removeLine()/updateQuantity() which are keyed by lineItemId.
+ *  The line item is re-validated server-side inside the tenant-scoped
+ *  conversation cart, so a client-supplied lineItemId is never trusted as final. */
+export const RemoveFromCartRequestSchema = z.object({
+    actionId: z.string().uuid(),
+    type: z.literal('REMOVE_FROM_CART'),
+    payload: z.object({
+        lineItemId: z.string().uuid(),
+    }),
+});
+/** REMOVE_FROM_CART response schema — follows §5.4 AddToCartResponse pattern. */
+export const RemoveFromCartResponseSchema = z.object({
+    success: z.boolean(),
+    actionId: z.string().uuid(),
+    type: z.literal('REMOVE_FROM_CART'),
+    status: z.enum(['already_applied', 'applied', 'action_in_progress']),
+    result: z.object({
+        removedLineItemId: z.string().uuid(),
+        cart: z.object({
+            items: z.array(z.object({
+                id: z.string(),
+                productId: z.string().uuid().nullable(),
+                productName: z.string(),
+                quantity: z.number().int(),
+                unitPrice: z.number(),
+                subtotal: z.number(),
+            })),
+            total: z.number(),
+        }),
+    }).optional(),
+    error: z.object({
+        code: z.string(),
+        message: z.string(),
+    }).optional(),
+});
+/** UPDATE_CART_QUANTITY request schema (P6-2 — cart mutation, idempotent). */
+export const UpdateCartQuantityRequestSchema = z.object({
+    actionId: z.string().uuid(),
+    type: z.literal('UPDATE_CART_QUANTITY'),
+    payload: z.object({
+        lineItemId: z.string().uuid(),
+        quantity: z.number().int().positive(),
+    }),
+});
+/** UPDATE_CART_QUANTITY response schema — follows §5.4 AddToCartResponse pattern. */
+export const UpdateCartQuantityResponseSchema = z.object({
+    success: z.boolean(),
+    actionId: z.string().uuid(),
+    type: z.literal('UPDATE_CART_QUANTITY'),
+    status: z.enum(['already_applied', 'applied', 'action_in_progress']),
+    result: z.object({
+        updatedLineItemId: z.string().uuid(),
+        quantity: z.number().int().positive(),
+        cart: z.object({
+            items: z.array(z.object({
+                id: z.string(),
+                productId: z.string().uuid().nullable(),
+                productName: z.string(),
+                quantity: z.number().int(),
+                unitPrice: z.number(),
+                subtotal: z.number(),
+            })),
+            total: z.number(),
+        }),
+    }).optional(),
+    error: z.object({
+        code: z.string(),
+        message: z.string(),
+    }).optional(),
+});
 /** SHOW_RELATED_PRODUCTS request schema (P1 — non-mutating discovery) */
 export const ShowRelatedProductsRequestSchema = z.object({
     actionId: z.string().uuid(),
@@ -424,6 +496,172 @@ export async function handleAddToCart(request, context) {
     // Should not reach here
     throw new Error('Unexpected execution status');
 }
+/** Map CartAuthority CartLine[] → §5.4 response cart shape. */
+function cartLinesToResponse(lines) {
+    const items = lines.map((l) => ({
+        id: l.id,
+        productId: l.productId,
+        productName: l.productName,
+        quantity: l.quantity,
+        unitPrice: l.unitPrice,
+        subtotal: l.subtotal,
+    }));
+    const total = items.reduce((s, i) => s + i.subtotal, 0);
+    return { items, total };
+}
+/**
+ * REMOVE_FROM_CART Handler (P6-2)
+ * Delegates to CartAuthority.removeLine within the SAME idempotency/lock
+ * pattern as handleAddToCart (claim → executeClaimedAction, FOR UPDATE +
+ * re-check, SAVEPOINT for business errors). removeLine re-validates the
+ * lineItemId ownership server-side (tenant-scoped draft order), so a
+ * cross-tenant / not-in-cart lineItemId yields a structured ITEM_NOT_FOUND
+ * business error (FAILED), never a raw crash.
+ */
+export async function handleRemoveFromCart(request, context) {
+    const { actionId, payload } = request;
+    const { storeId, customerId, conversationId } = context;
+    const actionType = 'REMOVE_FROM_CART';
+    const claim = await claimAction(storeId, customerId, actionType, actionId);
+    if (!claim.claimed) {
+        const existing = claim.existing;
+        if (existing.status === ActionStatus.COMPLETED) {
+            return {
+                success: true,
+                data: {
+                    success: true,
+                    actionId,
+                    type: 'REMOVE_FROM_CART',
+                    status: 'already_applied',
+                    result: existing.result,
+                },
+                status: 'already_applied',
+            };
+        }
+        if (existing.status === ActionStatus.FAILED) {
+            return {
+                success: false,
+                error: existing.error || { code: 'ACTION_FAILED', message: 'Action previously failed' },
+                status: 'already_applied',
+            };
+        }
+        if (existing.status === ActionStatus.CLAIMED) {
+            const leaseUntil = new Date(existing.leaseUntil);
+            if (leaseUntil > new Date()) {
+                return {
+                    success: false,
+                    error: { code: 'ACTION_IN_PROGRESS', message: 'Action is being processed' },
+                    status: 'action_in_progress',
+                };
+            }
+        }
+    }
+    const executeMutation = async (tx) => {
+        const lines = await cartAuthority.removeLine(conversationId, payload.lineItemId, tx);
+        return {
+            removedLineItemId: payload.lineItemId,
+            cart: cartLinesToResponse(lines),
+        };
+    };
+    const execution = await executeClaimedAction(storeId, customerId, conversationId, actionType, actionId, executeMutation);
+    if (execution.status === ActionStatus.COMPLETED) {
+        return {
+            success: true,
+            data: {
+                success: true,
+                actionId,
+                type: 'REMOVE_FROM_CART',
+                status: 'applied',
+                result: execution.result,
+            },
+            status: 'applied',
+        };
+    }
+    if (execution.status === ActionStatus.FAILED) {
+        return {
+            success: false,
+            error: execution.error || { code: 'EXECUTION_FAILED', message: 'Action failed' },
+            status: 'already_applied',
+        };
+    }
+    throw new Error('Unexpected execution status');
+}
+/**
+ * UPDATE_CART_QUANTITY Handler (P6-2)
+ * Delegates to CartAuthority.updateQuantity within the SAME idempotency/lock
+ * pattern as handleAddToCart. updateQuantity re-validates the lineItemId
+ * ownership server-side; qty=0 deletes the line. A not-in-cart / cross-tenant
+ * lineItemId yields a structured ITEM_NOT_FOUND business error (FAILED).
+ */
+export async function handleUpdateCartQuantity(request, context) {
+    const { actionId, payload } = request;
+    const { storeId, customerId, conversationId } = context;
+    const actionType = 'UPDATE_CART_QUANTITY';
+    const claim = await claimAction(storeId, customerId, actionType, actionId);
+    if (!claim.claimed) {
+        const existing = claim.existing;
+        if (existing.status === ActionStatus.COMPLETED) {
+            return {
+                success: true,
+                data: {
+                    success: true,
+                    actionId,
+                    type: 'UPDATE_CART_QUANTITY',
+                    status: 'already_applied',
+                    result: existing.result,
+                },
+                status: 'already_applied',
+            };
+        }
+        if (existing.status === ActionStatus.FAILED) {
+            return {
+                success: false,
+                error: existing.error || { code: 'ACTION_FAILED', message: 'Action previously failed' },
+                status: 'already_applied',
+            };
+        }
+        if (existing.status === ActionStatus.CLAIMED) {
+            const leaseUntil = new Date(existing.leaseUntil);
+            if (leaseUntil > new Date()) {
+                return {
+                    success: false,
+                    error: { code: 'ACTION_IN_PROGRESS', message: 'Action is being processed' },
+                    status: 'action_in_progress',
+                };
+            }
+        }
+    }
+    const executeMutation = async (tx) => {
+        const lines = await cartAuthority.updateQuantity(conversationId, payload.lineItemId, payload.quantity, tx);
+        return {
+            updatedLineItemId: payload.lineItemId,
+            quantity: payload.quantity,
+            cart: cartLinesToResponse(lines),
+        };
+    };
+    const execution = await executeClaimedAction(storeId, customerId, conversationId, actionType, actionId, executeMutation);
+    if (execution.status === ActionStatus.COMPLETED) {
+        return {
+            success: true,
+            data: {
+                success: true,
+                actionId,
+                type: 'UPDATE_CART_QUANTITY',
+                status: 'applied',
+                result: execution.result,
+            },
+            status: 'applied',
+        };
+    }
+    if (execution.status === ActionStatus.FAILED) {
+        return {
+            success: false,
+            error: execution.error || { code: 'EXECUTION_FAILED', message: 'Action failed' },
+            status: 'already_applied',
+        };
+    }
+    throw new Error('Unexpected execution status');
+}
 /**
  * SHOW_RELATED_PRODUCTS Handler (P1 — non-mutating, read-only).
  *
@@ -588,6 +826,30 @@ export async function handleOpenOrderHistory(request, context) {
  * Action Registry — single definition for ADD_TO_CART
  */
 export const actionRegistry = {
+    REMOVE_FROM_CART: {
+        type: 'REMOVE_FROM_CART',
+        requestSchema: RemoveFromCartRequestSchema,
+        responseSchema: RemoveFromCartResponseSchema,
+        handler: handleRemoveFromCart,
+        authorize: async (_request, _context) => {
+            // lineItemId is re-validated server-side inside removeLine against this
+            // conversation's tenant-scoped draft order (ownership + existence check).
+            // No client-supplied store/conversation has authority; mirror the
+            // OPEN_CART read-only trust model for conversation-scoped mutations.
+            return { allowed: true };
+        },
+    },
+    UPDATE_CART_QUANTITY: {
+        type: 'UPDATE_CART_QUANTITY',
+        requestSchema: UpdateCartQuantityRequestSchema,
+        responseSchema: UpdateCartQuantityResponseSchema,
+        handler: handleUpdateCartQuantity,
+        authorize: async (_request, _context) => {
+            // lineItemId + quantity are re-validated server-side inside
+            // updateQuantity against this conversation's tenant-scoped draft order.
+            return { allowed: true };
+        },
+    },
     ADD_TO_CART: {
         type: 'ADD_TO_CART',
         requestSchema: AddToCartRequestSchema,

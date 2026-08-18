@@ -293,8 +293,9 @@ export class CartAuthority {
    * Remove a line item from the cart by lineItemId.
    * Invariant: line item belongs to this conversation's draft order.
    */
-  async removeLine(conversationId: string, lineItemId: string): Promise<CartLine[]> {
-    return await prisma.$transaction(async (tx) => {
+  async removeLine(conversationId: string, lineItemId: string, tx?: any): Promise<CartLine[]> {
+    const run = async (client: any) => {
+      const tx = client;
       const order = await this.findDraftOrder(tx as any, conversationId);
       if (!order) {
         throw new CartInvariantError('No active cart for this conversation', 'CART_NOT_FOUND');
@@ -326,19 +327,24 @@ export class CartAuthority {
       await this.syncConfirmedItemsJson(tx as any, conversationId, confirmedItems);
 
       return items;
-    });
+    };
+    // Reuse caller's transaction when provided (locked idempotency pattern);
+    // otherwise open a fresh one. Core logic unchanged.
+    if (tx) return run(tx);
+    return prisma.$transaction(run);
   }
 
   /**
    * Update quantity of a line item. qty = 0 deletes the line item.
    * Invariant: quantity >= 0; line item belongs to cart.
    */
-  async updateQuantity(conversationId: string, lineItemId: string, qty: number): Promise<CartLine[]> {
+  async updateQuantity(conversationId: string, lineItemId: string, qty: number, tx?: any): Promise<CartLine[]> {
     if (qty < 0) {
       throw new CartInvariantError('Quantity must be >= 0', 'INVALID_QUANTITY');
     }
 
-    return await prisma.$transaction(async (tx) => {
+    const run = async (client: any) => {
+      const tx = client;
       const order = await this.findDraftOrder(tx as any, conversationId);
       if (!order) {
         throw new CartInvariantError('No active cart for this conversation', 'CART_NOT_FOUND');
@@ -382,7 +388,11 @@ export class CartAuthority {
       await this.syncConfirmedItemsJson(tx as any, conversationId, confirmedItems);
 
       return items;
-    });
+    };
+    // Reuse caller's transaction when provided (locked idempotency pattern);
+    // otherwise open a fresh one. Core logic unchanged.
+    if (tx) return run(tx);
+    return prisma.$transaction(run);
   }
 
   /**
