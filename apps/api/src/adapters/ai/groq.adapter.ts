@@ -13,8 +13,21 @@ const GROQ_ENDPOINT = 'https://api.groq.com/openai/v1/chat/completions';
 const REQUEST_TIMEOUT_MS = 10000; // 10 detik
 
 /**
+ * gpt-oss compatibility floor: openai/gpt-oss-120b needs more output headroom
+ * than the chat path's 250-token cap to emit a complete InterpreterResultV2
+ * payload in `response_format:json_object` mode. At 250 the model emits a
+ * truncated/non-JSON generation and Groq rejects the request with
+ * `json_validate_failed` (HTTP 400, empty failed_generation). 1024 comfortably
+ * covers the longest verified V2 output (~650 tokens).
+ * Applied ONLY for gpt-oss in json_object mode; Llama and non-JSON calls are
+ * unchanged. This is request-normalization only — it does NOT change the model,
+ * endpoint, temperature, top_p, response_format, retry, or AIResponse contract.
+ */
+const GPT_OSS_MAX_TOKENS_FLOOR = 1024;
+
+/**
  * GroqAdapter - Fast Intent & Entity Extractor (Gatekeeper) & AI Provider
- * Uses Groq's LLaMA 3.3 70B Versatile model (OpenAI-compatible API)
+ * Uses Groq's openai/gpt-oss-120b model (OpenAI-compatible API)
  *
  * Pricing (as of 2025):
  * - Input:  $0.05 per 1M tokens
@@ -22,7 +35,7 @@ const REQUEST_TIMEOUT_MS = 10000; // 10 detik
  */
 export class GroqAdapter implements AIProvider {
   private apiKey: string;
-  private _model: string = 'llama-3.3-70b-versatile';
+  private _model: string = 'openai/gpt-oss-120b';
 
   constructor(apiKey: string = process.env.GROQ_API_KEY || process.env.GROQ_API_KEYS?.split(',')[0] || '') {
     this.apiKey = apiKey;
@@ -69,6 +82,15 @@ export class GroqAdapter implements AIProvider {
     return this._model;
   }
 
+  /**
+   * GPT-OSS compatibility guard — true only for the openai/gpt-oss-* family.
+   * Local to GroqAdapter so no provider-specific logic leaks into the
+   * Conversation Engine / business layer.
+   */
+  private isGptOssModel(model: string): boolean {
+    return /^openai\/gpt-oss/.test(model);
+  }
+
   async generate(
     prompt: string,
     options?: AIGenerateOptions
@@ -95,12 +117,19 @@ export class GroqAdapter implements AIProvider {
         const temperature = options?.temperature ?? defaults.temperature;
         const maxTokens = options?.maxTokens ?? defaults.maxTokensGroq;
         const topP = options?.topP ?? defaults.topP;
+        const jsonMode = options?.jsonMode ?? false;
+        // gpt-oss compatibility: floor output tokens for json_object mode so the
+        // model can emit a complete InterpreterResultV2 payload (otherwise Groq
+        // rejects with json_validate_failed). Llama + non-JSON calls unchanged.
+        const effectiveMaxTokens = this.isGptOssModel(this._model) && jsonMode
+          ? Math.max(maxTokens, GPT_OSS_MAX_TOKENS_FLOOR)
+          : maxTokens;
 
       console.log('[Groq] Sending request...', {
         promptLength: prompt.length,
         model: this._model,
         temperature,
-        maxTokens,
+        maxTokens: effectiveMaxTokens,
         jsonMode: options?.jsonMode ?? false,
       });
 
@@ -117,7 +146,7 @@ export class GroqAdapter implements AIProvider {
           },
         ],
         temperature,
-        max_tokens: maxTokens,
+        max_tokens: effectiveMaxTokens,
         top_p: topP,
         ...(options?.jsonMode ? { response_format: { type: 'json_object' } } : {}),
       };
@@ -138,6 +167,11 @@ export class GroqAdapter implements AIProvider {
       if (!response.ok) {
         const errorCategory = this.categorizeHttpError(response.status);
         const retryAfter = this.parseRetryAfter(response.headers);
+        // Observability-only: read the provider error body ONCE for any non-2xx
+        // response and sanitize it. Captures error.code/type/message only —
+        // never the prompt, customer content, API key, or request headers.
+        // Does NOT change classification (categorizeHttpError) or retryability.
+        const providerError = await this.extractProviderError(response);
 
         if (response.status === 429) {
           // BAGIAN 3a: Rate-limited → cooldown key, coba key berikutnya
@@ -145,13 +179,16 @@ export class GroqAdapter implements AIProvider {
             keyHash: currentKey.slice(0, 8),
             retryAfter,
             attempt: attempt + 1,
+            providerError,
           });
           await aiKeyRouter.reportRateLimit(currentKey, retryAfter);
 
           // Log dan lanjutkan ke key berikutnya
           console.log(`[Groq] Key 1 rate-limited, putting on cooldown. Trying Key 2...`);
           lastError = new AIProviderError(
-            `Groq 429 on key ${currentKey.slice(0, 8)}...`,
+            providerError
+              ? `Groq 429 on key ${currentKey.slice(0, 8)}...\nprovider_error=${providerError}`
+              : `Groq 429 on key ${currentKey.slice(0, 8)}...`,
             ErrorCategory.RATE_LIMIT,
             'groq',
             response.status,
@@ -162,7 +199,9 @@ export class GroqAdapter implements AIProvider {
         }
 
         throw new AIProviderError(
-          `Groq API returned ${response.status}: ${response.statusText}`,
+          providerError
+            ? `Groq API returned ${response.status}: ${response.statusText}\nprovider_error=${providerError}`
+            : `Groq API returned ${response.status}: ${response.statusText}`,
           errorCategory,
           'groq',
           response.status,
@@ -356,6 +395,40 @@ JSON Response Format:
     if (statusCode === 401 || statusCode === 403) return ErrorCategory.AUTH_ERROR;
     if (statusCode === 400) return ErrorCategory.VALIDATION_ERROR;
     return ErrorCategory.UNKNOWN;
+  }
+
+  /**
+   * Observability-only: read & sanitize the provider error body for a non-2xx
+   * response. Captures error.code/type/message only — never the prompt,
+   * customer content, API key, or request headers. Returns '' if unavailable.
+   */
+  private async extractProviderError(response: Response): Promise<string> {
+    const MAX_PROVIDER_ERROR_CHARS = 1000;
+    let raw = '';
+    try {
+      raw = await response.text();
+    } catch {
+      return '';
+    }
+    if (!raw) return '';
+    try {
+      const parsed = JSON.parse(raw);
+      const err =
+        parsed && typeof parsed === 'object' && (parsed as any).error
+          ? (parsed as any).error
+          : null;
+      if (err && typeof err === 'object') {
+        const summary = {
+          code: err.code ? String(err.code) : null,
+          type: err.type ? String(err.type) : null,
+          message: err.message ? String(err.message) : null,
+        };
+        return JSON.stringify(summary).slice(0, MAX_PROVIDER_ERROR_CHARS);
+      }
+      return raw.slice(0, MAX_PROVIDER_ERROR_CHARS);
+    } catch {
+      return raw.slice(0, MAX_PROVIDER_ERROR_CHARS);
+    }
   }
 }
 

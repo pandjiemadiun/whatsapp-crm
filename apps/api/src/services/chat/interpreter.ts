@@ -9,7 +9,7 @@
  * Legacy buy-signal + context-interpreter logic absorbed into runOneCall —
  * buy_signal + intent + cart_ops in a single Groq call.
  */
-import { groqAdapter } from '../../adapters/ai/groq.adapter.js';
+import { llmGateway } from '../../adapters/ai/llm-gateway.js';
 import { adapters } from '../../adapters/container.js';
 import { prisma } from '../../infrastructure/prisma.js';
 import type {
@@ -85,7 +85,7 @@ Schema:\n${INTERPRETER_SCHEMA}\n]` +
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
-      const result = await groqAdapter.generate(prompt, {
+      const result = await llmGateway.generate(prompt, {
         temperature: 0.2,
         maxTokens: 250,
         jsonMode: true,
@@ -114,15 +114,32 @@ Schema:\n${INTERPRETER_SCHEMA}\n]` +
       return parsed as InterpreterResult;
     } catch (err) {
       lastError = err as Error;
+      const msg = lastError.message;
       const isRetryable =
-        lastError.message.includes('429') ||
-        lastError.message.includes('timeout') ||
-        lastError.message.includes('JSON');
+        msg.includes('429') ||
+        msg.includes('timeout') ||
+        msg.includes('JSON');
+      // Config/infra failures (dead model, wrong auth, invalid request) are
+      // explicitly NON-retryable AND logged at CRITICAL level so they don't
+      // get lost among ordinary warnings — they are operator-actionable.
+      const isConfigFailure =
+        msg.includes('model_not_found') ||
+        msg.includes('401') ||
+        msg.includes('400');
       if (!isRetryable) {
-        adapters.logger.warn('Interpreter non-retryable error', {
-          conversationId: ctx.conversationId,
-          error: lastError.message,
-        });
+        if (isConfigFailure) {
+          adapters.logger.error('Interpreter critical model_config_failure', {
+            conversationId: ctx.conversationId,
+            critical: true,
+            reason: 'model_config_failure',
+            error: msg,
+          });
+        } else {
+          adapters.logger.warn('Interpreter non-retryable error', {
+            conversationId: ctx.conversationId,
+            error: msg,
+          });
+        }
         return null;
       }
       continue;

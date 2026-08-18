@@ -7,8 +7,8 @@ import {
 } from './types.js';
 import { getAiDefaults, invalidateAiDefaultsCache } from './ai-config.js';
 
-const GEMINI_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent';
-const REQUEST_TIMEOUT_MS = 10000; // 10 detik
+const GEMINI_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent';
+const REQUEST_TIMEOUT_MS = 30000; // 30 detik
 const DEFAULT_MAX_TOKENS = 2048; // ← NAIK dari 500 ke 2048 (account untuk thoughts)
 
 /**
