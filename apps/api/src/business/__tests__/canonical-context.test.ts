@@ -2242,9 +2242,55 @@ describe('G2-D.5 V2 write → canonical', () => {
      // cart_ref should be null (CartAuthority owns actual cart)
      assert.equal(canonical!._compat?.previous_mutation ?? null, null);
   });
+
+  // G2-D.8-RACE: saveWorkspaceV2 with stale snapshot must not lose concurrent pendings
+  it('G2-D.8-RACE: saveWorkspaceV2 merges pendings, does not overwrite concurrent additions', async () => {
+    const { canonicalConversationStateService } = await import('../canonical-context.service.js');
+    
+    // Seed: DB has P1
+    const p1 = makePending({ id: 'p1', question: 'Q1?' });
+    let stored = saveCanonical(makeCanonicalState({ pendings: [p1] }));
+    let ts = new Date('2024-01-01T00:00:00Z');
+    
+    stubPrisma({
+      findUnique: async () => ({
+        workspace_v2: stored,
+        updatedAt: ts,
+      }),
+      updateMany: async (args: unknown) => {
+        const where = (args as { where: { updatedAt: Date } }).where;
+        if (where.updatedAt.getTime() !== ts.getTime()) {
+          return { count: 0 }; // CAS conflict → retry
+        }
+        stored = (args as { data: { workspace_v2: unknown } }).data.workspace_v2;
+        ts = new Date(ts.getTime() + 1); // bump
+        return { count: 1 };
+      },
+    });
+    
+    // Step 1: concurrent upsertPending(P2) → DB becomes [P1, P2]
+    const p2 = makePending({ id: 'p2', question: 'Q2?' });
+    await canonicalConversationStateService.upsertPending('conv-race', p2);
+    
+    // Step 2: saveWorkspaceV2 with stale snapshot [P1] (simulates G2-D.8 path
+    // where workspace.pendings was captured before concurrent P2 was added).
+    // Without merge fix, this would overwrite [P1, P2] with [P1], losing P2.
+    await canonicalConversationStateService.saveWorkspaceV2('conv-race', {
+      pendings: [p1],
+      resolved_facts: {},
+      options_presented: [],
+      conversation_summary: null,
+    } as any);
+    
+    // Verify: both P1 and P2 must be present
+    const finalState = loadCanonical(stored as string);
+    const pendingIds = finalState.pendings.map((p: any) => p.id);
+    assert.ok(pendingIds.includes('p1'), 'P1 must be preserved');
+    assert.ok(pendingIds.includes('p2'), 'P2 must NOT be lost by stale saveWorkspaceV2');
+  });
+
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
 // G2-D.6: Compatibility Reader Audit — V1 legacy readers migrated to canonical
 // ─────────────────────────────────────────────────────────────────────────────
 

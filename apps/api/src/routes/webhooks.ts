@@ -2,6 +2,7 @@ import express, { Request, Response } from 'express';
 import { messageProcessorService } from '../services/message-processor.service.js';
 import { adapters } from '../adapters/container.js';
 import { prisma } from '../infrastructure/prisma.js';
+import { webhookLimiter } from '../middleware/rate-limiters.js';
 
 const router = express.Router();
 
@@ -18,7 +19,7 @@ function normalizePhoneNumber(phoneNumber: string): string {
 }
 
 // POST /api/webhooks/gowa — Receive incoming messages from GOWA
-router.post('/gowa', async (req: Request, res: Response) => {
+router.post('/gowa', webhookLimiter, async (req: Request, res: Response) => {
   // Always respond 200 immediately to prevent retries
   res.status(200).json({ status: 'ok' });
 
@@ -127,7 +128,7 @@ router.post('/gowa', async (req: Request, res: Response) => {
 });
 
 // POST /api/webhooks/fonnte — Receive incoming messages from Fonnte
-router.post('/fonnte', async (req: Request, res: Response) => {
+router.post('/fonnte', webhookLimiter, async (req: Request, res: Response) => {
   // --- Webhook secret validation (per-store) ---
   // The secret is embedded in the webhook URL that merchants paste into the
   // Fonnte dashboard (?secret=...). Without a matching Store.webhookSecret

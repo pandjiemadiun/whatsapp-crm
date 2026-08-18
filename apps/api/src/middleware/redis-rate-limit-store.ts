@@ -33,6 +33,12 @@ interface HitRecord {
 export class RedisRateLimitStore {
   prefix: string;
   windowMs: number;
+  /**
+   * localKeys = false: this store is centralised (Redis), NOT per-instance
+   * in-memory. express-rate-limit uses this to decide whether rate-limit state
+   * is shared across worker processes. For Redis it MUST be false.
+   */
+  localKeys = false;
 
   constructor(prefix: string, windowMs: number) {
     this.prefix = prefix;
