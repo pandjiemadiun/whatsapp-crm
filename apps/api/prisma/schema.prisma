@@ -447,3 +447,22 @@ model BackupManifest {
   @@index([type])
   @@map("backup_manifest")
 }
+
+model ActionIdempotency {
+  idempotencyKey String   @id
+  storeId        String
+  customerId     String
+  actionType     String
+  actionId       String
+  status         String   @default("CLAIMED")
+  claimedAt      DateTime
+  leaseUntil     DateTime
+  result         Json?
+  error          Json?
+  completedAt    DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([storeId, customerId, actionType, actionId])
+  @@map("action_idempotency")
+}
