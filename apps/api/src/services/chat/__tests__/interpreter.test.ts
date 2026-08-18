@@ -4,13 +4,14 @@
  * Runner:
  *   npx tsx --test --test-force-exit src/services/chat/__tests__/interpreter.test.ts
  *
- * LLM dipanggil lewat `groqAdapter.generate` yang DI-MOCK (singleton yang sama yang
- * dipakai runOneCall) — tidak ada API call asli, tidak menyentuh DB.
+ * LLM dipanggil lewat `llmGateway.generate` yang DI-MOCK (gateway adalah sole provider
+ * decision point; runOneCall memanggil gateway, bukan adapter secara langsung) —
+ * tidak ada API call asli, tidak menyentuh DB.
  */
 import { describe, it, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { groqAdapter } from '../../../adapters/ai/groq.adapter.js';
+import { llmGateway } from '../../../adapters/ai/llm-gateway.js';
 import type { AIResponse, AIGenerateOptions } from '../../../adapters/ai/types.js';
 import type {
   InterpreterResult,
@@ -21,14 +22,14 @@ import type {
 import { runOneCall, validateCartOps, truncateTo2Sentences } from '../interpreter.js';
 
 // ---------------------------------------------------------------------------
-// Mock LLM — timpa groqAdapter.generate
+// Mock LLM — timpa llmGateway.generate
 // ---------------------------------------------------------------------------
 let llmCalls = 0;
 let lastPrompt = '';
 let cannedContent = '';
 let cannedThrow: string | null = null;
 
-const originalGenerate = groqAdapter.generate;
+const originalGenerate = llmGateway.generate;
 
 const mockGenerate = async (
   prompt: string,
@@ -49,11 +50,11 @@ const mockGenerate = async (
 };
 
 before(() => {
-  groqAdapter.generate = mockGenerate;
+  llmGateway.generate = mockGenerate;
 });
 
 after(() => {
-  groqAdapter.generate = originalGenerate;
+  llmGateway.generate = originalGenerate;
 });
 
 beforeEach(() => {

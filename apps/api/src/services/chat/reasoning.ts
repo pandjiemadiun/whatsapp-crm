@@ -28,7 +28,7 @@ import type { HistoryTurn } from './prompts-v2.js';
 import { validate, type ValidatorContextV2 } from './validator-v2.js';
 import type { ValidatorResultV2 } from './types-v2.js';
 import { planActs } from './planner.js';
-import { groqAdapter } from '../../adapters/ai/groq.adapter.js';
+import { llmGateway } from '../../adapters/ai/llm-gateway.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants (no magic numbers)
@@ -91,7 +91,7 @@ interface LlmCallStats {
 }
 
 /**
- * Panggil groqAdapter.generate sekali termasuk retry transport (429/timeout/parse).
+ * Panggil llmGateway.generate sekali termasuk retry transport (429/timeout/parse).
  * Retryable error types:
  *   - '429' (rate limit)
  *   - 'timeout' (network timeout)
@@ -112,7 +112,7 @@ async function callLlm(
   for (let attempt = 0; attempt <= TRANSPORT_MAX_RETRIES; attempt++) {
     stats.calls++;
     try {
-      const resp = await groqAdapter.generate(prompt, {
+      const resp = await llmGateway.generate(prompt, {
         temperature: LLM_TEMPERATURE,
         maxTokens: LLM_MAX_TOKENS,
         jsonMode: true,
@@ -200,7 +200,7 @@ function buildValidatorContext(
  *      - hit → return resolved/tier (llmCalls=0)
  *      - miss → lanjut ke B
  *   B. LLM single-pass:
- *      - attempt 1: groqAdapter.generate → parse → validate
+ *      - attempt 1: llmGateway.generate → parse → validate
  *      - ok → return reasoned (llmCalls=1)
  *      - ok=false, retryable → attempt 2 (with validator feedback)
  *        - ok → return reasoned (llmCalls=2)

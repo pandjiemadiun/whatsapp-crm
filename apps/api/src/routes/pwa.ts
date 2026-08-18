@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { prisma } from '../infrastructure/prisma.js';
-import { conversationLimiter } from '../middleware/rate-limiters.js';
+import { conversationLimiter, pwaInitLimiter, pwaProductsLimiter } from '../middleware/rate-limiters.js';
 import { adapters } from '../adapters/container.js';
 import { conversationDeliveryService } from '../services/conversation-delivery.service.js';
 import { eventBus } from '../services/event-bus.service.js';
@@ -52,23 +52,47 @@ const PWA_STORE_PUBLIC_SELECT = {
 } as const;
 
 // GET /api/pwa/:storeSlug/init — resolve Store by slug, kembalikan data publik.
-router.get('/:storeSlug/init', async (req: Request, res: Response) => {
+router.get('/:storeSlug/init', pwaInitLimiter, async (req: Request, res: Response) => {
   try {
     const { storeSlug } = req.params;
     if (!storeSlug) {
       return res.status(404).json({ error: 'Store not found' });
     }
 
+    // phoneNumber di-query SECARA INTERNAL hanya untuk membangun contact.whatsappUrl.
+    // Tidak pernah di-expose ke response (di-strip sebelum dikembalikan).
     const store = await prisma.store.findUnique({
       where: { slug: storeSlug, deletedAt: null },
-      select: PWA_STORE_PUBLIC_SELECT,
+      select: {
+        ...PWA_STORE_PUBLIC_SELECT,
+        phoneNumber: true,
+      },
     });
 
     if (!store) {
       return res.status(404).json({ error: 'Store not found' });
     }
 
-    res.json({ success: true, data: { store, vapidPublicKey: process.env.VAPID_PUBLIC_KEY || null } });
+    const { phoneNumber, ...publicStore } = store;
+
+    // Structured contact object (G2-B.5 contract). Null when no WhatsApp number.
+    const contact: { channel: 'whatsapp'; whatsappUrl: string; displayName: string } | null =
+      phoneNumber
+        ? {
+            channel: 'whatsapp',
+            whatsappUrl: `https://wa.me/${phoneNumber.replace(/^\+/, '')}`,
+            displayName: store.name,
+          }
+        : null;
+
+    res.json({
+      success: true,
+      data: {
+        store: publicStore,
+        vapidPublicKey: process.env.VAPID_PUBLIC_KEY || null,
+        contact,
+      },
+    });
   } catch (err) {
     adapters.logger.error('PWA init error', err as Error);
     res.status(500).json({ error: 'Failed to fetch store' });
@@ -161,7 +185,7 @@ router.get('/:storeSlug/history', async (req: Request, res: Response) => {
 // GET /api/pwa/:storeSlug/products — public product catalog for PWA first-open discovery.
 // Reuses productService.getProductsByStore (same authority, same isActive filter).
 // Maps to ChatProduct shape (id, name, description, price, stock, primaryImageUrl).
-router.get('/:storeSlug/products', async (req: Request, res: Response) => {
+router.get('/:storeSlug/products', pwaProductsLimiter, async (req: Request, res: Response) => {
   try {
     const { storeSlug } = req.params;
 
@@ -212,7 +236,7 @@ router.get('/:storeSlug/products', async (req: Request, res: Response) => {
 
 // GET /api/pwa/:storeSlug/products/:productId — public product detail for PWA product card tap.
 // Reuses productService.getProductById (authoritative). Returns public fields only.
-router.get('/:storeSlug/products/:productId', async (req: Request, res: Response) => {
+router.get('/:storeSlug/products/:productId', pwaProductsLimiter, async (req: Request, res: Response) => {
   try {
     const { storeSlug, productId } = req.params;
 
@@ -644,7 +668,7 @@ async function resolveWebSession(
 
 /** Resolve-or-create Web session (mirror /message). Dipakai /handoff supaya
  *  "Hubungi Admin" bisa dipanggil meski customer/conversation belum ada. */
-async function getOrCreateWebSession(
+export async function getOrCreateWebSession(
   storeId: string,
   uid: string,
   convId?: string,

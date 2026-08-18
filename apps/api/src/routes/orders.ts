@@ -4,6 +4,7 @@ import { transitionOrder, ALLOWED_TRANSITIONS } from '../business/order-transiti
 import { ApiError } from '../errors/ApiError.js';
 import { adapters } from '../adapters/container.js';
 import { prisma } from '../infrastructure/prisma.js';
+import { orderMutationLimiter } from '../middleware/rate-limiters.js';
 
 const router = Router();
 
@@ -73,7 +74,7 @@ router.get('/:id', async (req: AuthenticatedRequest, res: Response) => {
 });
 
 // PUT /api/orders/:id/status — Update order status with ownership check
-router.put('/:id/status', async (req: AuthenticatedRequest, res: Response) => {
+router.put('/:id/status', orderMutationLimiter, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const storeId = req.user!.storeId;
     const { id } = req.params;

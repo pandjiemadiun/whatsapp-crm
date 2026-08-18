@@ -11,18 +11,18 @@
  *
  * Setiap pesan melewati:
  *   A. tryFastPath (0-LLM) — pending resolver + tier deterministik
- *   B. groqAdapter.generate (LLM interpreter) → validate → planActs
+ *   B. llmGateway.generate (LLM interpreter, sole provider decision point) → validate → planActs
  *   C. composeReply — menghasilkan teks balasan
  *   D. Workspace state persistence (addToDraft, setSummary, setLastBotMessage)
  *
- * I8: semua test di bawah adalah 0-LLM sebenarnya — groqAdapter.generate DI-MOCK.
+ * I8: semua test di bawah adalah 0-LLM sebenarnya — llmGateway.generate DI-MOCK.
  *      fallbackService juga di-stub agar test bersifat hermetik (fast path miss).
  * I13: produk katalog dibaca dari konstanta, ambang confidence dari constant.
  */
 import { describe, it, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { groqAdapter } from '../../../adapters/ai/groq.adapter.js';
+import { llmGateway } from '../../../adapters/ai/llm-gateway.js';
 import type { AIResponse, AIGenerateOptions } from '../../../adapters/ai/types.js';
 import { understand } from '../reasoning.js';
 import { composeReply } from '../composer-v2.js';
@@ -127,13 +127,13 @@ function makeCartResult(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Mock: groqAdapter.generate (singleton stub — no real API calls)
+// Mock: llmGateway.generate (singleton stub — no real API calls)
 // ─────────────────────────────────────────────────────────────────────────────
 
 let llmCallLog: string[];
 let mockResponses: string[];
 
-const originalGenerate = groqAdapter.generate;
+const originalGenerate = llmGateway.generate;
 
 const mockGenerate = async (
   _prompt: string,
@@ -151,11 +151,11 @@ const mockGenerate = async (
 };
 
 before(() => {
-  groqAdapter.generate = mockGenerate;
+  llmGateway.generate = mockGenerate;
 });
 
 after(() => {
-  groqAdapter.generate = originalGenerate;
+  llmGateway.generate = originalGenerate;
 });
 
 beforeEach(() => {

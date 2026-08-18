@@ -106,8 +106,8 @@ export class MessageProcessorService {
       receivedAt: startTime,
     };
 
-    // 1. Dedup — drop silently on reconnects
-    if (messageQueueService.isDuplicate(raw.id)) {
+    // 1. Dedup — drop silently on reconnects (Redis NX+EX, tenant-scoped)
+    if (await messageQueueService.isDuplicate(input.storeId, raw.id)) {
       adapters.logger.debug('Duplicate message dropped', { chatId, messageId: raw.id });
       return null;
     }

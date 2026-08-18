@@ -41,11 +41,11 @@ describe('isUrgent', () => {
 });
 
 describe('MessageQueueService', () => {
-  test('dedup: duplicate messageId dihapus', () => {
+  test('dedup: duplicate messageId dihapus', async () => {
     const msgId = 'test-msg-1';
-    assert.equal(messageQueueService.isDuplicate(msgId), false);
+    assert.equal(await messageQueueService.isDuplicate('unit-store', msgId), false);
     // Insert kedua — harus duplicate
-    assert.equal(messageQueueService.isDuplicate(msgId), true);
+    assert.equal(await messageQueueService.isDuplicate('unit-store', msgId), true);
   });
 
   test('mutex: lock per chat mencegah concurrent processing', () => {
