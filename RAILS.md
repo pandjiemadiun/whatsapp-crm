@@ -59,8 +59,14 @@ memaksa setiap klaim dibuktikan, bukan diucapkan.
    dikerjakan sekaligus dalam satu sesi/edit besar. Kalau robot
    kehabisan resource (kuota token, dsb.) di tengah jalan, kerugian
    maksimal cuma satu unit kerja yang gampang di-checkout balik, bukan
-   seluruh scope TASK. (Ditambahkan setelah insiden TASK B4 crash,
-   lihat §6.)
+    seluruh scope TASK. (Ditambahkan setelah insiden TASK B4 crash,
+    lihat §6.)
+10. **DILARANG `git commit --amend` / `git push --force` commit yang SUDAH
+    di-push ke origin.** Kalau ada koreksi setelah push, BUAT COMMIT BARU
+    terpisah (jangan ubah sejarah). Alasan: amend/force-push setelah clone
+    lain sempat `pull` hash lama berpotensi konflik/kehilangan sejarah di
+    sesi/clone lain. (Ditambahkan setelah insiden hash `e6c7157`→`84ad070`
+    kemarin di-rewrite lewat amend + force-push.)
 
 ## 2. VERDICT ARSITEKTUR (hasil audit 9 Agu 2026, MASIH BERLAKU)
 

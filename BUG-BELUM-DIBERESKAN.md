@@ -86,7 +86,7 @@
 ### V-a/b. NEW FINDING — audit lanjutan (bukan dikerjakan sekarang)
 
 - **(a) `trySop` order_status gate gap** (dari III-4): ✅ **RESOLVED (FIX-2, 19 Agu 2026, commit `e50de65`)** — kategori `'order_status'` DIHAPUS dari `trySop` (`fallback.service.ts`) karena redundant; `tryOrderStatus` (jalur dengan gate `isOrderStatusIntent`) sudah jalan LEBIH AWAL di chain dan menangani kasus itu. Tidak ada test yang bergantung pada `trySop` menjawab `order_status`. Regresi ditambah di `tier-match.test.ts` (keyword eks- trySop tetap true via `isOrderStatusIntent`).
-- **(b) normalizer case-sensitivity** (gabung III-7 edge + III-8 multi-word, root cause SAMA = `normalizer.ts` case handling): (III-7) lookup `:153` no `toLowerCase` → varian kapital lolos; (III-8) guard `:120-129` case-sensitive + per-token → produk multi-kata tidak ter-guard (`normalize('ada ready pack',['Ready Pack'])`→`"ada ada pack"`). Fix candidate: lowercase kedua sisi + guard n-gram frasa. Kalau owner setuju, gabung jadi 1 task (root cause sama) — BUKAN dikerjakan di doc-sync ini.
+- **(b) normalizer case-sensitivity** (gabung III-7 edge + III-8 multi-word): ✅ **RESOLVED di `84ad070`** — lihat III-7/III-8 (sudah RESOLVED). Tidak ada sisa follow-up.
 
 > Catatan: daftar ini **tidak** memasukkan `extractAndSaveOrder` (sudah dibereskan
 > P4.1) ataupun T1–T4 P3 / eskalasi C1 / multi-add FLAGSHIP / truth-boundary P2
