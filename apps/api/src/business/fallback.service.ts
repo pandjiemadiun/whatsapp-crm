@@ -759,7 +759,6 @@ async getResponse(
       [['garansi', 'warranty'], 'garansi'],
       [['stok habis', 'kosong', 'ready ga', 'ready kapan'], 'stok_habis'],
       [['cara order', 'cara pesan', 'gimana belinya'], 'order'],
-      [['sudah dikirim', 'kapan dikirim', 'status pesanan', 'status order', 'sampai mana', 'udah sampai', 'pesanan saya'], 'order_status'],
     ];
 
     let category: string | null = null;

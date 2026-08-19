@@ -143,6 +143,17 @@ describe('TASK B4.1 — tryOrderStatus intent gate (stok vs status order overlap
     const q = 'pesanan saya sampai mana?';
     assert.equal(isOrderStatusIntent(q, CATALOG), true, 'explicit order signal → true even without product name');
   });
+
+  // FIX-2 regresi: keyword yang DIHAPUS dari trySop kategori 'order_status'
+  // (commit sebelumnya) tetap terjawab lewat tryOrderStatus (gate di bawah),
+  // bukan lewat SOP. Buktikan gateway tersebut masih benar untuk tiap keyword.
+  it('(4) FIX-2 regresi: keyword order_status eks- trySop tetap true via isOrderStatusIntent', () => {
+    const keywords = ['sudah dikirim', 'kapan dikirim', 'status pesanan', 'status order', 'sampai mana', 'udah sampai', 'pesanan saya'];
+    for (const kw of keywords) {
+      const q = `${kw} saya?`;
+      assert.equal(isOrderStatusIntent(q, noDB), true, `keyword "${kw}" must resolve as order_status via tryOrderStatus gate`);
+    }
+  });
 });
 
 describe('TASK B4.2 — isSopRetourIntent gate (ganti X ke Y vs retur)', () => {
