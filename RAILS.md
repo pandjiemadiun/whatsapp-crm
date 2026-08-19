@@ -94,6 +94,33 @@ riwayat chat 9 Agu untuk detail file:line):
 JANGAN percaya angka commit di file ini kalau belum di-cross-check live,
 bisa saja sudah ada sesi lain sesudah file ini terakhir ditulis.
 
+### PRINSIP KANAL: WA vs PWA (LOCKED, 19 Agu 2026) — ATURAN MUTLAK SETINGKAT §1
+
+> Keputusan permanen owner, **terkunci, TIDAK BOLEH dibatalkan tanpa persetujuan
+> owner**. Diperlakukan sebagai aturan mengikat sama dengan §1. Setiap implementasi
+> masa depan (reminder, notifikasi order, broadcast promo, dll) WAJIB mematuhi ini.
+
+1. **WA = teks bebas selamanya (NO interactive buttons/lists).** WhatsApp tetap
+   kanal *natural-language text-only*. Tidak akan pernah pakai tombol/list/menu
+   interaktif (Fonnte/GOWA gratis tidak support, dan TIDAK ada rencana upgrade ke
+   WA Business API resmi). Jangan pernah bangun fitur yang mengasumsikan WA bisa
+   kirim template/interactive/button — semua "pilihan" diselesaikan via teks
+   (clarification NLP, bukan UI button).
+
+2. **WA = ANTI-BROADCAST / reply-only.** WA **HANYA** boleh membalas pesan masuk
+   (inbound → outbound reply). **DILARANG KERAS** mengirim pesan proaktif/push/
+   reminder/notifikasi/notif order/cs proaktif via WA outbound. Tidak ada
+   `sendMessage` WA yang dipicu tanpa ada inbound customer sebagai pemicu.
+
+3. **PWA Web Chatbox = kanal kaya-fitur ("toko sendiri"); WA = pintu masuk saja.**
+   Kalau butuh push/notifikasi proaktif (web push sudah ada di infra per G2-E4),
+   reminder, atau broadcast promo → **HARUS lewat PWA (web push) atau kanal lain**,
+   BUKAN WA. WA tidak boleh dijadikan kanal notifikasi satu arah.
+
+**Konsekuensi implementasi:** segala fitur outbound proaktif DILARANG di jalur
+`webhooks.ts`/Fonnte/GOWA. Kalau suatu task meminta "kirim notif ke customer",
+arahkan ke PWA web push, bukan WA.
+
 ### Roadmap P0-P6 (menggantikan roadmap lama, urutan TIDAK BOLEH dilompat)
 
 - [x] **P0 — Safety boundary**: V2 tidak fallback ke V1 setelah V2
