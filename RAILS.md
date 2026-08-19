@@ -715,3 +715,35 @@ vs gain kecil), konsistensi v1/v2 truncate otomatis selesai lewat P5.1/
 P5.2, larangan harga di reply_draft dipertahankan (desain lama, resiko
 inkonsistensi kalau diubah).
 **P5 (Response naturalness) RESMI SELESAI TOTAL 10 Agu 2026.**
+
+### 19 Agu 2026 — P6-1/P6-2/P6-3 selesai + TEMUAN: actionsRouter tidak di-mount (P0→P6-2 gap) + P6-5 golden coverage
+
+Konteks: Audit P6-6/P6-7/P6-8 merekonsiliasi status structured actions.
+- P6-1 (`2f834a5`): `ADD_TO_CART` end-to-end pakai `productId` otoritatif, skip
+  round-trip `productId→name→productId` (CartOp extended `productId?`, executeOps
+  branch resolve-by-id vs by-name; path LLM tak berubah). Terverifikasi source+diff
+  (`git show 2f834a5`) dan `npm run build` exit 0 di HEAD.
+- P6-2 (`3cb91c9`): `REMOVE_FROM_CART` + `UPDATE_CART_QUANTITY` sudah typed action
+  (reuse Stage-1/Stage-2 idempotensi; removeLine/updateQuantity `tx?` optional).
+- P6-3 (`ced2fc9`): `CANCEL_ORDER` typed action (delegasi ke transitionOrder, target
+  Order bukan OrderItem; CartAuthority tak disentuh) + **fix bug actionsRouter**.
+- 🔴 TEMUAN: `routes/actions.ts` dibuat di `e5ee299` tapi `app.use('/api/pwa',
+  actionsRouter)` TIDAK ADA di `index.ts` sampai `ced2fc9` → endpoint
+  `POST /api/pwa/:storeSlug/action` 404 / unreachable via HTTP nyata sejak P0 (P6-1
+  ADD, P6-2 REMOVE/UPDATE ikut terdampak). Ketahuan lewat curl HTTP asli ke canary
+  (test suite lolos karena panggil executeAction() in-process). Diverifikasi keempat
+  action reachable via HTTP setelah mount. Tidak ada klaim keliru "sudah jalan di
+  production" (RAILS §1.3).
+- P6-5 (`dba92b8`, `79734f3`): golden dataset coverage P3/P4/P5 + mutation test
+  (revert 1 baris fix → case jadi MERAH), naik 18/18 → 23/23; test:chat 267/267 tetap.
+
+Keputusan: P6-1/P6-2/P6-3 RESMI SELESAI; gap actionsRouter tertutup & terverifikasi
+HTTP; P6-5 RESMI SELESAI. **P6-4 TIDAK ADA sebagai commit terpisah** dalam range
+`e5ee299..HEAD` — pekerjaan §6.4 (golden dataset) tercatat selesai di P6-5
+(`dba92b8`). Perlu konfirmasi owner: apakah penomoran P6-4 disengaja di-skip/digarap
+bersama P6-5, atau gap penomoran yang perlu diluruskan (JANGAN diasumsikan).
+
+Alasan: rekonsiliasi dokumen agar STATUS/STATE tidak kontradiktif (UPDATE-SINCE-
+REPORT.md sebelumnya masih punya bagian "§6.2/§6.3 TIDAK BERUBAH" yang kedaluwarsa).
+Siapa yang setuju: owner (Panji), Claude — berdasarkan git log/diff mentah + build
+exit 0 + curl HTTP canary, bukan ringkasan.
