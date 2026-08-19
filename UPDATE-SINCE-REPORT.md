@@ -170,7 +170,8 @@ sekarang benar-benar berfungsi di production setelah mount.
 
 1. ~~Konfirmasi dampak actionsRouter mount gap~~ — **SELESAI**: gap sejak `e5ee299`,
    tidak ada klaim keliru, keempat action terverifikasi reachable via HTTP di canary.
-2. §6.4 — golden dataset belum cover P3/P4/P5.
+2. ~~§6.4 — golden dataset belum cover P3/P4/P5.~~ — **RESOLVED (P6-5, `dba92b8`)**,
+   lihat "Update Pasca P6-5" di bawah.
 3. §6.6 — `dist/` masih tracked (logs sudah untracked).
 4. ~~Dua migrasi `ActionIdempotency` duplikat (`...000000` vs `...000100`)
    belum dikonfirmasi superseded~~ — **RESOLVED (diklarifikasi): BUKAN
@@ -178,3 +179,62 @@ sekarang benar-benar berfungsi di production setelah mount.
    applied di DB; kedua folder migrasi tetap ada, tidak dihapus.**
 5. Kebijakan cancel shipped-order oleh customer sendiri — open product decision,
    lihat `DECISION-CANCEL-ORDER-STATE-MACHINE.md`.
+
+---
+
+## Update Pasca P6-5 (2026-08-19) — §6.4 golden coverage P3/P4/P5: **RESOLVED**
+
+Commit: `dba92b8` (`test(golden): tambah coverage P3/P4/P5 ...`). **Hanya 1 file test
+berubah** (`apps/api/src/tests/golden-dataset.test.ts`, +432 baris) — tidak ada source
+logic (`conversation.service.ts` / `order.service.ts` / `composer-v2.ts` /
+`cart-authority.ts` / `action-registry.ts`) yang disentuh.
+
+### Koreksi klaim lama (RAILS §1.3)
+
+Klaim di `laporan-taskP6-audit.md` / §6.4 PROJECT-STATE-REPORT "golden dataset TIDAK punya
+test case untuk P3/P4/P5" **sudah kedaluwarsa**: case P6.4a/b/c sudah masuk sejak
+`dcf35c8` (P3), `d2e99ff` (P4), `f9a8cdf` (P5) — itulah kenapa baseline sudah 18/18.
+Pekerjaan P6-5 karena itu difokuskan ke pertanyaan yang lebih tajam: **apakah case-case itu
+benar-benar GAGAL kalau fix-nya di-revert?** Diukur dengan mutation test (revert 1 baris
+fix di working tree, jalankan `test:golden`, lalu `git checkout --` restore).
+
+### Hasil mutation test (bukti case lama vs case baru)
+
+| Mutation (revert 1 baris fix) | Case lama | Case baru P6-5 |
+|---|---|---|
+| P3: `saveWorkspaceV2()` (conversation.service.ts:360) dimatikan | `Case P3` + `G2-D.8` **MERAH** | `P6-5/P3` **MERAH** |
+| P4.1: writer phantom ala `extractAndSaveOrder` dihidupkan lagi (baris Order `pending` kedua) | `Case P4` **HIJAU — celah** | `P6-5/P4` **MERAH** |
+| P4.2: draft-first di `tryTotal` (fallback.service.ts:666) di-revert | `Case P4` **MERAH** | — (tidak diduplikasi) |
+| P5 I-1a: `filter(qty>0)` → `Number(i.qty \|\| 1)` (conversation.service.ts:261) | `Case P5` **HIJAU — celah** | `P6-5/P5a` **MERAH** (Rp 20.000 vs Rp 12.000) |
+| P5 I-2 L1: truncate di composer-v2.ts:68 dihapus | `Case 8` + `Case P5` **HIJAU — celah** | `P6-5/P5b` **MERAH** |
+| P5 I-2 L2: safety-net `truncateTo2Sentences` (conversation.service.ts:373) dihapus | `Case 8` + `Case P5` **HIJAU — celah** | `P6-5/P5b` **MERAH** |
+| P5.2: simbol qty `x` ASCII → `×` (conversation.service.ts:1012) | tidak ada case | `P6-5/P5c` **MERAH** |
+
+Semua mutation di-restore (`git checkout -- <file>`), tidak ada perubahan source permanen;
+setelah restore `test:golden` hijau kembali 23/23.
+
+### 5 case baru
+
+1. **`Case P6-5/P3`** — engine v2, turn 1 clarification → turn 2 "iya". Assert RAW kolom
+   `workspace_v2` memuat pending turn-1, RAW `extractedEntities` TIDAK memuatnya (bukan
+   dual-writer legacy), dan turn 2 resolve **0 LLM** (state terbaca kembali).
+2. **`Case P6-5/P4`** — 2 turn belanja di jalur V1 (tempat call-site
+   `extractAndSaveOrder` dulu berada). Assert **tepat 1 baris Order** (`draft`) untuk
+   1 percakapan, `id` sama antar-turn (draft di-reuse), **0 baris `pending`**, plus guard
+   statis `orderService.extractAndSaveOrder === undefined`.
+3. **`Case P6-5/P5a`** — I-1a: keranjang punya sisa item qty=0; jalur V2 resolved wajib
+   melaporkan `Total belanja Kakak: *Rp 12.000*` (bukan Rp 20.000).
+4. **`Case P6-5/P5b`** — I-2 dua lapis: (L1) `composeReply()` dipanggil langsung (pola sama
+   Case 2/6 yang memanggil `normalize()`) → reply_draft 4 kalimat jadi 2; (L2) skenario
+   `info_answer` + `topic_switch` di mana composer tidak bisa truncate sendiri → safety-net
+   di conversation.service.ts yang memotong.
+5. **`Case P6-5/P5c`** — P5.2: ringkasan keranjang pakai `beras x1` (ASCII), dan `×`
+   (U+00D7) tidak boleh muncul.
+
+### Test baseline baru
+
+- `test:golden`: **23/23 pass** (naik dari 18/18).
+- `test:chat`: **23 suites / 267 tests pass** (tidak ada regresi).
+- `npx tsc --noEmit` exit 0, `npm run build` exit 0 (`src/tests` di-exclude tsconfig →
+  `dist/` tidak berubah).
+

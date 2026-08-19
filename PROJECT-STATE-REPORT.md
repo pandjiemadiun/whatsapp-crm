@@ -442,14 +442,29 @@ diekspos sebagai typed action). Customer yang tap "hapus" di cart UI saat ini ke
 masih harus lewat natural language. **Ini melanggar sebagian prinsip kontrak §2.1** (structured
 action tidak boleh lewat LLM) untuk operasi cart mutation non-add.
 
-### 6.4 Golden dataset BUKAN CI gate yang lengkap (P6)
+### 6.4 Golden dataset BUKAN CI gate yang lengkap (P6) — **RESOLVED (P6-5, commit `dba92b8`)**
 - `laporan-taskP6-audit.md` (terverifikasi): golden-dataset.test.ts (`src/tests/`) TIDAK
   tercakup `test:chat` (jest testMatch hanya `src/services/chat/__tests__`). Sekarang ada
   `test:golden` script (`package.json:17`) + `.github/workflows/test.yml` (P6.3) yang
-  MENJALANKAN `npm run test:golden` (harus 17/17 pass). **TAPI** coverage P3/P4/P5 fixes
-  BELUM ada di golden (`laporan-taskP6-audit.md` §4): workspace_v2 persist, draft-vs-pending
-  discrimination, reply composition — semua belum punya golden case → bisa revert tanpa
-  terdeteksi.
+  MENJALANKAN `npm run test:golden`.
+- **Status coverage P3/P4/P5 — SUDAH ADA (koreksi klaim lama).** Klaim "belum ada golden
+  case untuk P3/P4/P5" sudah **kedaluwarsa**: case P6.4a/b/c ditambahkan di `dcf35c8`
+  (P3), `d2e99ff` (P4), `f9a8cdf` (P5). P6-5 melakukan **mutation test** (revert 1 baris
+  fix di source, lalu restore) untuk mengukur apakah case-case itu benar-benar mendeteksi
+  regresi, dan menutup celah yang ditemukan:
+
+  | Revert fix (mutation) | Case lama | Case baru P6-5 |
+  |---|---|---|
+  | P3 `saveWorkspaceV2` dimatikan | Case P3 + G2-D.8 **MERAH** (sudah terjaga) | `P6-5/P3` MERAH (tambahan: assert LOKASI persist = kolom `workspace_v2`, bukan legacy `extractedEntities`) |
+  | P4.1 writer phantom `extractAndSaveOrder` dihidupkan lagi | Case P4 **HIJAU (celah)** | `P6-5/P4` MERAH |
+  | P4.2 draft-first dihapus | Case P4 **MERAH** (sudah terjaga) | tidak diduplikasi |
+  | P5 I-1a (subtotal ikut qty=0, jalur V2 resolved) | Case P5 **HIJAU (celah)** | `P6-5/P5a` MERAH |
+  | P5 I-2 L1 (truncate composer-v2) | Case 8 + Case P5 **HIJAU (celah)** | `P6-5/P5b` MERAH |
+  | P5 I-2 L2 (safety-net conversation.service.ts:373) | Case 8 + Case P5 **HIJAU (celah)** | `P6-5/P5b` MERAH |
+  | P5.2 simbol qty `x` ASCII → `×` | tidak ada case | `P6-5/P5c` MERAH |
+
+- Baseline test:golden naik **18/18 → 23/23**; `test:chat` tetap 23 suites / 267 tests pass.
+  Tidak ada file source logic yang diubah (`git diff --stat` = 1 file test saja).
 
 ### 6.5 Pre-existing test failures (baseline)
 Dari `laporan-taskP6.1.md` (terverifikasi): `test:chat` baseline = **2 failed suites /
@@ -562,7 +577,8 @@ Berdasarkan diskusi terakhir (forensik §6.2), scope:
 - **Commit terlebih dahulu** seluruh uncommitted structured-actions + `schema.prisma` +
   migrasi + kontrak (§4.3) SEBELUM lanjut fitur baru — supaya tidak hilang dan build
   konsisten.
-- **P6.4** golden dataset coverage untuk P3/P4/P5 fixes.
+- ~~**P6.4** golden dataset coverage untuk P3/P4/P5 fixes.~~ — **RESOLVED (P6-5, `dba92b8`)**,
+  lihat §6.4 (5 case baru, mutation-tested, test:golden 18/18 → 23/23).
 - **III-1/III-2** hygiene dist/logs + pre-commit hook.
 
 ---
