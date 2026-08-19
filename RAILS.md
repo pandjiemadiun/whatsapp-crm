@@ -149,7 +149,15 @@ arahkan ke PWA web push, bukan WA.
 - [ ] **P5 — Response naturalness**: composer-v2 dibedah untuk lebih
       natural. SENGAJA ditunda sampai P0-P4 selesai.
 - [ ] **P6 — Golden dataset sebagai architecture gate**, bukan sekadar
-      regression test kosmetik.
+       regression test kosmetik.
+- [x] **P7 — WA cart mutation idempotency (konvergensi ke structured-actions lock)**:
+      4 situs mutasi WA (v1 LLM/:673, v1 resolver EXECUTE/:511, v2 resolved/:238,
+      v2 plannedActs/:321) di-converge ke `executeWaCartMutation` yang reuse
+      `claimAction`/`executeClaimedAction` (FOR UPDATE + re-check + SAVEPOINT, sama
+      persis dengan PWA). `actionId=wa:${conversationId}:${messageId}`, actionType
+      `WA_CART_MUTATION`. ROLLBACK/:548 + interpreter/reasoning/CartAuthority TIDAK
+      disentuh. Range `0e6a5fa..00daf1b` (5 unit commit). **P7 RESMI SELESAI 19 Agu
+      2026** — test:chat 267/267, test:golden 26/26, test baru WA idempotensi 6/6.
 
 **Prinsip trade-off (tetap berlaku):** robustness dan natural language
 understanding > biaya LLM. I8 (maks 1 LLM/pesan) BUKAN lagi hard
@@ -854,7 +862,7 @@ dedup/mutex/Zod. `actionId` deterministik WA = `wa:${conversationId}:${messageId
   over-dedup). Plus engine-wiring v1 resolver: `messageId` di-thread → row
   `WA_CART_MUTATION` COMPLETED + redeliver sama → no double-apply. test:chat 267/267,
   test:golden 26/26, test:structured baseline tetap; test baru 6/6.
-- UNIT6 (`<commit ini>`): doc — BUG-BELUM-DIBERESKAN III-9 (`LEASE_FINAL_MS=750` vs
+- UNIT6 (`00daf1b`): doc — BUG-BELUM-DIBERESKAN III-9 (`LEASE_FINAL_MS=750` vs
   kontrak §6A.5 30–60 detik) di-cross-ref sebagai MASIH TERBUKA post-P7 (P7 tidak ubah
   nilai itu, per RAILS §1.4).
 
