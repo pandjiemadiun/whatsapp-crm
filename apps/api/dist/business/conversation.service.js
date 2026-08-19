@@ -392,19 +392,21 @@ export class ConversationService {
             // G2-D.4: clearPreviousMutation now mirrors to canonical internally
             if (resolved.action === 'EXECUTE') {
                 finalIntent = 'execute_pending';
-                // Execute pending cart ops (0 LLM) — fix I13: harga dari DB via modifyCart
+                // Execute pending cart ops (0 LLM) — fix I13: harga dari DB.
+                // P9: arahkan mutasi ke CartAuthority (sama dengan flow utama :661),
+                // BUKAN legacy modifyCart → extractedEntities.confirmedItems.
                 if (resolved.ops && resolved.ops.length > 0) {
                     // I13+P2: validasi harga pending cart_ops terhadap DB — ganti harga
                     // LLM (disimpan di pending options) dengan harga DB sebelum mutasi.
                     // Produk tidak ada di DB → tidak dieksekusi (bukan reject transaksi total).
                     const { valid: dbValid } = await validateCartOpsAgainstDb(resolved.ops, storeId);
-                    for (const op of dbValid) {
-                        await conversationContextService.modifyCart(conversationId, 'add', {
-                            addedProduct: op.product,
-                            qty: op.qty,
-                            price: op.price,
-                        });
-                        cartOpsExecuted.push(op);
+                    if (dbValid.length > 0) {
+                        await this.executeCartOps(dbValid, {
+                            conversationId,
+                            storeId,
+                            customerId,
+                        }, customerMessage);
+                        cartOpsExecuted.push(...dbValid);
                     }
                 }
                 const cart = await this.getCartFromDb(conversationId);
@@ -429,8 +431,18 @@ export class ConversationService {
             }
             if (resolved.action === 'ROLLBACK') {
                 finalIntent = 'rollback';
-                if (resolved.snapshot) {
-                    await conversationContextService.restoreCart(conversationId, resolved.snapshot);
+                // P9: rollback via CartAuthority (setara restoreCart), BUKAN legacy
+                // extractedEntities.confirmedItems. Snapshot kosong/null → no-op
+                // (sama seperti sebelumnya; storePreviousMutation tdk dipanggil di v1).
+                if (resolved.snapshot && Array.isArray(resolved.snapshot) && resolved.snapshot.length > 0) {
+                    // Pastikan draft Order ada (reconcile legacy confirmedItems kalau ada),
+                    // lalu restore snapshot via CartAuthority.
+                    await this.executeCartOps([], {
+                        conversationId,
+                        storeId,
+                        customerId,
+                    }, customerMessage);
+                    await cartAuthority.restoreFromSnapshot(conversationId, storeId, customerId, resolved.snapshot);
                 }
                 const reply = 'Oke Kak, sudah saya batalkan ya. 🙏';
                 await this.saveMessage({
