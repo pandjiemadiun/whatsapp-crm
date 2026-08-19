@@ -311,6 +311,26 @@ export declare const OpenOrderHistoryResponseSchema: z.ZodObject<{
     }, z.core.$strip>>;
 }, z.core.$strip>;
 export type OpenOrderHistoryResponse = z.infer<typeof OpenOrderHistoryResponseSchema>;
+/** CONTACT_ADMIN request schema (P4-2 — human takeover / "Hubungi CS").
+ *  No business payload: identity is server-resolved from ActionContext.
+ *  payload is optional {} to keep the wire shape uniform with other actions. */
+export declare const ContactAdminRequestSchema: z.ZodObject<{
+    actionId: z.ZodString;
+    type: z.ZodLiteral<"CONTACT_ADMIN">;
+    payload: z.ZodOptional<z.ZodObject<{}, z.core.$strip>>;
+}, z.core.$strip>;
+export type ContactAdminRequest = z.infer<typeof ContactAdminRequestSchema>;
+/** CONTACT_ADMIN response schema — status only, no sensitive payload. */
+export declare const ContactAdminResponseSchema: z.ZodObject<{
+    success: z.ZodBoolean;
+    actionId: z.ZodString;
+    type: z.ZodLiteral<"CONTACT_ADMIN">;
+    status: z.ZodEnum<{
+        already_applied: "already_applied";
+        applied: "applied";
+    }>;
+}, z.core.$strip>;
+export type ContactAdminResponse = z.infer<typeof ContactAdminResponseSchema>;
 /** Generic action handler context */
 export interface ActionContext {
     storeId: string;
@@ -435,6 +455,22 @@ export declare function handleOpenCatalog(request: OpenCatalogRequest, context: 
  */
 export declare function handleOpenCart(request: OpenCartRequest, context: ActionContext): Promise<ActionResult<OpenCartResponse>>;
 export declare function handleOpenOrderHistory(request: OpenOrderHistoryRequest, context: ActionContext): Promise<ActionResult<OpenOrderHistoryResponse>>;
+/**
+ * CONTACT_ADMIN Handler (P4-2 — human takeover / "Hubungi CS").
+ *
+ * Reuses the shared handoffService.executeHandoff() (extracted from the PWA
+ * /handoff route) so the escalation convention stays single-source.
+ *
+ * - Identity (storeId/customerId/conversationId) is server-resolved from
+ *   ActionContext — NEVER from the client payload (§7).
+ * - Does NOT use ActionIdempotency / claim / lease: this is a simple
+ *   read-modify guarded by conversation.status, not a cart/order mutation
+ *   (per P4-1 recommendation #6).
+ * - Idempotency guard: if the conversation is ALREADY 'human_takeover',
+ *   return status 'already_applied' WITHOUT re-triggering the handoff
+ *   (no duplicate history row, no duplicate events).
+ */
+export declare function handleContactAdmin(request: ContactAdminRequest, context: ActionContext): Promise<ActionResult<ContactAdminResponse>>;
 /**
  * Action Registry — single definition for ADD_TO_CART
  */
