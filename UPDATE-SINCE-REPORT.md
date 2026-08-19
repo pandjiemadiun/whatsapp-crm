@@ -35,11 +35,16 @@ Perlu re-run untuk pastikan bukan flaky/false-positive.
 
 ## Open item kecil (belum ditutup, tidak blocking)
 
-- Ada 2 migrasi untuk `ActionIdempotency` di folder migrations
-  (`20260816000000` vs `20260816000100`, field beda: `id UUID` vs
-  `idempotencyKey String @id` + `claimedAt`). Schema final match `...000100`.
-  Belum dikonfirmasi apakah `...000000` masih dipakai atau harus dibersihkan/didokumentasikan
-  sebagai superseded.
+- **Migrasi `ActionIdempotency` — RESOLVED (diklarifikasi, tidak ada file dihapus):**
+  ada 2 migrasi di folder (`20260816000000_add_action_idempotency` vs
+  `20260816000100_correct_action_idempotency_schema`), field beda:
+  `...000000` = CREATE TABLE (`id` UUID PK), `...000100` = ALTER TABLE
+  (RENAME `id` → `idempotencyKey`, ubah PK + tambah `claimedAt`).
+  **RANTAI prerequisite, BUKAN duplikat.** Bukti: query `_prisma_migrations`
+  → keduanya `finished = t` (applied di DB dev). Keputusan: **kedua folder
+  migrasi TETAP ADA, tidak dihapus** (menghapus `...000000` akan rusak
+  `prisma migrate deploy` di environment fresh karena `...000100` mengubah
+  tabel yang dibuat `...000000`).
 
 ## Status §6.2 dan §6.3 (dari laporan utama): TIDAK BERUBAH
 
@@ -167,7 +172,9 @@ sekarang benar-benar berfungsi di production setelah mount.
    tidak ada klaim keliru, keempat action terverifikasi reachable via HTTP di canary.
 2. §6.4 — golden dataset belum cover P3/P4/P5.
 3. §6.6 — `dist/` masih tracked (logs sudah untracked).
-4. Dua migrasi `ActionIdempotency` duplikat (`...000000` vs `...000100`)
-   belum dikonfirmasi superseded.
+4. ~~Dua migrasi `ActionIdempotency` duplikat (`...000000` vs `...000100`)
+   belum dikonfirmasi superseded~~ — **RESOLVED (diklarifikasi): BUKAN
+   duplikat, melainkan rantai prerequisite (create → alter) yang keduanya
+   applied di DB; kedua folder migrasi tetap ada, tidak dihapus.**
 5. Kebijakan cancel shipped-order oleh customer sendiri — open product decision,
    lihat `DECISION-CANCEL-ORDER-STATE-MACHINE.md`.
