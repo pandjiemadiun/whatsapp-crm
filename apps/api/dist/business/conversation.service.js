@@ -2,6 +2,7 @@ import { adapters } from '../adapters/container.js';
 import { fallbackService } from './fallback.service.js';
 import { orderService } from './order.service.js';
 import { cartAuthority } from './cart-authority.js';
+import { executeWaCartMutation } from './action-registry.js';
 import { conversationContextService } from './conversation-context.service.js';
 import { prisma } from '../infrastructure/prisma.js';
 import { productService } from './product.service.js';
@@ -17,7 +18,7 @@ import { shouldRunShadow } from '../services/chat/shadow-config.js';
 import { buildShadowEntry, logShadowEntry } from '../services/chat/shadow-logger.js';
 import { ResponseSource, } from '../domain/types.js';
 export class ConversationService {
-    async processCustomerMessage(storeId, customerId, conversationId, customerMessage, channel = 'whatsapp') {
+    async processCustomerMessage(storeId, customerId, conversationId, customerMessage, channel = 'whatsapp', messageId) {
         adapters.logger.info('Processing customer message', { storeId, customerId, conversationId, channel });
         const conversation = await prisma.conversation.upsert({
             where: { id: conversationId },
@@ -160,13 +161,7 @@ export class ConversationService {
                         const ops = this.deriveResolvedCartOps(pending, payload, catalog);
                         const { valid: dbValid } = await validateCartOpsAgainstDb(ops, storeId);
                         if (dbValid.length > 0) {
-                            await this.executeCartOps(dbValid, {
-                                conversationId,
-                                storeId,
-                                customerId,
-                                messages: [],
-                                customerCity: null,
-                            }, customerMessage);
+                            await executeWaCartMutation(dbValid, storeId, customerId, conversationId, messageId);
                             // ── P0 SAFETY BOUNDARY: mutasi cart sukses, jangan pernah jalan ke v1 ──
                             v2MutationExecuted = true;
                         }
@@ -240,14 +235,8 @@ export class ConversationService {
                                     qty: qtyPerEntity,
                                     price: isRemove ? 0 : (priceMap.get(String(e.value).toLowerCase()) ?? 0),
                                 }));
-                                // Panggil executeCartOps existing dengan harga dari DB (I13), bukan LLM
-                                await this.executeCartOps(ops, {
-                                    conversationId,
-                                    storeId,
-                                    customerId,
-                                    messages: [],
-                                    customerCity: null
-                                }, customerMessage);
+                                // Panggil executeWaCartMutation (idempoten via claim/FOR UPDATE) — harga dari DB (I13), bukan LLM
+                                await executeWaCartMutation(ops, storeId, customerId, conversationId, messageId);
                                 // ── P0 SAFETY BOUNDARY: mutasi cart sukses, jangan pernah jalan ke v1 ──
                                 v2MutationExecuted = true;
                             }
@@ -401,11 +390,7 @@ export class ConversationService {
                     // Produk tidak ada di DB → tidak dieksekusi (bukan reject transaksi total).
                     const { valid: dbValid } = await validateCartOpsAgainstDb(resolved.ops, storeId);
                     if (dbValid.length > 0) {
-                        await this.executeCartOps(dbValid, {
-                            conversationId,
-                            storeId,
-                            customerId,
-                        }, customerMessage);
+                        await executeWaCartMutation(dbValid, storeId, customerId, conversationId, messageId);
                         cartOpsExecuted.push(...dbValid);
                     }
                 }
@@ -547,7 +532,7 @@ export class ConversationService {
                 if (llmResult.cart_ops && llmResult.cart_ops.length > 0) {
                     const { valid, missing } = await validateCartOpsAgainstDb(llmResult.cart_ops, storeId);
                     if (valid.length > 0) {
-                        await this.executeCartOps(valid, pipelineCtx, normalizedMsg);
+                        await executeWaCartMutation(valid, storeId, customerId, conversationId, messageId);
                         executedAdd = valid.some((o) => o.type === 'add');
                         cartOpsExecuted.push(...valid);
                     }

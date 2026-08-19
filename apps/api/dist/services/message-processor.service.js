@@ -192,7 +192,7 @@ export class MessageProcessorService {
         // 7. Call conversation service (handles context + fallback chain)
         let result;
         try {
-            result = await this.llmCircuitBreaker.wrap(() => conversationService.processCustomerMessage(input.storeId, input.customerId, input.conversationId, msg.content, channel));
+            result = await this.llmCircuitBreaker.wrap(() => conversationService.processCustomerMessage(input.storeId, input.customerId, input.conversationId, msg.content, channel, input.messageId));
         }
         catch (err) {
             this.llmCircuitBreaker.recordFailure();
