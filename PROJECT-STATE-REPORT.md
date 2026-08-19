@@ -2,7 +2,7 @@
 
 > **Dokumen ini dibuat untuk onboarding ke project baru (Claude/AI coding agent).**
 > Semua klaim status di bawah diverifikasi terhadap **source code, test, dan git log aktual**
-> di working tree `/home/ubuntu/garuda` pada **2026-08-19** (HEAD `c6be2d8`). Tidak ada klaim
+> di working tree `/home/ubuntu/garuda` pada **2026-08-19** (HEAD `22caa82`). Tidak ada klaim
 > yang diambil mentah dari roadmap/STATUS lama tanpa cross-check ke kode.
 >
 > **ATURAN RAILS.md BERLAKU:** tidak ada kode yang diubah dalam pembuatan dokumen ini
@@ -157,7 +157,7 @@ Verifikasi file:line: `webhooks.ts:103/262`, `conversation.service.ts:62`, `acti
 | **P4** | Quick Action Contract | `73f607b` (wire 5 PWA quick actions) + `b610e69` (CONTACT_ADMIN) | **SUDAH ADA, TER-PUSH, VERIFIED** |
 | **P5** | OPEN_ORDER_HISTORY | `25d0f43` | **SUDAH ADA, TER-PUSH, VERIFIED** |
 | **P6** | NL → Validated Actions | `4224331`/`8dc22a3`/`2c604cc` | **SUDAH ADA, TER-PUSH, VERIFIED** |
-| **P7** | WA pakai action contract | — | **BELUM ADA (OPEN)** — lihat §6.9 |
+| **P7** | WA convergence ke idempotency lock (reuse FOR UPDATE structured-actions) | `0e6a5fa`..`22caa82` (5 unit commit + 2 doc) | **SELESAI, TER-PUSH, VERIFIED** |
 | **P8** | Regression / release gate | `c6be2d8` (CI lengkap: test:chat+test:golden+test:structured) | **SELESAI, TER-PUSH, VERIFIED** |
 
 **Registry terdaftar (action-registry.ts):** `ADD_TO_CART`, `REMOVE_FROM_CART`,
@@ -218,6 +218,9 @@ Ketiga mutation + `CANCEL_ORDER` typed, delegate ke `CartAuthority`/`orderServic
 Stage-1/Stage-2 idempotensi. **SELESAI**. Plus fix gap `actionsRouter` tidak di-mount sejak
 foundation (`2c604cc`).
 
+### 5.8 P7 — WA cart mutation convergence ke idempotency lock (`0e6a5fa..22caa82`)
+4 situs mutasi WA — v1 LLM `:673`, v1 resolver EXECUTE `:511`, v2 resolved EXECUTE `:238`, v2 plannedActs `:321` — di-converge ke 1 adapter `executeWaCartMutation` (`action-registry.ts`) yang **reuse** `claimAction`/`executeClaimedAction` (FOR UPDATE + re-check + SAVEPOINT, identik dengan PWA). `actionType` baru `WA_CART_MUTATION`; `actionId` deterministik `wa:${conversationId}:${messageId}` (idempotensi level PESAN). `CartAuthority`/`interpreter`/`reasoning` TIDAK disentuh; ROLLBACK `:548` tetap legacy. Bukti: test idempotensi WA baru 6/6, test:chat 267/267, test:golden 26/26, test:structured 115/115. **SELESAI** (RAILS.md §3).
+
 ---
 
 ## 6. MASALAH YANG DIKETAHUI BELUM SELESAI
@@ -236,9 +239,9 @@ Coverage P3/P4/P5 ada (`e2d391e`/`55c66c5`), mutation-tested. `test:golden` 23/2
 P8-CI-FIX (`c6be2d8`) masukkan `test:structured` (115 test) ke CI → gate lengkap.
 
 ### 6.5 🟡 Pre-existing test failures (baseline) — **MASIH OPEN (tidak blocking)**
-`test:chat` baseline = **2 failed suites / 1 failed test** (konsisten):
+`test:chat` baseline = **1 failed test** (reasoning-v2; full suite **267/267** otherwise hijau, terverifikasi 19 Agu 2026):
 - `reasoning-v2.test.ts` — "terminal→fallback" outdated (II-1).
-- `engine-config-v2.test.ts` — `ReferenceError: redisAdapter before initialization` (II-2, urutan init modul test env).
+- ~~`engine-config-v2.test.ts` — `ReferenceError: redisAdapter before initialization` (II-2)~~ ✅ **RESOLVED (STALE DOC, 19 Agu 2026)** — audit read-only konfirmasi `engine-config-v2.test.ts` LULUS **6/6** (di-run 6x, full `test:chat` 267/267 tiap kali). TDZ TIDAK direproduksi ulang. Cycle import `container.ts`↔3 adapter tetap ada tapi benign (semua `adapters.` di dalam method) — lihat BUG-BELUM-DIBERESKAN II-2 + III-10.
 
 ### 6.6 🟡 Hygiene: `dist/` ter-track + `logs/` (III-1 / III-2)
 - `logs/*.log`: **RESOLVED** (III-2-A/B, `bcddfcd`) — di-exclude + di-purge dari history
@@ -325,7 +328,7 @@ npm run build             # WAJIB — generate dist/
 ### 9.2 Test
 ```bash
 cd /home/ubuntu/garuda/apps/api
-npm run test:chat         # Jest: baseline 2 failed suites / 1 failed test (pre-existing, §6.5)
+npm run test:chat         # Jest: baseline 1 failed test (reasoning-v2, II-1); full suite 267/267 hijau (engine-config-v2 6/6, §6.5)
 npm run test:golden       # node:test golden-dataset: 23/23 pass
 npm run test:structured   # node:test structured-actions*: 115 tests / 7 suites pass (P8-CI-FIX)
 ```
