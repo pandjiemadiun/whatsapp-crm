@@ -825,6 +825,49 @@ REPORT.md sebelumnya masih punya bagian "§6.2/§6.3 TIDAK BERUBAH" yang kedaluw
 Siapa yang setuju: owner (Panji), Claude — berdasarkan git log/diff mentah + build
 exit 0 + curl HTTP canary, bukan ringkasan.
 
+### 19 Agu 2026 — P7 SELESAI: WA cart mutation konvergensi ke idempotency lock (structured-actions FOR UPDATE)
+
+Konteks: P7-DESIGN.md (final, `058bce5`) menyetujui WA cart mutation di-converge ke
+jalur locking YANG SAMA dengan structured actions (PWA): reuse `claimAction` /
+`executeClaimedAction` (FOR UPDATE + re-check + SAVEPOINT) via 1 adapter tipis, TANPA
+sentuh interpreter/reasoning/CartAuthority/claimAction/FOR UPDATE/SAVEPOINT/Redis
+dedup/mutex/Zod. `actionId` deterministik WA = `wa:${conversationId}:${messageId}`
+(actionType `WA_CART_MUTATION`, terpisah dari key PWA).
+
+- UNIT1 (`0e6a5fa`): `processCustomerMessage` + call site `message-processor.service.ts`
+  terima `messageId` (optional, non-WA/test tanpa messageId → fallback direct, no
+  regression). tsc 0 error; test:chat 267/267, test:golden 26/26 tetap.
+- UNIT2 (`3e56ef1`): export `executeWaCartMutation(ops, storeId, customerId,
+  conversationId, messageId)` + konstanta `WA_CART_MUTATION` di `action-registry.ts`.
+  HANYA memanggil `claimAction`+`executeClaimedAction` yang SUDAH ADA; mutasi delegate
+  ke `cartAuthority.executeOps(ops, ..., tx)` (sama seperti P0–P6). Return value
+  dibedakan: `applied` / `already_applied` / `error`. diff hanya file ini (+94 LOC).
+- UNIT3 (`f51ed24`): ganti `executeCartOps` v1 → `executeWaCartMutation`: :511 resolver
+  EXECUTE + :673 LLM langsung. :548 ROLLBACK TIDAK diubah (sudah aman per P7-DESIGN §8 Gap 3).
+- UNIT4 (`0f4315d`): ganti `executeCartOps` v2 → `executeWaCartMutation`: :238 resolved
+  EXECUTE + :321 plannedActs (line re-verifikasi: desain 236/325 sudah geser ke 238/321
+  setelah UNIT1 +1 baris). Keempat situs mutasi (:238/:321/:511/:673) kini converge;
+  ROLLBACK :548 tetap `executeCartOps([])` (legacy restoreFromSnapshot).
+- UNIT5 (`b47f13c`): test kontrak idempotensi WA baru (`wa-cart-idempotency.test.ts`, 6
+  test). Membuktikan Gap 2: redeliver `messageId` SAMA → FOR UPDATE menangkap → tetap 1
+  OrderItem (v1 single-op + v2 batch); `messageId` BEDA isi sama → tetap 2 (tidak
+  over-dedup). Plus engine-wiring v1 resolver: `messageId` di-thread → row
+  `WA_CART_MUTATION` COMPLETED + redeliver sama → no double-apply. test:chat 267/267,
+  test:golden 26/26, test:structured baseline tetap; test baru 6/6.
+- UNIT6 (`<commit ini>`): doc — BUG-BELUM-DIBERESKAN III-9 (`LEASE_FINAL_MS=750` vs
+  kontrak §6A.5 30–60 detik) di-cross-ref sebagai MASIH TERBUKA post-P7 (P7 tidak ubah
+  nilai itu, per RAILS §1.4).
+
+Bukti ringkas: tsc 0 error; `npm run build` exit 0; git diff --stat UNIT2 hanya
+`action-registry.ts` (+94). Range `0e6a5fa..b47f13c` (5 unit commit, implementation
+murna penambahan tipis di executor + 1 adapter; tidak ada duplikasi claim/FOR UPDATE).
+Baseline test:chat 267→267, test:golden 26→26 (tidak ada regresi).
+
+Keputusan: P7 RESMI SELESAI. Tidak ada logic luar scope yang diubah; residual
+(`LEASE_FINAL_MS`, redeliver `messageId` beda, content-window fallback) dicatat,
+bukan diperbaiki. Siapa yang setuju: owner (Panji), Claude — berdasarkan git
+log/diff mentah + tsc/build/test, bukan ringkasan.
+
 ### 19 Agu 2026 — P8-1/P8-2: regression gate hijau penuh + fix test-isolation CANCEL_ORDER
 
 Konteks: P8-1 (READ-ONLY gate di HEAD `7a589ed`) ditemukan 1 failure di
