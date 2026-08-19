@@ -8,7 +8,7 @@ import { productService } from '../business/product.service.js';
 import { ApiError } from '../errors/ApiError.js';
 import { ErrorCodes } from '../constants/errorCodes.js';
 import { ResponseSource } from '../domain/types.js';
-import { composeEscalateReply } from '../services/chat/composer-v2.js';
+import { executeHandoff } from '../services/handoff.service.js';
 
 const router = Router();
 
@@ -726,53 +726,10 @@ router.post('/:storeSlug/handoff', async (req: Request, res: Response) => {
     // Resolve-or-create agar "Hubungi Admin" jalan meski belum pernah chat.
     const session = await getOrCreateWebSession(store.id, uid, convId);
 
-    const escalateReply = composeEscalateReply();
-    const now = new Date();
-    const messageRow = await prisma.$transaction(async (tx) => {
-      await tx.conversation.update({
-        where: { id: session.conversationId },
-        data: { status: 'human_takeover', humanTakeoverAt: now },
-      });
-      return tx.conversationHistory.create({
-        data: {
-          conversationId: session.conversationId,
-          role: 'assistant',
-          content: escalateReply,
-          source: ResponseSource.HUMAN,
-          messageType: 'handoff',
-          metadata: { messagePayload: { reason: 'escalation_clarification_retry_exceeded', content: escalateReply } },
-          createdAt: now,
-        },
-      });
-    });
-
-    eventBus.publish({
-      event: 'message.created',
+    const handoff = await executeHandoff({
+      conversationId: session.conversationId,
       storeId: session.storeId,
-      data: {
-        id: messageRow.id,
-        conversationId: session.conversationId,
-        sender: 'assistant',
-        type: 'handoff',
-        payload: { reason: 'escalation_clarification_retry_exceeded', content: escalateReply },
-        content: escalateReply,
-        source: ResponseSource.HUMAN,
-        confidence: 0.9,
-        createdAt: now,
-      },
-      ts: Date.now(),
-    });
-    eventBus.publish({
-      event: 'conversation.handoff',
-      storeId: session.storeId,
-      data: { conversationId: session.conversationId, status: 'human_takeover' },
-      ts: Date.now(),
-    });
-    eventBus.publish({
-      event: 'conversation.updated',
-      storeId: session.storeId,
-      data: { conversationId: session.conversationId, status: 'human_takeover', lastMessageAt: now },
-      ts: Date.now(),
+      channel: 'web',
     });
 
     res.json({
@@ -780,11 +737,11 @@ router.post('/:storeSlug/handoff', async (req: Request, res: Response) => {
       conversationId: session.conversationId,
       status: 'human_takeover',
       message: {
-        id: messageRow.id,
+        id: handoff.messageId,
         type: 'handoff',
-        content: escalateReply,
+        content: handoff.content,
         source: ResponseSource.HUMAN,
-        payload: { reason: 'escalation_clarification_retry_exceeded', content: escalateReply },
+        payload: { reason: 'escalation_clarification_retry_exceeded', content: handoff.content },
       },
     });
   } catch (err) {
