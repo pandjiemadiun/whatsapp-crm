@@ -111,19 +111,22 @@ export function tokenize(message: string): string[] {
 /**
  * Cek apakah sebuah token fuzzy-match sebuah nama produk.
  *
- * Match jika:
- *   - token === namaProduk (exact), ATAU
- *   - Levenshtein(token, namaProduk) <= 2
+ * Match jika (perbandingan case-INSENSITIVE secara internal):
+ *   - token === namaProduk (exact, case-insensitive), ATAU
+ *   - Levenshtein(token.toLowerCase(), namaProduk.toLowerCase()) <= 2
  *
- * (Case-sensitive pada `===` dan Levenshtein, konsisten dengan spesifikasi.)
+ * Nilai balik tetap `true`/`false`; pemanggil bertanggung jawab
+ * mengembalikan token ASLI (tanpa ubah casing) bila match.
  */
 export function fuzzyMatchProduct(
   token: string,
   productDictionary: string[]
 ): boolean {
+  const lcToken = token.toLowerCase();
   for (const name of productDictionary) {
-    if (token === name) return true;
-    if (levenshtein(token, name) <= 2) return true;
+    const lcName = name.toLowerCase();
+    if (lcToken === lcName) return true;
+    if (levenshtein(lcToken, lcName) <= 2) return true;
   }
   return false;
 }
@@ -143,14 +146,33 @@ export function normalize(
   message: string,
   productDictionary: string[]
 ): string {
+  // III-8: cek dulu apakah pesan (lowercase) mengandung nama produk
+  // multi-token (lowercase) sebagai frasa utuh — bila ya, seluruh token
+  // penyusun frasa itu di-guard (tidak dimutasi), tanpa ubah casing asli.
+  const lowerMsg = message.toLowerCase();
+  const multiPhrases = productDictionary
+    .filter((n) => n.includes(' '))
+    .map((n) => n.toLowerCase());
+  const hasMultiPhrase = multiPhrases.some((p) => lowerMsg.includes(p));
+  const multiTokens = new Set<string>();
+  if (hasMultiPhrase) {
+    for (const p of multiPhrases) {
+      for (const t of p.split(/\s+/)) multiTokens.add(t);
+    }
+  }
+
   return tokenize(message)
     .map((token) => {
-      // Guard: cek produk DULU (I12)
+      // Guard: cek produk DULU (I12) — case-insensitive internal, return asli.
       if (fuzzyMatchProduct(token, productDictionary)) {
         return token; // JANGAN ubah nama produk
       }
-      // Baru cek kamus typo
-      return typoDictionary[token] ?? token;
+      // Produk multi-token: token penyusun frasa yang ada di pesan di-guard.
+      if (hasMultiPhrase && multiTokens.has(token.toLowerCase())) {
+        return token; // JANGAN ubah nama produk
+      }
+      // Baru cek kamus typo (lookup case-insensitive, return asli kalau tak ketemu).
+      return typoDictionary[token.toLowerCase()] ?? token;
     })
     .join(' ');
 }
