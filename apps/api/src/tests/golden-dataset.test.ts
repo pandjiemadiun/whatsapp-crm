@@ -25,6 +25,7 @@ import { cartAuthority } from '../business/cart-authority.js';
 import { llmGateway } from '../adapters/ai/llm-gateway.js';
 import { groqAdapter } from '../adapters/ai/groq.adapter.js';
 import { normalize } from '../services/chat/normalizer.js';
+import { composeReply } from '../services/chat/composer-v2.js';
 import { ResponseSource } from '../domain/types.js';
 import type { AIResponse, AIGenerateOptions } from '../adapters/ai/types.js';
 import type { InterpreterResult, ResponseResult } from '../domain/types.js';
@@ -1028,4 +1029,435 @@ test('Case G2-D.8: LLM clarification persists to canonical pending and resolves 
 
   // Restore intended global engine state (v2) so subsequent tests are unaffected.
   await setStoreEngine(STORE_ID, 'v2');
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TASK P6-5 — Golden coverage tambahan untuk fix P3/P4/P5.
+//
+// Case P6.4a/b/c di atas sudah ada, tapi mutation test (revert 1 baris fix di
+// source, lihat laporan P6-5) membuktikan ada celah yang TIDAK terdeteksi:
+//   - Revert P4.1 (writer second-brain `extractAndSaveOrder` dihidupkan lagi →
+//     muncul baris Order 'pending' phantom): "Case P4" lama TETAP HIJAU, karena
+//     ia hanya menguji P4.2 (draft dipilih lebih dulu daripada pending).
+//   - Revert I-1a (subtotal ikut menghitung item qty=0 di jalur V2 resolved):
+//     "Case P5" lama TETAP HIJAU, karena ia lewat tryTotal yang punya filter
+//     qty sendiri (fallback.service.ts:702), bukan jalur fix-nya
+//     (conversation.service.ts:261).
+//   - Revert I-2 layer L1 (composer-v2) maupun L2 (safety-net
+//     conversation.service.ts:373): Case 8 dan "Case P5" lama TETAP HIJAU,
+//     karena masing-masing masih tertutup layer yang lain.
+//   - Revert simbol qty P5.2 ('x' ASCII → '×'): tidak ada case yang menjaganya.
+// Yang SUDAH terjaga case lama (tidak diduplikasi di sini):
+//   - Revert P3 persist (`saveWorkspaceV2`): "Case P3" lama + G2-D.8 memang
+//     merah. Case P6-5/P3 di bawah menambah lapisan yang belum ada: assert
+//     LOKASI persist (kolom `workspace_v2`, BUKAN legacy `extractedEntities`)
+//     lewat raw readback kolom DB.
+//   - Revert P4.2 draft-first: "Case P4" lama memang merah (terverifikasi).
+//
+// Semua case di bawah sudah diverifikasi GAGAL saat baris fix-nya di-revert
+// dan HIJAU lagi setelah restore (bukti mutation test ada di laporan P6-5).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * P6-5 / P3 gate — persist state antar-turn HARUS di kolom `workspace_v2`.
+ *
+ * Fix asli: c164729..fd08ba3 (P3.1–P3.4). Sebelum fix, "persist" workspace V2
+ * lewat updateExtractedEntities = NO-OP (type mismatch) sehingga memori V2
+ * hilang antar-turn; setelah fix, state ditulis ke kolom `workspace_v2`
+ * (sekarang lewat canonical boundary `saveWorkspaceV2`, G2-D.5).
+ *
+ * Skenario realistis: customer tanya terbuka → LLM balas clarification
+ * (pending disimpan) → turn berikutnya customer jawab "iya" → resolver 0 LLM
+ * hanya mungkin kalau pending turn-1 benar-benar persist DAN terbaca lagi.
+ *
+ * Assertion yang membedakan dari Case P3 lama / Case G2-D.8 (keduanya menguji
+ * "apakah persist jalan", lewat kolom != null / lewat service read yang punya
+ * legacy fallback ke extractedEntities):
+ *   (1) RAW kolom `workspace_v2` memuat pending turn-1  → tempat persist benar.
+ *   (2) RAW kolom `extractedEntities` TIDAK memuatnya    → bukan dual-writer legacy.
+ *   (3) Turn 2 resolve 0 LLM                             → state terbaca kembali.
+ */
+test('Case P6-5/P3: state antar-turn persist di kolom workspace_v2, bukan legacy extractedEntities (P3 gate)', async () => {
+  const convId = 'conv-p65-p3';
+  const custId = 'cust-p65-p3';
+  const QUESTION = 'Mau beras atau woltel Kak?';
+
+  await createConv(convId, custId);
+  await setStoreEngine(STORE_ID, 'v2');
+
+  try {
+    // ── Turn 1: LLM balas clarification → pending masuk workspace V2 ──
+    cannedContent = canned({
+      intent: 'clarify',
+      clarification: {
+        question: QUESTION,
+        options: ['beras', 'woltel'],
+        expected_type: 'affirmative',
+      },
+      confidence: 0.85,
+    });
+
+    const t1 = await processMsg(convId, custId, 'mau belanja tapi bingung kak');
+    assert.ok(t1.result, 'turn 1 must return a response');
+    assert.equal(t1.result!.metadata.engine, 'v2', 'turn 1 must run V2 engine');
+    assert.equal(t1.llmCalls, 1, 'turn 1 = 1 LLM call (interpreter clarification)');
+
+    // (1) + (2): cek RAW kolom DB — tempat persist, bukan lewat service
+    const row = await prisma.conversationContext.findUnique({
+      where: { conversationId: convId },
+      select: { workspace_v2: true, extractedEntities: true },
+    });
+    const wsRaw = JSON.stringify(row?.workspace_v2 ?? null);
+    const legacyRaw = JSON.stringify(row?.extractedEntities ?? null);
+
+    assert.ok(
+      wsRaw.includes(QUESTION),
+      `P3.1: state turn-1 wajib persist di kolom workspace_v2, dapat: ${wsRaw}`,
+    );
+    assert.ok(
+      !legacyRaw.includes(QUESTION),
+      `P3.1: state V2 tidak boleh ditulis ke legacy extractedEntities (dual-writer lama), dapat: ${legacyRaw}`,
+    );
+
+    // ── Turn 2: jawab "iya" → resolver fast-path (0 LLM) HANYA bila state terbaca ──
+    const t2 = await processMsg(convId, custId, 'iya');
+    assert.ok(t2.result, 'turn 2 must return a response');
+    assert.equal(
+      t2.llmCalls,
+      0,
+      'P3 read-back: turn 2 harus resolve pending turn-1 tanpa LLM (state persist antar-turn)',
+    );
+    assert.equal(t2.result!.metadata.engine, 'v2');
+    assert.equal(t2.result!.metadata.outcome, 'resolved');
+    assert.equal(t2.result!.metadata.action, 'EXECUTE');
+  } finally {
+    await setStoreEngine(STORE_ID, 'v2');
+    await prisma.conversation.delete({ where: { id: convId } }).catch(() => {});
+  }
+});
+
+/**
+ * P6-5 / P4 gate — satu percakapan = tepat SATU baris Order (draft).
+ *
+ * Fix asli: 0db56bf (hapus `extractAndSaveOrder`, second-brain interpreter yang
+ * menulis baris Order 'pending' phantom dengan harga tak tervalidasi DB) +
+ * 947fdaf (draft-vs-pending discrimination). Case ini menjaga sisi PERTAMA:
+ * setelah penghapusan, tidak boleh ada writer kedua yang bikin baris Order
+ * tambahan per turn.
+ *
+ * Skenario realistis: 2 turn belanja lewat pipeline V1 (jalur tempat
+ * `extractAndSaveOrder` dulu dipanggil, conversation.service.ts tail) —
+ * turn 1 tambah beras, turn 2 tambah woltel.
+ *
+ * Assertion:
+ *   (1) setelah turn 1: tepat 1 baris Order, status 'draft'
+ *   (2) setelah turn 2: masih 1 baris (id SAMA — draft di-reuse, bukan order baru)
+ *   (3) tidak ada baris Order 'pending' (phantom second-brain)
+ *   (4) `orderService.extractAndSaveOrder` tidak ada lagi (guard re-introduksi)
+ */
+test('Case P6-5/P4: 2 turn belanja → tepat 1 baris Order draft, 0 phantom pending (P4 gate)', async () => {
+  const convId = 'conv-p65-p4';
+  const custId = 'cust-p65-p4';
+
+  await createConv(convId, custId);
+  // Jalur V1: tempat call-site `extractAndSaveOrder` dulu berada (P4.1).
+  await setStoreEngine(STORE_ID, 'v1');
+
+  try {
+    // (4) guard statis: second-brain interpreter tidak boleh kembali
+    assert.equal(
+      typeof (orderService as any).extractAndSaveOrder,
+      'undefined',
+      'P4.1: orderService.extractAndSaveOrder harus tetap TIDAK ADA (second-brain interpreter)',
+    );
+
+    // ── Turn 1: beli beras 2 (harga dari DB, bukan dari LLM) ──
+    cannedContent = canned({
+      intent: 'buy',
+      cart_ops: [{ type: 'add', product: 'beras', qty: 2, price: 12000 }],
+      buy_signal: 'yes',
+      reply_draft: 'Beras 2 kg sudah masuk keranjang ya Kak.',
+      confidence: 0.9,
+    });
+
+    const t1 = await processMsg(convId, custId, 'mau pesan 2 kg dong');
+    assert.ok(t1.result, 'turn 1 must return a response');
+
+    const ordersT1 = await prisma.order.findMany({
+      where: { conversationId: convId, deletedAt: null },
+      select: { id: true, orderStatus: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    assert.equal(
+      ordersT1.length,
+      1,
+      `P4.1: 1 percakapan = 1 baris Order, dapat ${ordersT1.length}: ${JSON.stringify(ordersT1)}`,
+    );
+    assert.equal(ordersT1[0].orderStatus, 'draft', 'baris Order tunggal harus berstatus draft');
+
+    // ── Turn 2: tambah woltel 1 → draft yang SAMA di-reuse ──
+    cannedContent = canned({
+      intent: 'buy',
+      cart_ops: [{ type: 'add', product: 'woltel', qty: 1, price: 10000 }],
+      buy_signal: 'yes',
+      reply_draft: 'Woltel 1 sudah ditambahkan ya Kak.',
+      confidence: 0.9,
+    });
+
+    const t2 = await processMsg(convId, custId, 'tambah 1 lagi ya');
+    assert.ok(t2.result, 'turn 2 must return a response');
+
+    const ordersT2 = await prisma.order.findMany({
+      where: { conversationId: convId, deletedAt: null },
+      select: { id: true, orderStatus: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    assert.equal(
+      ordersT2.length,
+      1,
+      `P4.1: turn 2 tidak boleh bikin baris Order kedua, dapat ${ordersT2.length}: ${JSON.stringify(ordersT2)}`,
+    );
+    assert.equal(ordersT2[0].id, ordersT1[0].id, 'draft order yang sama harus di-reuse antar-turn');
+    assert.equal(
+      ordersT2.filter((o) => o.orderStatus === 'pending').length,
+      0,
+      'P4.1: tidak boleh ada baris Order "pending" phantom (second-brain writer)',
+    );
+
+    // Cart tetap benar & harga dari DB (bukan phantom tanpa harga)
+    const cart = await cartAuthority.getCart(convId);
+    const beras = cart.find((i: any) => i.productName === 'beras');
+    const woltel = cart.find((i: any) => i.productName === 'woltel');
+    assert.ok(beras, 'beras harus ada di cart');
+    assert.ok(woltel, 'woltel harus ada di cart');
+    assert.equal(beras.unitPrice, 12000, 'harga beras dari DB');
+    assert.equal(woltel.unitPrice, 10000, 'harga woltel dari DB');
+  } finally {
+    await setStoreEngine(STORE_ID, 'v2');
+    await prisma.orderItem
+      .deleteMany({ where: { order: { conversationId: convId } } })
+      .catch(() => {});
+    await prisma.order.deleteMany({ where: { conversationId: convId } }).catch(() => {});
+    await prisma.conversation.delete({ where: { id: convId } }).catch(() => {});
+  }
+});
+
+/**
+ * P6-5 / P5 gate (a) — I-1a: subtotal jalur V2 resolved hanya menghitung qty > 0.
+ *
+ * Fix asli: 0e99fbd (I-1a, conversation.service.ts:261 — `filter(qty > 0)` +
+ * `Number(i.qty || 0)`; sebelumnya `Number(i.qty || 1)` memperlakukan qty=0
+ * sebagai 1 sehingga TOTAL ≠ item yang ditampilkan).
+ *
+ * Skenario realistis: keranjang legacy masih menyimpan baris sisa qty=0
+ * (brambang) di samping beras qty=1. Bot punya pending tentang produk yang
+ * ternyata sudah tidak ada di katalog ('kangkung'), customer jawab "iya" →
+ * resolver EXECUTE (0 op valid, tidak ada mutasi) → reply merangkum keranjang
+ * + total. Total wajib Rp 12.000 (hanya beras), bukan Rp 20.000 (ikut qty=0).
+ */
+test('Case P6-5/P5a: subtotal V2 resolved hanya item qty > 0 (I-1a gate)', async () => {
+  const convId = 'conv-p65-p5a';
+  const custId = 'cust-p65-p5a';
+
+  await createConv(convId, custId);
+  await setStoreEngine(STORE_ID, 'v2');
+
+  try {
+    // Keranjang legacy: beras qty 1 (12.000) + sisa brambang qty 0 (8.000)
+    await prisma.conversationContext.update({
+      where: { conversationId: convId },
+      data: {
+        extractedEntities: {
+          confirmedItems: [
+            { product: 'beras', qty: 1, price: 12000 },
+            { product: 'brambang', qty: 0, price: 8000 },
+          ],
+        } as any,
+      },
+    });
+
+    // Pending menawarkan produk yang TIDAK ada di katalog → EXECUTE tanpa mutasi
+    await setPendingV2(convId, {
+      id: 'p65-p5a',
+      question: 'Mau tambah kangkung juga Kak?',
+      options: ['kangkung'],
+    });
+
+    const { result, llmCalls: calls } = await processMsg(convId, custId, 'iya');
+    assert.ok(result, 'must return a response');
+    assert.equal(calls, 0, 'resolver path = 0 LLM');
+    assert.equal(result!.metadata.outcome, 'resolved');
+    assert.equal(result!.metadata.action, 'EXECUTE');
+
+    // I-1a: total = 12.000 (beras saja). Kalau filter qty>0 di-revert → 20.000.
+    assert.ok(
+      result!.message.content.includes('Total belanja Kakak: *Rp 12.000*'),
+      `I-1a: subtotal harus 12.000 (qty=0 tidak dihitung), dapat: ${result!.message.content}`,
+    );
+    assert.ok(
+      !/20\.?000/.test(result!.message.content),
+      `I-1a: subtotal tidak boleh 20.000 (brambang qty=0 dihitung sebagai 1), dapat: ${result!.message.content}`,
+    );
+    // Konsistensi display: item qty=0 tidak ditampilkan di ringkasan keranjang
+    assert.ok(
+      !result!.message.content.includes('brambang'),
+      `item qty=0 tidak boleh muncul di ringkasan keranjang, dapat: ${result!.message.content}`,
+    );
+  } finally {
+    await setStoreEngine(STORE_ID, 'v2');
+    await prisma.conversation.delete({ where: { id: convId } }).catch(() => {});
+  }
+});
+
+/**
+ * P6-5 / P5 gate (b) — I-2: reply jalur V2 wajib ≤ 2 kalimat.
+ *
+ * Fix asli: 0e99fbd (I-2). Dua lapis:
+ *   L1 composer-v2.ts:68 → truncate reply_draft saat plannedActs kosong
+ *   L2 conversation.service.ts:373 → safety-net truncate hasil composeReply
+ * Case ini menjaga KEDUANYA: assertion pure memanggil composeReply langsung
+ * (pola sama seperti Case 2/6 yang memanggil normalize() langsung), lalu
+ * assertion end-to-end lewat engine V2.
+ */
+test('Case P6-5/P5b: reply V2 di-truncate ke ≤2 kalimat (I-2 gate, L1 composer + L2 safety-net)', async () => {
+  const convId = 'conv-p65-p5b';
+  const custId = 'cust-p65-p5b';
+
+  // ── L1: composer-v2 (pure) — reply_draft 4 kalimat → 2 kalimat pertama ──
+  const composedL1 = composeReply({
+    plannedActs: [],
+    reasoningResult: {
+      acts: [],
+      unmatched_mentions: [],
+      topic_switch: false,
+      draft_cart_ops: [],
+      confidence: { entities: 1, intent: 1, selection: 1, topic: 1 },
+      reply_draft: 'Beras kami premium. Harganya Rp 12.000 per kg. Stok masih banyak. Mau pesan berapa?',
+    } as any,
+    workspace: {
+      schema_version: 'v3.2',
+      conversation_summary: '',
+      pendings: [],
+      draft_cart: [],
+      resolved_facts: {},
+      options_presented: [],
+    } as any,
+    catalog: [],
+    clarificationAttempt: 0,
+  });
+  assert.equal(
+    composedL1,
+    'Beras kami premium. Harganya Rp 12.000 per kg.',
+    'I-2 L1: composer-v2 wajib truncate reply_draft ke 2 kalimat pertama',
+  );
+
+  // ── L2: end-to-end engine V2 — hasil akhir tetap ≤2 kalimat ──
+  await createConv(convId, custId);
+  await setStoreEngine(STORE_ID, 'v2');
+  try {
+    cannedContent = cannedV2({
+      acts: [],
+      reply_draft: 'Beras kami premium. Harganya Rp 12.000 per kg. Stok masih banyak. Mau pesan berapa?',
+    });
+
+    const { result, llmCalls: calls } = await processMsg(convId, custId, 'rekomendasi apa ya?');
+    assert.ok(result, 'must return a response');
+    assert.equal(calls, 1, 'interpreter V2 = 1 LLM call');
+    assert.equal(result!.metadata.engine, 'v2', 'harus lewat jalur V2 (bukan fallback V1)');
+
+    const sentences = result!.message.content
+      .split(/(?<=[.!])\s+|(?<=\?)[ \t]+(?![a-z,])/)
+      .filter((s: string) => s.trim().length > 0);
+    assert.ok(
+      sentences.length <= 2,
+      `I-2: reply V2 maks 2 kalimat, dapat ${sentences.length}: ${result!.message.content}`,
+    );
+    assert.ok(
+      !result!.message.content.includes('Stok masih banyak'),
+      `I-2: kalimat ke-3 wajib terpotong, dapat: ${result!.message.content}`,
+    );
+
+    // ── L2: safety-net conversation.service.ts:373 ──
+    // Jalur di mana composer-v2 TIDAK bisa truncate sendiri: info_answer
+    // (2 kalimat, sudah lolos truncate L1) + pesan topic_switch digabung
+    // '\n' → total 3 kalimat. Hanya safety-net di conversation.service.ts
+    // yang bisa memotongnya sebelum dikirim ke customer.
+    cannedContent = cannedV2({
+      acts: [
+        {
+          act_id: 'a1',
+          intent: 'info_answer',
+          entities: [],
+          qty: null,
+          qty_source: 'default',
+          confidence: 0.9,
+          supersedes: null,
+        },
+      ],
+      topic_switch: true,
+      reply_draft: 'Harga beras Rp 12.000 per kg. Stok tersedia banyak ya Kak.',
+    });
+
+    const t2 = await processMsg(convId, custId, 'rekomendasi apa ya?');
+    assert.ok(t2.result, 'turn 2 must return a response');
+    assert.equal(t2.result!.metadata.engine, 'v2', 'turn 2 harus lewat jalur V2');
+    const sentences2 = t2.result!.message.content
+      .split(/(?<=[.!])\s+|(?<=\?)[ \t]+(?![a-z,])/)
+      .filter((s: string) => s.trim().length > 0);
+    assert.ok(
+      sentences2.length <= 2,
+      `I-2 L2: safety-net wajib memotong gabungan message ke ≤2 kalimat, dapat ${sentences2.length}: ${t2.result!.message.content}`,
+    );
+    assert.ok(
+      !t2.result!.message.content.includes('mau batal'),
+      `I-2 L2: pesan topic_switch (kalimat ke-3) wajib terpotong safety-net, dapat: ${t2.result!.message.content}`,
+    );
+  } finally {
+    await setStoreEngine(STORE_ID, 'v2');
+    await prisma.conversation.delete({ where: { id: convId } }).catch(() => {});
+  }
+});
+
+/**
+ * P6-5 / P5 gate (c) — P5.2: simbol qty di ringkasan keranjang = 'x' ASCII.
+ *
+ * Fix asli: bd607f6 (P5.2 #2, conversation.service.ts:1012 — '×' U+00D7 → 'x'
+ * ASCII, konsisten dengan composer-v2 dan fallback.service). Karakter '×'
+ * bermasalah di sebagian client WhatsApp/PWA dan tidak konsisten dengan
+ * renderer lain.
+ *
+ * Skenario realistis: bot tanya konfirmasi beli beras, customer jawab "iya" →
+ * resolver EXECUTE → renderCartSummary menampilkan baris keranjang.
+ */
+test('Case P6-5/P5c: ringkasan keranjang pakai simbol qty ASCII "x", bukan "×" (P5.2 gate)', async () => {
+  const convId = 'conv-p65-p5c';
+  const custId = 'cust-p65-p5c';
+
+  await createConv(convId, custId);
+  await setStoreEngine(STORE_ID, 'v2');
+
+  try {
+    await setPendingV2(convId, {
+      id: 'p65-p5c',
+      question: 'Jadi pesan beras 1 kg ya Kak?',
+      options: ['beras'],
+    });
+
+    const { result, llmCalls: calls } = await processMsg(convId, custId, 'iya');
+    assert.ok(result, 'must return a response');
+    assert.equal(calls, 0, 'resolver path = 0 LLM');
+    assert.equal(result!.metadata.action, 'EXECUTE');
+
+    assert.ok(
+      result!.message.content.includes('beras x1'),
+      `P5.2: qty wajib dirender ASCII "x" (mis. "beras x1"), dapat: ${result!.message.content}`,
+    );
+    assert.ok(
+      !result!.message.content.includes('\u00D7'),
+      `P5.2: simbol "×" (U+00D7) tidak boleh dipakai lagi, dapat: ${result!.message.content}`,
+    );
+  } finally {
+    await setStoreEngine(STORE_ID, 'v2');
+    await prisma.conversation.delete({ where: { id: convId } }).catch(() => {});
+  }
 });
