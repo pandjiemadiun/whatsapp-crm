@@ -156,11 +156,14 @@ transaksi, bukan gaya bicara.
 
 ### Item hygiene (non-blocking, tapi menumpuk — perlu TASK kecil terpisah)
 
-- `apps/api/logs/*.log` masih TER-TRACK di git — risiko data sensitif
-  customer (nomor WA, isi pesan) ter-commit permanen ke history.
-  BELUM diperbaiki — jangan `git rm --cached` sembarangan sebelum
-  pastikan alur deploy production tidak bergantung pada dist/logs
-  yang di-commit tanpa proses build otomatis.
+- `apps/api/logs/*.log` — **Fase A (untrack) SELESAI** (commit `a1f69f7`:
+  `.gitignore` exclude `apps/api/logs/*.log` + `git rm --cached`, 0 log
+  ter-track setelahnya) DAN **Fase B (purge history) SELESAI** (commit
+  `469804a`→`73f607b` via `git filter-repo --path apps/api/logs/
+  --invert-paths --force`; backup `garuda-backup-20260819.bundle` di
+  `/home/ubuntu/backups/`). Data sensitif di history lama SUDAH TERHAPUS.
+  ⚠️ Clone lain WAJIB re-clone fresh (jangan `git pull`, history berubah
+  total). [DIREKONSTRUKSI, bukan diff asli — dari laporan sesi sebelumnya]
 - Belum ada git pre-commit hook / checklist otomatis untuk cek
   `dist/` tertinggal sebelum commit. Sudah 3x kejadian manual
   ditemukan lewat `git status` menyeluruh: TASK A/0, TASK B3, insiden
@@ -197,7 +200,39 @@ terpisah, JANGAN timpa field source. Ditunda sampai P0-P6 kelar.
 - Robot coding terpisah (opencode/DeepSeek, disebut "commandcode")
   yang eksekusi TASK — dijalankan lewat prompt yang ditulis Claude,
   hasilnya dilaporkan ke file `.md` di root repo (bukan cuma balas
-  chat), owner upload balik ke Claude untuk cross-check vs diff mentah.
+   chat), owner upload balik ke Claude untuk cross-check vs diff mentah.
+
+### 4.1 Git hook `post-merge` auto-build (TASK III-1-B, 19 Agu 2026)
+
+Konteks: alur deploy production = `git pull` + `pm2 restart api` TANPA build
+manual sama sekali. `dist/` ter-commit adalah safety net saat ini. Root
+cause berulang: lupa `npm run build` sebelum commit/pull (insiden TASK B1 9
+Agu, TASK B4). Hook ini mencegah lupa: setiap habis `git pull`/`git merge`,
+otomatis rebuild `apps/api/dist/`.
+
+- File: `/home/ubuntu/garuda/.git/hooks/post-merge` (isi: `cd apps/api &&
+  npm run build`). Sengaja TIDAK auto `pm2 restart` — restart tetap manual
+  supaya kalau build gagal, tidak diam-diam restart pakai `dist/` rusak.
+- ⚠️ PENTING: `.git/hooks/` TIDAK ter-track git. Hook ini HILANG kalau repo
+  di-re-clone / ganti server / setup VPS baru. WAJIB pasang ulang manual
+  (copy di bawah) setiap kali setup server/environment baru:
+  ```bash
+  cat > /home/ubuntu/garuda/.git/hooks/post-merge <<'EOF'
+  #!/bin/bash
+  set -e
+  echo "[post-merge hook] Rebuilding apps/api..."
+  cd apps/api && npm run build
+  echo "[post-merge hook] Build done. Restart pm2 manually: pm2 restart api"
+  EOF
+  chmod +x /home/ubuntu/garuda/.git/hooks/post-merge
+  ```
+- Safety: `apps/api/tsconfig.json` diset `"noEmitOnError": true` (TASK
+  III-1-B) supaya build GAGAL tidak menimpa `dist/` lama dengan output
+  rusak — `tsc` berhenti tanpa emit, hook (`set -e`) stop, `dist/` tetap
+  aman. Terverifikasi via simulasi merge dengan source sengaja error.
+- TIDAK mengubah `ecosystem.config.js`, TIDAK meng-untrack `dist/`. Keputusan
+  untrack `dist/` DITUNDA sampai hook terbukti reliable beberapa kali deploy
+  nyata — bukan sekarang.
 
 ## 5. DEFINISI "SELESAI" UNTUK SATU TASK
 
@@ -326,7 +361,22 @@ di-commit tanpa proses build/deploy otomatis (kalau iya, menghapus
 dari git tanpa alur deploy yang benar bisa bikin server tidak punya
 dist/ saat fresh clone/deploy). Ini TASK KECIL TERPISAH, non-blocking
 untuk P1, dikerjakan kapan saja sebelum makin banyak data sensitif
-ter-commit. Status: DIKETAHUI, BELUM DIKERJAKAN.
+  ter-commit. Status: DIKETAHUI, BELUM DIKERJAKAN.
+
+  **UPDATE 19 Agu 2026 (TASK III-2-A + III-2-B) — Fase A + Fase B SELESAI:**
+  - Fase A (untrack): commit `a1f69f7` — `.gitignore` exclude
+    `apps/api/logs/*.log` + `git rm --cached` (0 log ter-track setelahnya).
+  - Fase B (purge history, destruktif): backup dulu `git bundle create
+    /home/ubuntu/backups/garuda-backup-20260819.bundle --all` (17M, verify
+    "is okay"), lalu `git filter-repo --path apps/api/logs/ --invert-paths
+    --force`. New HEAD `73f607b`; `git push origin --force --all` sukses.
+  - Verifikasi prune: dari 8 commit "ter-prune", 6 ada di `main` (100%
+    logs-only, hanya `apps/api/logs/combined.log`) + 2 commit stash-only
+    (ref `refs/stash`, BUKAN di `main`; source-nya tetap ada di `main` +
+    `refs/stash-bak` + bundle). TIDAK ada source/data hilang dari `main`.
+  - `pm2 restart api` online normal. Lokal `git gc --prune=now` → blob log
+    sensitif tidak lagi recoverable (bundle tetap pegang copy rollback).
+  [DIREKONSTRUKSI, bukan diff asli — dari laporan sesi sebelumnya]
 Siapa yang setuju: owner (Panji), Claude.
 
 ### 9 Agu 2026 — Bukti mentah TASK 0 + TASK A tersimpan di thread chat
@@ -789,3 +839,25 @@ Alasan: tutup siklus P8 dengan bukti mentah + catat known issue tanpa memperleba
 scope ke luar file test yang diizinkan.
 Siapa yang setuju: owner (Panji), Claude — berdasarkan git log/diff/build/test
 mentah.
+
+### 19 Agu 2026 — INSIDEN: `git reset --hard` hapus doc edit uncommitted task sebelumnya
+
+Konteks: saat cleanup test TASK III-1-B, dijalankan `git reset --hard 73f607b`
+untuk mengembalikan `main` ke commit sehat setelah simulasi merge (post-merge
+hook). Reset ini ikut membuang edit doc yang SENGAJA ditahan "belum di-commit"
+dari TASK III-2-A dan III-2-B: RAILS.md §Item hygiene + §9 Agu Temuan hygiene,
+dan BUG-BELUM-DIBERESKAN.md III-2 row. Penyebab: `git reset --hard` membuang
+SEMUA perubahan working tree yang tidak ter-commit, termasuk doc — bukan cuma
+source. Edit tersebut terpaksa di-rekonstruksi dari laporan sesi sebelumnya
+([DIREKONSTRUKSI, bukan diff asli]).
+
+Keputusan/Root cause: doc edit ditahan "belum di-commit" alih-alih di-commit
+segera → rentan hilang kalau ada operasi reset/checkout keras di tengah jalan.
+Ini bukti tambahan bahwa aturan §1.5 (commit sebelum mulai task baru, git
+status bersih) BERLAKU JUGA UNTUK DOC, bukan cuma source. Ke depan: commit
+doc edit secepat source (atau lebih awal), jangan ditahan "nanti".
+
+Alasan: pelajaran proses langsung dari insiden ini sendiri; konsisten dengan
+§1.5 agar tidak berulang.
+Siapa yang setuju: owner (Panji), Claude — [DIREKONSTRUKSI, bukan diff asli]
+dari laporan sesi sebelumnya.
