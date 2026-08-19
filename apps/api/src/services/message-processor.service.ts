@@ -259,7 +259,8 @@ result = await this.llmCircuitBreaker.wrap(() =>
           input.customerId,
           input.conversationId,
           msg.content,
-          channel
+          channel,
+          input.messageId
         )
       );
     } catch (err) {
