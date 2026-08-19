@@ -747,3 +747,45 @@ Alasan: rekonsiliasi dokumen agar STATUS/STATE tidak kontradiktif (UPDATE-SINCE-
 REPORT.md sebelumnya masih punya bagian "§6.2/§6.3 TIDAK BERUBAH" yang kedaluwarsa).
 Siapa yang setuju: owner (Panji), Claude — berdasarkan git log/diff mentah + build
 exit 0 + curl HTTP canary, bukan ringkasan.
+
+### 19 Agu 2026 — P8-1/P8-2: regression gate hijau penuh + fix test-isolation CANCEL_ORDER
+
+Konteks: P8-1 (READ-ONLY gate di HEAD `7a589ed`) ditemukan 1 failure di
+structured-actions (`P6.3.2: CANCEL_ORDER invalid payload rejected before
+execution`). Sisa gate hijau: tsc 0 error, build exit 0, test:chat 267/267,
+test:golden 23/23, pm2 api online (tidak crash loop).
+
+Root cause P8-2 (DIVERIFIKASI dari kode, bukan tebakan): BUKAN handler bug.
+`executeAction` (action-registry.ts:1301-1325) sudah `requestSchema.safeParse()`
+dan throw `ApiError(ERR_VALIDATION)` SEBELUM memanggil handler — jadi untuk
+payload invalid (`orderId: 'not-a-uuid'`) handler `handleCancelOrder` TIDAK
+pernah dipanggil dan `claimAction()` (STAGE 1 INSERT) TIDAK pernah jalan.
+Keempat handler mutasi (ADD_TO_CART/REMOVE/UPDATE/CANCEL_ORDER) punya pola
+IDENTIK — CANCEL_ORDER TIDAK beda pola.
+
+Penyebab sebenarnya: assertion P6.3.2 di structured-actions.test.ts:1039
+`findMany({ where: { actionType: 'CANCEL_ORDER' } })` TANPA filter `storeId`.
+DB test SHARED: ada row `ActionIdempotency` `storeId='store-f7140b5c'`
+(pattern `store-${crypto.randomUUID().slice(0,8)}` dari src/routes/auth.ts:31,
+registration/e2e flow) yang bocor lintas file. Cleanup `before` file ini hanya
+hapus prefix `test-action-v2*` → row asing survive → false negative.
+
+Fix (TEST-ONLY, scope sempit): assertion di-scope ke `storeId` file ini sendiri
+(`findMany({ where: { actionType: 'CANCEL_ORDER', storeId } })`). TIDAK disentuh
+action-registry.ts/handler; TIDAK dihapus row `store-f7140b5c` (itu milik test
+flow lain/canary, bukan urusan file ini). Setelah fix: structured-actions
+38/38 (P6.3.2 hijau), test:chat 267/267, test:golden 23/23, tsc 0, build 0,
+pm2 api online. Commit `7e547c6`.
+
+KNOWN ISSUE (task terpisah, BUKAN P8-2): test DB shared antar file/flow lemah
+isolasinya — row ActionIdempotency dari auth.ts registration flow bisa bocor ke
+assertion test lain yang query tanpa storeId filter. Indikasi umum, bukan cuma
+P6.3.2; kemungkinan ada test lain false positive/negative pola sama. Follow-up:
+audit semua assertion actionType-wide/store-wide di structured-actions.test.ts
++ sibling files (p1/p2/p3/p5) untuk pola sama, lalu perbaiki test
+hygiene/isolation (namespaced/transactional teardown).
+
+Alasan: tutup siklus P8 dengan bukti mentah + catat known issue tanpa memperlebar
+scope ke luar file test yang diizinkan.
+Siapa yang setuju: owner (Panji), Claude — berdasarkan git log/diff/build/test
+mentah.
