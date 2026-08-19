@@ -9,6 +9,7 @@
 import { z } from 'zod';
 import { prisma } from '../infrastructure/prisma.js';
 import { cartAuthority } from './cart-authority.js';
+import { executeHandoff } from '../services/handoff.service.js';
 import { productService } from './product.service.js';
 import { orderService } from './order.service.js';
 import { adapters } from '../adapters/container.js';
@@ -333,6 +334,27 @@ export const OpenOrderHistoryResponseSchema = z.object({
 });
 
 export type OpenOrderHistoryResponse = z.infer<typeof OpenOrderHistoryResponseSchema>;
+
+/** CONTACT_ADMIN request schema (P4-2 — human takeover / "Hubungi CS").
+ *  No business payload: identity is server-resolved from ActionContext.
+ *  payload is optional {} to keep the wire shape uniform with other actions. */
+export const ContactAdminRequestSchema = z.object({
+  actionId: z.string().uuid(),
+  type: z.literal('CONTACT_ADMIN'),
+  payload: z.object({}).optional(),
+});
+
+export type ContactAdminRequest = z.infer<typeof ContactAdminRequestSchema>;
+
+/** CONTACT_ADMIN response schema — status only, no sensitive payload. */
+export const ContactAdminResponseSchema = z.object({
+  success: z.boolean(),
+  actionId: z.string().uuid(),
+  type: z.literal('CONTACT_ADMIN'),
+  status: z.enum(['applied', 'already_applied']),
+});
+
+export type ContactAdminResponse = z.infer<typeof ContactAdminResponseSchema>;
 
 /** Generic action handler context */
 export interface ActionContext {
@@ -1167,6 +1189,67 @@ export async function handleOpenOrderHistory(
 }
 
 /**
+ * CONTACT_ADMIN Handler (P4-2 — human takeover / "Hubungi CS").
+ *
+ * Reuses the shared handoffService.executeHandoff() (extracted from the PWA
+ * /handoff route) so the escalation convention stays single-source.
+ *
+ * - Identity (storeId/customerId/conversationId) is server-resolved from
+ *   ActionContext — NEVER from the client payload (§7).
+ * - Does NOT use ActionIdempotency / claim / lease: this is a simple
+ *   read-modify guarded by conversation.status, not a cart/order mutation
+ *   (per P4-1 recommendation #6).
+ * - Idempotency guard: if the conversation is ALREADY 'human_takeover',
+ *   return status 'already_applied' WITHOUT re-triggering the handoff
+ *   (no duplicate history row, no duplicate events).
+ */
+export async function handleContactAdmin(
+  request: ContactAdminRequest,
+  context: ActionContext,
+): Promise<ActionResult<ContactAdminResponse>> {
+  const { conversationId, storeId } = context;
+
+  // Tenant-scoped lookup: conversationId is server-resolved for this store, but
+  // re-assert ownership here so a cross-tenant (or missing) conversation is
+  // rejected rather than silently handed off.
+  const existing = await prisma.conversation.findUnique({
+    where: { id: conversationId, storeId },
+    select: { status: true },
+  });
+
+  if (!existing) {
+    throw new ApiError(ErrorCodes.ERR_AUTH_FORBIDDEN, 'Conversation not found for store');
+  }
+
+  // Guard: avoid double handoff / duplicate events + history row.
+  if (existing.status === 'human_takeover') {
+    return {
+      success: true,
+      data: {
+        success: true,
+        actionId: request.actionId,
+        type: 'CONTACT_ADMIN',
+        status: 'already_applied',
+      },
+      status: 'already_applied',
+    };
+  }
+
+  await executeHandoff({ conversationId, storeId, channel: context.channel });
+
+  return {
+    success: true,
+    data: {
+      success: true,
+      actionId: request.actionId,
+      type: 'CONTACT_ADMIN',
+      status: 'applied',
+    },
+    status: 'applied',
+  };
+}
+
+/**
  * Action Registry — single definition for ADD_TO_CART
  */
 
@@ -1280,6 +1363,19 @@ export const actionRegistry: Record<string, ActionDefinition<any, any>> = {
       // enforced server-side: context.storeId + context.conversationId are resolved
       // by getOrCreateWebSession (store-bound). No client-supplied storeId or
       // conversationId has authority. Mirror OPEN_CATALOG/OPEN_CART read-only model.
+      return { allowed: true };
+    },
+  },
+  /** P4-2 — CONTACT_ADMIN: human takeover / "Hubungi CS". Registered after OPEN_ORDER_HISTORY. */
+  CONTACT_ADMIN: {
+    type: 'CONTACT_ADMIN',
+    requestSchema: ContactAdminRequestSchema,
+    responseSchema: ContactAdminResponseSchema,
+    handler: handleContactAdmin,
+    authorize: async (_request: ContactAdminRequest, _context: ActionContext) => {
+      // Identity (store/customer/conversation) is server-resolved from
+      // ActionContext; no client-supplied authority. Mirror OPEN_* read-only
+      // tenant-trust model: do not claim or lease.
       return { allowed: true };
     },
   },
