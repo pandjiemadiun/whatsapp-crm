@@ -978,12 +978,22 @@ The `ActionIdempotency` row therefore remains `CLAIMED` for lease/recovery.
 No second transaction is opened merely to mark an uncertain infrastructure
 outcome as `FAILED`.
 
-### 6A.10.2 Lease threshold remains unresolved
+### 6A.10.2 Lease threshold — LOCKED at 30000ms (30s) — 2026-08-19
 
-The initial target remains 30–60 seconds, but the final lease value is NOT
-locked by this amendment. It MUST be measured directly on the target server
-using worst-case `executeOps()` latency plus realistic DB contention, then
-locked separately by owner decision.
+> **OWNER DECISION (2026-08-19, III-9):** The final lease value is now
+> **LOCKED at `LEASE_FINAL_MS = 30000` (30 seconds)**, the lower bound of the
+> §6A.5 target range (30–60s).
+
+The initial target remains 30–60 seconds. The final lease value was previously
+unresolved; it is now locked by owner decision at the lower bound because there
+is **no real `executeOps()` p99 latency measurement in the repo** — so the
+conservative lower bound is used: far enough above normal DB-write latency, but
+not holding recovery hostage on a real crash.
+
+This value is an **owner-decided interim value**, NOT evidence-based. If
+production data (p99 `executeOps()` latency under realistic DB contention)
+becomes available, the threshold MAY be corrected based on that evidence — not
+before. (See BUG-BELUM-DIBERESKAN.md III-9.)
 ### 6A.11 Stage-2 Prohibitions — Permanent P0 Rules
 
 1. **No `claimToken`.**

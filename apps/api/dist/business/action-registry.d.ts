@@ -7,8 +7,8 @@
  */
 import { z } from 'zod';
 import type { CartOp } from '../domain/types.js';
-/** Lease duration for CLAIMED actions — locked to 750ms per owner approval */
-export declare const LEASE_FINAL_MS = 750;
+/** Lease duration for CLAIMED actions — locked to 30000ms (30s) per owner decision (III-9, §6A.10.2) */
+export declare const LEASE_FINAL_MS = 30000;
 /** WA cart mutation action type (P7, §8 Gap 1).
  *  All CartOp[] from a single WA message are batched into ONE claim under this
  *  actionType; idempotency is keyed at the MESSAGE level (actionId =
