@@ -138,3 +138,12 @@ jobs:
       - name: Run test:golden
         working-directory: apps/api
         run: npm run test:golden
+
+      # ── test:structured (node:test) — MUST pass, 0 failure ───────────────────
+      # TASK P8-CI-FIX: structured-actions suite (ADD/REMOVE/UPDATE/CANCEL/
+      # CONTACT_ADMIN + P0-P5 foundation) sebelumnya TIDAK ter-cover CI —
+      # regresi bisa lolos tidak terdeteksi (pola masalah P6 lama).
+      # Global, FAIL CI jika ada test gagal.
+      - name: Run test:structured (structured-actions suite)
+        working-directory: apps/api
+        run: npm run test:structured

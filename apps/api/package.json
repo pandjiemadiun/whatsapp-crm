@@ -15,6 +15,7 @@
     "test:all": "tsx --test --test-force-exit src/tests/date-range.test.ts src/tests/analytics.e2e.test.ts src/tests/batch-magic-paste.e2e.test.ts",
     "test:chat": "node --experimental-vm-modules ./node_modules/.bin/jest --config jest.config.cjs",
     "test:golden": "tsx --env-file=../../.env --test --test-force-exit src/tests/golden-dataset.test.ts",
+    "test:structured": "tsx --env-file=../../.env --test --test-force-exit \"src/tests/structured-actions*.test.ts\"",
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate dev",
     "db:studio": "prisma studio",
