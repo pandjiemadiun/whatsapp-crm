@@ -861,3 +861,100 @@ Alasan: pelajaran proses langsung dari insiden ini sendiri; konsisten dengan
 §1.5 agar tidak berulang.
 Siapa yang setuju: owner (Panji), Claude — [DIREKONSTRUKSI, bukan diff asli]
 dari laporan sesi sebelumnya.
+
+---
+
+## 6.x LOG RETROAKTIF — cluster structured actions / P4 / P8 (POST-HOC, 19 Agu 2026)
+
+> **⚠️ PENTING — jangan disamarkan sebagai laporan tepat waktu.** Entri di bawah
+> dicatat RETROAKTIF lewat TASK VERIFY-CLUSTER + DOCS-SYNC (19 Agu 2026), BUKAN
+> saat commit aslinya dikerjakan. Commit asli (cluster `25d0f43..c6be2d8`) di-push
+> di sesi SEBELUMNYA tanpa bukti RAILS §1.2 real-time — persis pola insiden P6 lama.
+> Setiap entri wajib membawa marker:
+> **[LOG RETROAKTIF — commit asli tidak dilaporkan real-time dengan bukti RAILS §1.2,
+> ditutup post-hoc via TASK VERIFY-CLUSTER 19 Agu 2026].**
+>
+> Catatan SHA: entri §6 bertanggal "19 Agu 2026" SEBELUM blok ini (P6-1/P6-2/P6-3,
+> P8-1/P8-2, INSIDEN reset) mencantumkan SHA **pra-filter-repo** (`2f834a5`,
+> `3cb91c9`, `ced2fc9`, `dba92b8`, `7e547c6`, `e5ee299`) yang SUDAH TIDAK ADA
+> setelah `git filter-repo` (469804a→73f607b). SHA BENAR di working tree saat ini
+> ada di bawah ini.
+
+### [RETROAKTIF] 19 Agu 2026 — P6-1: ADD_TO_CART productId envelope (skip name round-trip)
+**[LOG RETROAKTIF — commit asli tidak dilaporkan real-time dengan bukti RAILS §1.2, ditutup post-hoc via TASK VERIFY-CLUSTER 19 Agu 2026]**
+- Commit: `4224331` (`feat(P6-1): ADD_TO_CART productId envelope, skip name round-trip`).
+- Isi: `CartOp` extended (`productId?` optional); `handleAddToCart` kirim `productId`
+  otoritatif langsung ke `CartAuthority.executeOps`; `executeOps` branch
+  `resolveProductById` (skip `resolveProductByName`) — path LLM berbasis nama TIDAK berubah.
+- Acceptance (diverifikasi ulang TASK VERIFY-CLUSTER): tsc 0 error, build 0, test:chat
+  267/267, test:golden 23/23, structured-actions 38/38 (§8.4b spy: productId TIDAK panggil
+  `resolveProductByName`; §8.4c NL fallback tetap; §8.5 tenant isolation). DB readback:
+  ADD via productId → OrderItem benar.
+
+### [RETROAKTIF] 19 Agu 2026 — P6-2: REMOVE_FROM_CART + UPDATE_CART_QUANTITY typed actions
+**[LOG RETROAKTIF — commit asli tidak dilaporkan real-time dengan bukti RAILS §1.2, ditutup post-hoc via TASK VERIFY-CLUSTER 19 Agu 2026]**
+- Commit: `8dc22a3` (`feat(P6-2): typed REMOVE_FROM_CART + UPDATE_CART_QUANTITY actions`).
+- Isi: kedua action typed, delegate ke `cartAuthority.removeLine`/`updateQuantity`
+  (signature `tx?` optional, reuse Stage-1/Stage-2 idempotensi — TIDAK ada Stage-2 kedua).
+- Acceptance: structured-actions.test.ts P6.2.1–P6.2.6 hijau; DB readback: OrderItem
+  hilang (REMOVE) / qty berubah (UPDATE).
+
+### [RETROAKTIF] 19 Agu 2026 — P6-3: CANCEL_ORDER typed action + fix actionsRouter mount gap
+**[LOG RETROAKTIF — commit asli tidak dilaporkan real-time dengan bukti RAILS §1.2, ditutup post-hoc via TASK VERIFY-CLUSTER 19 Agu 2026]**
+- Commit: `2c604cc` (`P6-3: add CANCEL_ORDER typed action + fix actionsRouter never-mounted gap`).
+- Isi: `CANCEL_ORDER` delegate ke `transitionOrder` (target `Order`, bukan `OrderItem`;
+  `CartAuthority` tak disentuh) + **fix bug**: `app.use('/api/pwa', actionsRouter)` di-mount
+  di `index.ts` (gap sejak foundation `25d0f43`).
+- Acceptance: structured-actions.test.ts P6.3.1–P6.3.8 hijau; DB readback: Order.status=
+  `cancelled`. Keempat action (ADD/REMOVE/UPDATE/CANCEL) terverifikasi reachable via HTTP.
+
+### [RETROAKTIF] 19 Agu 2026 — P4-2: CONTACT_ADMIN typed action
+**[LOG RETROAKTIF — commit asli tidak dilaporkan real-time dengan bukti RAILS §1.2, ditutup post-hoc via TASK VERIFY-CLUSTER 19 Agu 2026]**
+- Commit: `b610e69` (`P4-2: add CONTACT_ADMIN action + handler + contract tests`).
+- Isi: `CONTACT_ADMIN` (human takeover / "Hubungi CS") — idempotensi via status-guard
+  (`existing.status === 'human_takeover'` → `already_applied`) + `executeHandoff` (bukan
+  FOR UPDATE, by design untuk human-takeover, bukan cart/order mutation).
+- Acceptance: structured-actions-contact-admin.test.ts 4/4 hijau; DB readback:
+  Conversation.status=`human_takeover`.
+
+### [RETROAKTIF] 19 Agu 2026 — P4-3: wire 5 PWA quick actions ke /action (typed)
+**[LOG RETROAKTIF — commit asli tidak dilaporkan real-time dengan bukti RAILS §1.2, ditutup post-hoc via TASK VERIFY-CLUSTER 19 Agu 2026]**
+- Commit: `73f607b` (`P4-3: wire 5 PWA quick actions to /action (typed)`).
+- Isi: PWA quick-action buttons (ADD_TO_CART / REMOVE / UPDATE / CANCEL / CONTACT_ADMIN)
+  mengirim ke `POST /api/pwa/:storeSlug/action` — konvergen ke action contract.
+
+### [RETROAKTIF] 19 Agu 2026 — P8-1: regression/release gate hijau penuh
+**[LOG RETROAKTIF — commit asli tidak dilaporkan real-time dengan bukti RAILS §1.2, ditutup post-hoc via TASK VERIFY-CLUSTER 19 Agu 2026]**
+- Commit: `d114526` (`docs: log P8-1/P8-2 gate results + test isolation known issue`).
+- Isi: gate di HEAD hijau — tsc 0, build 0, test:chat 267/267, test:golden 23/23, pm2
+  api online (no crash loop). 1 known issue: test DB shared isolation (lihat P8-2).
+
+### [RETROAKTIF] 19 Agu 2026 — P8-2: fix test-isolation CANCEL_ORDER
+**[LOG RETROAKTIF — commit asli tidak dilaporkan real-time dengan bukti RAILS §1.2, ditutup post-hoc via TASK VERIFY-CLUSTER 19 Agu 2026]**
+- Commit: `dd7e7f2` (`test: scope P6.3.2 idempotency assertion to own storeId — P8-2`).
+- Isi: assertion `findMany` di-scope ke `storeId` file sendiri (row asing `store-f7140b5c`
+  dari auth.ts registration flow bocor lintas file). TIDAK sentuh handler/action-registry.
+- Acceptance: structured-actions 38/38 (P6.3.2 hijau); known issue isolation test DB lemah
+  tetap open (task terpisah).
+
+### [RETROAKTIF] 19 Agu 2026 — P6.4 / P6.5: golden dataset coverage P3/P4/P5
+**[LOG RETROAKTIF — commit asli tidak dilaporkan real-time dengan bukti RAILS §1.2, ditutup post-hoc via TASK VERIFY-CLUSTER 19 Agu 2026]**
+- Commit: `e2d391e` (test golden coverage P3/P4/P5), `55c66c5` (mark §6.4 RESOLVED +
+  mutation-test proof), `58d6de0` (rekonsiliasi RAILS §6 / UPDATE-SINCE §6.2/§6.3).
+- Isi: case baru P6-5/P3 (workspace_v2 persist), P6-5/P4 (1 draft Order, 0 phantom pending),
+  P6-5/P5a/b/c (subtotal qty-filter + reply truncate + simbol `x` ASCII). Mutation test:
+  revert 1 baris fix → case MERAH (bukti case benar-benar mendeteksi regresi).
+- Acceptance: test:golden naik 18/18 → 23/23; test:chat 267/267 tetap; tsc 0; build 0.
+- Catatan: **P6-4 TIDAK ADA sebagai commit terpisah** — pekerjaan §6.4 tercatat di P6-5
+  (`e2d391e`/`55c66c5`). Penomoran P6-4 disengaja di-gabung ke P6-5 (per catatan §6 lama);
+  perlu konfirmasi owner kalau dianggap gap penomoran.
+
+### [RETROAKTIF] 19 Agu 2026 — III-1-B + III-2-A/B (hygiene) & P8-CI-FIX (gate lengkap)
+**[LOG RETROAKTIF — commit asli tidak dilaporkan real-time dengan bukti RAILS §1.2, ditutup post-hoc via TASK VERIFY-CLUSTER 19 Agu 2026]**
+- Commit `bcddfcd` (III-2-A/B purge + III-1-B post-merge hook + tsconfig noEmitOnError):
+  `logs/*.log` di-exclude + di-purge dari history (backup bundle `garuda-backup-20260819.bundle`);
+  git hook `post-merge` auto-build terpasang (mitigasi stale dist).
+- Commit `c6be2d8` (P8-CI-FIX): `test:structured` (glob `src/tests/structured-actions*.test.ts`,
+  115 test) masuk `.github/workflows/test.yml` → CI gate lengkap: test:chat + test:golden
+  + test:structured. Verifikasi lokal: 115 tests / 7 suites pass.
+- Acceptance (TASK VERIFY-CLUSTER + P8-CI-FIX): semua suite hijau; pm2 api online.

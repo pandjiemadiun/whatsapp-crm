@@ -75,3 +75,29 @@
 Semua file di atas diarsipkan ke DOCS/ARCHIVE/RAW/ pada 18 Agu 2026. Isinya terangkum
 tinggi di PROJECT-STATE-REPORT.md. Bila butuh bukti verbatim, buka file asli di RAW/.
 Jangan percaya ringkasan ini sebagai pengganti bukti mentah.
+
+## F. Era 19 Agu 2026 — cluster verification, hygiene hook & CI gate lengkap
+
+- **Cluster structured actions (P0-P5 foundation + P6-1/P6-2/P6-3 + P4-2/P4-3) ter-commit
+  & ter-push** — `25d0f43` (foundation: schema.prisma + migrasi ActionIdempotency +
+  action-registry + routes/actions + kontrak), `4224331` (P6-1: ADD_TO_CART productId
+  envelope, skip name round-trip), `8dc22a3` (P6-2: REMOVE_FROM_CART + UPDATE_CART_QUANTITY),
+  `2c604cc` (P6-3: CANCEL_ORDER + fix actionsRouter mount gap sejak foundation),
+  `b610e69` (P4-2: CONTACT_ADMIN), `73f607b` (P4-3: wire 5 PWA quick actions ke /action).
+- **Golden coverage P3/P4/P5 (P6.4/P6.5)** — `e2d391e` (tambah case), `55c66c5` +
+  `58d6de0` (mark §6.4 RESOLVED + mutation-test proof), test:golden naik 18/18 → 23/23.
+- **P8-1/P8-2 regression gate** — `d114526` (log gate hijau) + `dd7e7f2` (fix test-isolation
+  CANCEL_ORDER, scope assertion ke storeId sendiri); structured-actions 38/38.
+- **III-2-A/B history purge** — `bcddfcd`: `logs/*.log` di-exclude + di-purge dari git
+  history (backup bundle `garuda-backup-20260819.bundle`); **III-1-B post-merge auto-build
+  hook terpasang** (mitigasi stale dist di produksi).
+- **INSIDEN doc-edit hilang** — `git reset --hard 73f607b` buang edit doc uncommitted
+  (pelajaran: commit doc secepat source, jangan ditahan).
+- **P8-CI-FIX** — `c6be2d8`: `test:structured` (glob `src/tests/structured-actions*.test.ts`,
+  115 test) masuk `.github/workflows/test.yml` → CI gate lengkap: test:chat + test:golden
+  + test:structured.
+- **🔴 TEMUAN proses (POST-HOC):** seluruh cluster di atas di-kerjakan & di-push di sesi
+  sebelumnya TANPA dilaporkan real-time dengan bukti RAILS §1.2 (mirip insiden P6 lama).
+  Ditutup via TASK VERIFY-CLUSTER + DOCS-SYNC 19 Agu 2026 (lihat `RAILS.md` §6 entri
+  RETROAKTIF + `PROJECT-STATE-REPORT.md` §10).
+
