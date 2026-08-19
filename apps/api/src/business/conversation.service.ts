@@ -65,6 +65,7 @@ export class ConversationService {
     conversationId: string,
     customerMessage: string,
     channel: 'whatsapp' | 'web' = 'whatsapp',
+    messageId?: string,
   ): Promise<ResponseResult | null> {
     adapters.logger.info('Processing customer message', { storeId, customerId, conversationId, channel });
 
