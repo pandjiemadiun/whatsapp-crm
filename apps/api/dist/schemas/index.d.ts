@@ -54,9 +54,9 @@ export type ResetPasswordInput = z.infer<typeof resetPasswordSchema>;
 export declare const updateStatusSchema: z.ZodObject<{
     status: z.ZodEnum<{
         resolved: "resolved";
+        human_takeover: "human_takeover";
         open: "open";
         closed: "closed";
-        human_takeover: "human_takeover";
     }>;
 }, z.core.$strip>;
 export type UpdateStatusInput = z.infer<typeof updateStatusSchema>;

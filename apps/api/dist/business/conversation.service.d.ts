@@ -19,7 +19,7 @@ interface ConversationDetail extends ConversationListItem {
     }>;
 }
 export declare class ConversationService {
-    processCustomerMessage(storeId: string, customerId: string, conversationId: string, customerMessage: string, channel?: 'whatsapp' | 'web'): Promise<ResponseResult | null>;
+    processCustomerMessage(storeId: string, customerId: string, conversationId: string, customerMessage: string, channel?: 'whatsapp' | 'web', messageId?: string): Promise<ResponseResult | null>;
     /**
      * Bungkus teks balasan MODIFY_CART menjadi ResponseResult standar.
      */
