@@ -44,7 +44,7 @@
 | ID | Risiko / Bug | Lokasi | Severity | Note |
 |----|--------------|--------|----------|------|
 | III-1 | **`dist/` ter-commit + deploy tanpa build otomatis** — stale `dist` bisa jalan di produksi. | RAILS §1.158; ecosystem.config.js:6 (`script:'dist/index.js'`); commit 5f502d1 (cleanup orphan dist) | High (infra) | "Jangan `git rm --cached` sembarangan sebelum pastikan deploy tidak bergantung pada dist committed." Perlu: pre-commit hook / CI build otomatis. §1.164: belum ada hook. |
-| III-2 | **`logs/*.log` ter-track di git** — berisiko data WA customer/nomor terlibat commit. | apps/api/logs/*.log; RAILS §1.160 | High (keamanan) | Harus di-exclude. |
+| III-2 | **`logs/*.log` ter-track di git** — berisiko data WA customer/nomor terlibat commit. | apps/api/logs/*.log; RAILS §1.160 | ~~High (keamanan)~~ ✅ Fase A + Fase B SELESAI (SHA `469804a`→`73f607b`; backup `/home/ubuntu/backups/garuda-backup-20260819.bundle`) | Sudah di-exclude + di-purge dari history. |
 | III-3 | **Tidak ada pre-commit hook / checklist otomatis** (tsc, build, test). | RAILS §1.164 | Medium | Manual tiap kali. |
 | III-4 | **P3 T5: fallback tier overlap** (v1↔v2↔shadow) belum diklasifikasi sepenuhnya. | STATUS-V2:199-200 | Low | "RENDAH". |
 | III-5 | **Race lastWrite-wins `appendMessage` lastMessages** belum diklasifikasi. | STATUS-V2:200 | ? (belum diklasifikasi) | Potensi concurrency; perlu analisis dampak. |
