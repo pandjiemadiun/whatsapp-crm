@@ -21,6 +21,17 @@ import type { CartLine, CartSummary } from './cart-authority.js';
 /** Lease duration for CLAIMED actions — locked to 750ms per owner approval */
 export const LEASE_FINAL_MS = 750;
 
+/** WA cart mutation action type (P7, §8 Gap 1).
+ *  All CartOp[] from a single WA message are batched into ONE claim under this
+ *  actionType; idempotency is keyed at the MESSAGE level (actionId =
+ *  `wa:${conversationId}:${messageId}`), not per-op. Deliberately disjoint from
+ *  the PWA actionType literals (ADD_TO_CART / REMOVE_FROM_CART / ...) so WA keys
+ *  never collide with structured-action keys. */
+export const WA_CART_MUTATION = 'WA_CART_MUTATION';
+
+/** Return status for executeWaCartMutation — must be distinguishable by the caller. */
+export type WaCartMutationStatus = 'applied' | 'already_applied' | 'error';
+
 /** Action status values */
 export const ActionStatus = {
   CLAIMED: 'CLAIMED',
@@ -1419,4 +1430,87 @@ export async function executeAction(
 
   // Execute handler
   return await definition.handler(parseResult.data, context);
+}
+
+/**
+ * P7 — WA cart mutation adapter (idempotent via the EXISTING claim/FOR UPDATE path).
+ *
+ * Converges WA cart mutations onto the SAME idempotency/lock machinery as the PWA
+ * structured actions — it ONLY calls the already-existing private claimAction /
+ * executeClaimedAction (FOR UPDATE + re-check + SAVEPOINT). It does NOT duplicate,
+ * re-implement, or modify that logic. The actual mutation is delegated to
+ * cartAuthority.executeOps(ops, ..., tx), exactly like P0–P6 (single authoritative
+ * path, executed inside the same transaction that holds the row lock).
+ *
+ * WA has no client-supplied actionId (unlike PWA's /action body), so the
+ * deterministic actionId is derived server-side from the stable messageId:
+ *   actionId = `wa:${conversationId}:${messageId}`
+ * A redeliver of the SAME messageId → SAME actionId → claim finds the prior
+ * COMPLETED row → mutation skipped (already_applied). This is cross-instance safe
+ * because ActionIdempotency is a DB row locked via FOR UPDATE (vs the in-process
+ * mutex / Redis dedup which only cover single-instance / messageId-level).
+ *
+ * Non-WA callers (web / API / existing tests) pass no messageId → idempotency is
+ * intentionally NOT applied and the mutation runs directly via CartAuthority,
+ * preserving the exact pre-P7 behavior (no regression). All WA conversation-engine
+ * call sites always supply messageId.
+ *
+ * @returns 'applied' — mutation executed this call
+ *          'already_applied' — prior COMPLETED claim (idempotent no-op)
+ *          'error' — prior FAILED claim, or business/infra failure this call
+ */
+export async function executeWaCartMutation(
+  ops: CartOp[],
+  storeId: string,
+  customerId: string,
+  conversationId: string,
+  messageId?: string,
+): Promise<WaCartMutationStatus> {
+  // Non-WA path: no stable messageId → no idempotency claim; direct mutation.
+  if (!messageId) {
+    if (ops.length > 0) {
+      await cartAuthority.executeOps(ops, storeId, customerId, conversationId);
+    } else {
+      await cartAuthority.getCartAsConfirmedItems(conversationId);
+    }
+    return 'applied';
+  }
+
+  const actionId = `wa:${conversationId}:${messageId}`;
+  const actionType = WA_CART_MUTATION;
+
+  const claim = await claimAction(storeId, customerId, actionType, actionId);
+
+  if (!claim.claimed) {
+    const existing = claim.existing;
+    if (existing?.status === ActionStatus.COMPLETED) return 'already_applied';
+    if (existing?.status === ActionStatus.FAILED) {
+      adapters.logger.error('[WA_CART_MUTATION] prior attempt FAILED; skipping re-mutation to avoid double-apply', {
+        actionId,
+        error: existing.error,
+      });
+      return 'error';
+    }
+    if (existing?.status === ActionStatus.CLAIMED) {
+      // Another in-flight attempt owns this message while the lease is valid.
+      const leaseUntil = new Date(existing.leaseUntil);
+      if (leaseUntil > new Date()) return 'already_applied';
+      // Lease expired → fall through; executeClaimedAction re-runs under FOR UPDATE.
+    }
+  }
+
+  const execution = await executeClaimedAction(
+    storeId,
+    customerId,
+    conversationId,
+    actionType,
+    actionId,
+    async (tx: any) => {
+      return await cartAuthority.executeOps(ops, storeId, customerId, conversationId, tx);
+    },
+  );
+
+  if (execution.status === ActionStatus.COMPLETED) return 'applied';
+  if (execution.status === ActionStatus.FAILED) return 'error';
+  return 'error';
 }
