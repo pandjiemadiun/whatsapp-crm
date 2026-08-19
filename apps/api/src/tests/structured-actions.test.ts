@@ -36,6 +36,7 @@ import { prisma } from '../infrastructure/prisma.js';
 import { executeAction, actionRegistry, AddToCartRequestSchema, handleAddToCart, LEASE_FINAL_MS } from '../business/action-registry.js';
 import { ActionStatus } from '../business/action-registry.js';
 import { cartAuthority } from '../business/cart-authority.js';
+import { orderService } from '../business/order.service.js';
 import { ApiError } from '../errors/ApiError.js';
 import { ErrorCodes } from '../constants/errorCodes.js';
 
@@ -948,6 +949,252 @@ test('P6.2.6: REMOVE_FROM_CART / UPDATE_CART_QUANTITY with non-existent lineItem
     where: { storeId_customerId_actionType_actionId: { storeId, customerId, actionType: 'UPDATE_CART_QUANTITY', actionId: upId } },
   });
   assert.equal(upRec?.status, ActionStatus.FAILED);
+});
+
+// ═════════════════════════════════════════════════════════════
+// P6-3 — Typed CANCEL_ORDER
+// Reuse the SAME idempotency/lock pattern as ADD_TO_CART /
+// REMOVE_FROM_CART / UPDATE_CART_QUANTITY (claim → executeClaimedAction,
+// FOR UPDATE + re-check, SAVEPOINT). Delegates to OrderService.cancelOrder,
+// which re-validates ownership (storeId + customerId) and enforces the
+// order-transition state machine. Does NOT touch CartAuthority.
+// ═════════════════════════════════════════════════════════════
+
+/** Create an order in a given status owned by (storeId, customerId). */
+async function createOrderInState(
+  status: string,
+  sid: string,
+  cid: string,
+  convId: string,
+  pid: string,
+): Promise<string> {
+  const order = await prisma.order.create({
+    data: {
+      id: randomUUID(),
+      storeId: sid,
+      customerId: cid,
+      conversationId: convId,
+      orderStatus: status,
+      totalPrice: 25000,
+      currency: 'IDR',
+      items: [],
+      orderItems: {
+        create: [{
+          productId: pid,
+          productName: 'Produk Test',
+          quantity: 1,
+          unitPrice: 25000,
+          subtotal: 25000,
+        }],
+      },
+    },
+  });
+  return order.id;
+}
+
+test('P6.3.1: CANCEL_ORDER from valid state → applied, orderStatus cancelled, DB readback', async () => {
+  const conv = await createConversation(storeId, customerId);
+  const orderId = await createOrderInState('pending', storeId, customerId, conv, productId);
+
+  const result = await executeAction(
+    'CANCEL_ORDER',
+    { actionId: randomUUID(), type: 'CANCEL_ORDER', payload: { orderId } },
+    makeActionContext({ conversationId: conv }),
+  );
+
+  assert.equal(result.success, true);
+  assert.equal(result.status, 'applied');
+  assert.equal(result.data.result.orderId, orderId);
+  assert.equal(result.data.result.orderStatus, 'cancelled');
+
+  // DB readback: orderStatus must be 'cancelled'
+  const dbOrder = await prisma.order.findUnique({ where: { id: orderId } });
+  assert.equal(dbOrder!.orderStatus, 'cancelled', 'order must be cancelled in DB');
+
+  const rec = await prisma.actionIdempotency.findUnique({
+    where: { storeId_customerId_actionType_actionId: { storeId, customerId, actionType: 'CANCEL_ORDER', actionId: (result.data as any).actionId } },
+  });
+  assert.equal(rec?.status, ActionStatus.COMPLETED);
+});
+
+test('P6.3.2: CANCEL_ORDER invalid payload (non-UUID orderId) rejected before execution', async () => {
+  const conv = await createConversation(storeId, customerId);
+  const orderId = await createOrderInState('pending', storeId, customerId, conv, productId);
+
+  await assert.rejects(
+    () => executeAction(
+      'CANCEL_ORDER',
+      { actionId: randomUUID(), type: 'CANCEL_ORDER', payload: { orderId: 'not-a-uuid' } },
+      makeActionContext({ conversationId: conv }),
+    ),
+    (e: any) => e instanceof ApiError && e.code === ErrorCodes.ERR_VALIDATION,
+  );
+
+  // Order must be unchanged (rejected before any mutation)
+  const dbOrder = await prisma.order.findUnique({ where: { id: orderId } });
+  assert.equal(dbOrder!.orderStatus, 'pending', 'order must remain pending after invalid payload');
+
+  // No idempotency record should have been created for the bad attempt
+  const recs = await prisma.actionIdempotency.findMany({ where: { actionType: 'CANCEL_ORDER' } });
+  assert.equal(recs.length, 0, 'no idempotency record for a rejected invalid payload');
+});
+
+test('P6.3.3: CANCEL_ORDER tenant/customer mismatch → rejected, order unchanged, FAILED', async () => {
+  // Order owned by a DIFFERENT store + customer
+  const otherConv = await createConversation(storeIdOther, customerIdOther);
+  const otherOrderId = await createOrderInState('pending', storeIdOther, customerIdOther, otherConv, productIdOtherStore);
+
+  const result = await executeAction(
+    'CANCEL_ORDER',
+    { actionId: randomUUID(), type: 'CANCEL_ORDER', payload: { orderId: otherOrderId } },
+    makeActionContext(), // default storeId/customerId — NOT the owner
+  );
+
+  assert.equal(result.success, false, 'cross-tenant cancel must be rejected');
+  assert.ok(result.error, 'structured error must be present');
+  assert.equal(result.error!.code, 'INVALID_ORDER_OWNERSHIP', 'clear ownership error code required');
+  assert.equal(result.status, 'already_applied');
+
+  // Cross-tenant order must remain intact (unchanged)
+  const dbOrder = await prisma.order.findUnique({ where: { id: otherOrderId } });
+  assert.equal(dbOrder!.orderStatus, 'pending', 'cross-tenant order must NOT be cancelled');
+
+  // FAILED record is keyed by the caller's store/customer (default context)
+  const failedRec = await prisma.actionIdempotency.findFirst({
+    where: { storeId, customerId, actionType: 'CANCEL_ORDER', status: ActionStatus.FAILED },
+  });
+  assert.ok(failedRec, 'mismatch must persist as FAILED');
+});
+
+test('P6.3.4: CANCEL_ORDER from terminal state (completed) → rejected, order unchanged, clear error', async () => {
+  const conv = await createConversation(storeId, customerId);
+  const orderId = await createOrderInState('completed', storeId, customerId, conv, productId);
+
+  const result = await executeAction(
+    'CANCEL_ORDER',
+    { actionId: randomUUID(), type: 'CANCEL_ORDER', payload: { orderId } },
+    makeActionContext({ conversationId: conv }),
+  );
+
+  assert.equal(result.success, false, 'cancel from completed must be rejected');
+  assert.ok(result.error, 'structured error must be present');
+  assert.equal(result.error!.code, 'INVALID_ORDER_TRANSITION', 'clear transition error code required');
+  assert.equal(result.status, 'already_applied');
+
+  // Order must remain 'completed' (not mutated)
+  const dbOrder = await prisma.order.findUnique({ where: { id: orderId } });
+  assert.equal(dbOrder!.orderStatus, 'completed', 'completed order must NOT change');
+
+  const rec = await prisma.actionIdempotency.findFirst({
+    where: { storeId, customerId, actionType: 'CANCEL_ORDER', status: ActionStatus.FAILED },
+  });
+  assert.ok(rec, 'terminal-state cancel must persist as FAILED');
+});
+
+test('P6.3.5: CANCEL_ORDER from shipped is allowed per existing state machine', async () => {
+  const conv = await createConversation(storeId, customerId);
+  const orderId = await createOrderInState('shipped', storeId, customerId, conv, productId);
+
+  const result = await executeAction(
+    'CANCEL_ORDER',
+    { actionId: randomUUID(), type: 'CANCEL_ORDER', payload: { orderId } },
+    makeActionContext({ conversationId: conv }),
+  );
+
+  assert.equal(result.success, true, 'shipped → cancelled is allowed by order-transition');
+  assert.equal(result.status, 'applied');
+  assert.equal(result.data.result.orderStatus, 'cancelled');
+
+  const dbOrder = await prisma.order.findUnique({ where: { id: orderId } });
+  assert.equal(dbOrder!.orderStatus, 'cancelled');
+});
+
+test('P6.3.6: CANCEL_ORDER retry with same actionId → already_applied, no double-process', async () => {
+  const conv = await createConversation(storeId, customerId);
+  const orderId = await createOrderInState('pending', storeId, customerId, conv, productId);
+
+  let cancelCalls = 0;
+  const origCancel = (orderService as any).cancelOrder.bind(orderService);
+  (orderService as any).cancelOrder = function (this: any, ...args: any[]) {
+    cancelCalls++;
+    return origCancel(...args);
+  };
+
+  const cancelId = randomUUID();
+  const first = await executeAction(
+    'CANCEL_ORDER',
+    { actionId: cancelId, type: 'CANCEL_ORDER', payload: { orderId } },
+    makeActionContext({ conversationId: conv }),
+  );
+  assert.equal(first.status, 'applied');
+
+  const second = await executeAction(
+    'CANCEL_ORDER',
+    { actionId: cancelId, type: 'CANCEL_ORDER', payload: { orderId } },
+    makeActionContext({ conversationId: conv }),
+  );
+  assert.equal(second.status, 'already_applied', 'retry must return already_applied');
+
+  const dbOrder = await prisma.order.findUnique({ where: { id: orderId } });
+  assert.equal(dbOrder!.orderStatus, 'cancelled', 'order must not be re-cancelled on retry');
+  assert.equal(cancelCalls, 1, 'cancelOrder must execute only once for the same actionId');
+  (orderService as any).cancelOrder = origCancel;
+
+  const rec = await prisma.actionIdempotency.findFirst({
+    where: { storeId, customerId, actionType: 'CANCEL_ORDER', actionId: cancelId },
+  });
+  assert.equal(rec!.status, ActionStatus.COMPLETED);
+});
+
+test('P6.3.7: CANCEL_ORDER retry after FAILED does not re-execute mutation', async () => {
+  const conv = await createConversation(storeId, customerId);
+  const orderId = await createOrderInState('completed', storeId, customerId, conv, productId);
+
+  let cancelCalls = 0;
+  const origCancel = (orderService as any).cancelOrder.bind(orderService);
+  (orderService as any).cancelOrder = function (this: any, ...args: any[]) {
+    cancelCalls++;
+    return origCancel(...args);
+  };
+
+  const cancelId = randomUUID();
+  const first = await executeAction(
+    'CANCEL_ORDER',
+    { actionId: cancelId, type: 'CANCEL_ORDER', payload: { orderId } },
+    makeActionContext({ conversationId: conv }),
+  );
+  assert.equal(first.status, 'already_applied');
+  assert.equal(first.success, false);
+
+  const second = await executeAction(
+    'CANCEL_ORDER',
+    { actionId: cancelId, type: 'CANCEL_ORDER', payload: { orderId } },
+    makeActionContext({ conversationId: conv }),
+  );
+  assert.equal(second.status, 'already_applied', 'retry after FAILED returns already_applied');
+  assert.equal(second.success, false, 'retry after FAILED does not succeed');
+
+  const dbOrder = await prisma.order.findUnique({ where: { id: orderId } });
+  assert.equal(dbOrder!.orderStatus, 'completed', 'order must not be mutated on FAILED retry');
+  assert.equal(cancelCalls, 1, 'cancelOrder must execute only once (FAILED not re-applied)');
+  (orderService as any).cancelOrder = origCancel;
+});
+
+test('P6.3.8: CANCEL_ORDER does NOT invoke CartAuthority.executeOps / addLine', async () => {
+  const conv = await createConversation(storeId, customerId);
+  const orderId = await createOrderInState('pending', storeId, customerId, conv, productId);
+
+  const execSpy = await withSpy(cartAuthority as any, 'executeOps', async () => {
+    const addSpy = await withSpy(cartAuthority as any, 'addLine', async () => {
+      await executeAction(
+        'CANCEL_ORDER',
+        { actionId: randomUUID(), type: 'CANCEL_ORDER', payload: { orderId } },
+        makeActionContext({ conversationId: conv }),
+      );
+    });
+    assert.equal(addSpy.calls, 0, 'CartAuthority.addLine must NOT be called for CANCEL_ORDER');
+  });
+  assert.equal(execSpy.calls, 0, 'CartAuthority.executeOps must NOT be called for CANCEL_ORDER');
 });
 
 // ═════════════════════════════════════════════════════════════
