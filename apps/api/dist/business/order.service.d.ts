@@ -53,6 +53,25 @@ export declare class OrderService {
      * Hapus item dari pesanan, kurangi totalPrice.
      */
     removeOrderItem(orderId: string, orderItemId: string): Promise<OrderWithItems>;
+    /**
+     * Cancel an order via the authoritative state machine (order-transition).
+     *
+     * Business invariant: only transitions present in ALLOWED_TRANSITIONS are
+     * permitted. Per the existing single-source-of-truth state machine this
+     * means draft / waiting_address / waiting_payment / pending / confirmed /
+     * packing / paid / shipped MAY cancel, while completed / refunded /
+     * cancelled are terminal and are REJECTED.
+     *
+     * Ownership (store + customer) is validated here — order-transition.ts
+     * documents that "Ownership is validated by the caller". Runs inside an
+     * optional tx so it can participate in the structured-action idempotency
+     * transaction (FOR UPDATE + SAVEPOINT). Business rejections are thrown as
+     * plain errors with an INVALID_-prefixed code so the action registry's
+     * executeClaimedAction records them as FAILED (not an infra abort).
+     */
+    cancelOrder(orderId: string, storeId: string, customerId: string, options?: {
+        tx?: any;
+    }): Promise<OrderWithItems>;
     private mapOrderWithItems;
 }
 export declare const orderService: OrderService;

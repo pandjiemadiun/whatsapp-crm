@@ -127,6 +127,35 @@ export const UpdateCartQuantityResponseSchema = z.object({
         message: z.string(),
     }).optional(),
 });
+/** CANCEL_ORDER request schema (P6-3 — order mutation, idempotent).
+ *  Identifier is orderId (Order.id). Ownership (storeId + customerId) is
+ *  re-validated server-side inside orderService.cancelOrder against the
+ *  tenant-scoped order row, so a client-supplied orderId is never trusted as
+ *  final authority. Reuses the SAME Stage-1/Stage-2 idempotency/lock pattern
+ *  as REMOVE_FROM_CART / UPDATE_CART_QUANTITY (claim → executeClaimedAction,
+ *  FOR UPDATE + re-check, SAVEPOINT). */
+export const CancelOrderRequestSchema = z.object({
+    actionId: z.string().uuid(),
+    type: z.literal('CANCEL_ORDER'),
+    payload: z.object({
+        orderId: z.string().uuid(),
+    }),
+});
+/** CANCEL_ORDER response schema — follows the §5.4 mutation pattern. */
+export const CancelOrderResponseSchema = z.object({
+    success: z.boolean(),
+    actionId: z.string().uuid(),
+    type: z.literal('CANCEL_ORDER'),
+    status: z.enum(['already_applied', 'applied', 'action_in_progress']),
+    result: z.object({
+        orderId: z.string().uuid(),
+        orderStatus: z.string(),
+    }).optional(),
+    error: z.object({
+        code: z.string(),
+        message: z.string(),
+    }).optional(),
+});
 /** SHOW_RELATED_PRODUCTS request schema (P1 — non-mutating discovery) */
 export const ShowRelatedProductsRequestSchema = z.object({
     actionId: z.string().uuid(),
@@ -663,6 +692,86 @@ export async function handleUpdateCartQuantity(request, context) {
     throw new Error('Unexpected execution status');
 }
 /**
+ * CANCEL_ORDER Handler (P6-3)
+ * Delegates to OrderService.cancelOrder within the SAME idempotency/lock
+ * pattern as handleAddToCart / handleRemoveFromCart / handleUpdateCartQuantity
+ * (claim → executeClaimedAction, FOR UPDATE + re-check, SAVEPOINT for
+ * business errors). cancelOrder re-validates the orderId ownership
+ * server-side (storeId + customerId against the tenant-scoped Order row) and
+ * enforces the order-transition state machine, so a cross-tenant / not-owned /
+ * terminal-state orderId yields a structured INVALID_* business error (FAILED),
+ * never a raw crash. CartAuthority is NOT touched (target row is Order, not
+ * OrderItem).
+ */
+export async function handleCancelOrder(request, context) {
+    const { actionId, payload } = request;
+    const { storeId, customerId, conversationId } = context;
+    const actionType = 'CANCEL_ORDER';
+    const claim = await claimAction(storeId, customerId, actionType, actionId);
+    if (!claim.claimed) {
+        const existing = claim.existing;
+        if (existing.status === ActionStatus.COMPLETED) {
+            return {
+                success: true,
+                data: {
+                    success: true,
+                    actionId,
+                    type: 'CANCEL_ORDER',
+                    status: 'already_applied',
+                    result: existing.result,
+                },
+                status: 'already_applied',
+            };
+        }
+        if (existing.status === ActionStatus.FAILED) {
+            return {
+                success: false,
+                error: existing.error || { code: 'ACTION_FAILED', message: 'Action previously failed' },
+                status: 'already_applied',
+            };
+        }
+        if (existing.status === ActionStatus.CLAIMED) {
+            const leaseUntil = new Date(existing.leaseUntil);
+            if (leaseUntil > new Date()) {
+                return {
+                    success: false,
+                    error: { code: 'ACTION_IN_PROGRESS', message: 'Action is being processed' },
+                    status: 'action_in_progress',
+                };
+            }
+        }
+    }
+    const executeMutation = async (tx) => {
+        const cancelled = await orderService.cancelOrder(payload.orderId, storeId, customerId, { tx });
+        return {
+            orderId: payload.orderId,
+            orderStatus: cancelled.orderStatus,
+        };
+    };
+    const execution = await executeClaimedAction(storeId, customerId, conversationId, actionType, actionId, executeMutation);
+    if (execution.status === ActionStatus.COMPLETED) {
+        return {
+            success: true,
+            data: {
+                success: true,
+                actionId,
+                type: 'CANCEL_ORDER',
+                status: 'applied',
+                result: execution.result,
+            },
+            status: 'applied',
+        };
+    }
+    if (execution.status === ActionStatus.FAILED) {
+        return {
+            success: false,
+            error: execution.error || { code: 'EXECUTION_FAILED', message: 'Action failed' },
+            status: 'already_applied',
+        };
+    }
+    throw new Error('Unexpected execution status');
+}
+/**
  * SHOW_RELATED_PRODUCTS Handler (P1 — non-mutating, read-only).
  *
  * Does NOT create ActionIdempotency records and does NOT use the
@@ -826,6 +935,20 @@ export async function handleOpenOrderHistory(request, context) {
  * Action Registry — single definition for ADD_TO_CART
  */
 export const actionRegistry = {
+    CANCEL_ORDER: {
+        type: 'CANCEL_ORDER',
+        requestSchema: CancelOrderRequestSchema,
+        responseSchema: CancelOrderResponseSchema,
+        handler: handleCancelOrder,
+        authorize: async (_request, _context) => {
+            // orderId ownership (storeId + customerId) is re-validated server-side
+            // inside orderService.cancelOrder against the tenant-scoped Order row
+            // (ownership + terminal-state check). No client-supplied store/customer
+            // has authority; mirror the REMOVE_FROM_CART/UPDATE_CART_QUANTITY
+            // conversation-scoped trust model. CartAuthority is NOT invoked.
+            return { allowed: true };
+        },
+    },
     REMOVE_FROM_CART: {
         type: 'REMOVE_FROM_CART',
         requestSchema: RemoveFromCartRequestSchema,

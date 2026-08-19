@@ -37,6 +37,7 @@ import adminProductsRoutes from './routes/admin/products.js';
 import bankAccountsRouter from './routes/bank-accounts.js';
 import sopRouter from './routes/sop.js';
 import pwaRouter from './routes/pwa.js';
+import actionsRouter from './routes/actions.js';
 import { adminAuthMiddleware } from './middleware/adminAuth.js';
 import { requireAdminRole } from './middleware/adminAuthGuard.js';
 import { initializeDefaultConfigs } from './bootstrap/initializeConfig.js';
@@ -123,6 +124,7 @@ app.use('/api/analytics', analyticsRouter);
 app.use('/api', productsRouter);
 // Web Adapter (P-PWA.8) — public endpoints, no auth, CORS untouched (blueprint §5)
 app.use('/api/pwa', pwaRouter);
+app.use('/api/pwa', actionsRouter);
 // Health Check Endpoint — under /api so dashboard's axios baseURL works
 app.get('/api/health', async (req, res) => {
     try {
