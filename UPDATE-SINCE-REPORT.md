@@ -47,6 +47,9 @@ Perlu re-run untuk pastikan bukan flaky/false-positive.
   masih ada. Ini scope P6-1 (belum dikerjakan).
 - **§6.3** — `REMOVE_FROM_CART` / `UPDATE_CART_QUANTITY` / `CANCEL_ORDER` masih belum
   jadi typed action. Antrian setelah P6-1.
+  > **Update 2026-08-19:** `REMOVE_FROM_CART` + `UPDATE_CART_QUANTITY` SELESAI di P6-2;
+  > `CANCEL_ORDER` SELESAI di P6-3 (lihat "Update Pasca P6-3" di bawah). Lihat juga
+  > 🔴 TEMUAN KRITIS: `actionsRouter` ternyata tidak pernah di-mount sampai P6-3.
 
 ## Next task yang disepakati: P6-1
 
@@ -80,7 +83,91 @@ untuk P0, dst) masih berlaku, tidak berubah oleh update ini.
 
 6. **Test baseline saat ini** — `test:chat` 267/267, `test:golden` 18/18.
 
-7. **Next open items**:
+7. **Next open items** (sebelum P6-3):
    - `CANCEL_ORDER` belum typed action (kandidat P6-3).
    - §6.4 golden dataset coverage P3/P4/P5 masih belum.
    - §6.6 `dist/` masih tracked (logs sudah di-untrack, `dist` belum).
+
+---
+
+## Update Pasca P6-3 (2026-08-19)
+
+### Jawaban audit gap actionsRouter (diminta)
+
+- **Sejak commit mana gap ada?** `routes/actions.ts` dibuat di **`e5ee299`**
+  (checkpoint: "commit structured actions P0-P5 foundation"). `git log -S actionsRouter
+  -- apps/api/src/index.ts` **kosong** → router ini **tidak pernah di-mount sejak
+  awal**, dan tidak pula di-mount oleh P6-1 (`2f834a5`) / P6-2 (`3cb91c9`).
+  Jadi endpoint `POST /api/pwa/:storeSlug/action` **TIDAK REACHABLE via HTTP
+  nyata sejak P0**, meski semua unit/integration test (jest + tsx in-process)
+  lolos karena mereka memanggil `executeAction()` langsung, bukan lewat HTTP.
+- **Ada bukti curl/e2e sebelumnya yang klaim "jalan di production"?** **TIDAK.**
+  Pencarian di `DOCS/` hanya menemukan referensi *path* route
+  (`DOCS/MASTER/QLobot-MASTER-ROADMAP.md:121`, `DOCS/QLOBOT-BASELINE.md:100`),
+  tidak ada klaim "ADD_TO_CART/REMOVE/UPDATE sudah diverifikasi reachable via
+  HTTP di production". **Tidak ada klaim keliru yang perlu ditandai** (RAILS §1.3) —
+  hanya celah yang tidak terdokumentasi.
+- **Re-verifikasi manual di canary (store-f7140b5c) via HTTP asli?** **YA, sudah
+  dilakukan** (store canary dibuat ad-hoc karena `store-f7140b5c` sebelumnya
+  tidak ada; store+product disimpan sebagai fixture canary, data proof
+  (customer/order/conversation) dibersihkan). Keempat action terbukti reachable
+  over real HTTP (bukan cuma test suite):
+
+  | Action | curl hasil |
+  |---|---|
+  | `ADD_TO_CART` | `{"success":true,"status":"applied","result":{"quantityAdded":2,...}}` |
+  | `UPDATE_CART_QUANTITY` | `{"success":true,"status":"applied","result":{"quantity":5,...}}` |
+  | `REMOVE_FROM_CART` | `{"success":true,"status":"applied","result":{"cart":{"items":[],"total":0}}}` |
+  | `CANCEL_ORDER` | `{"success":true,"status":"applied","result":{"orderStatus":"cancelled"}}` |
+
+## P6-3 — CANCEL_ORDER: SELESAI (commit TBD — working tree, belum di-commit)
+
+- Delegasi penuh ke `transitionOrder()` existing (`order-transition.ts`),
+  tidak ada guard tambahan — sesuai `DECISION-CANCEL-ORDER-STATE-MACHINE.md`
+  (user memilih "Follow existing state machine": `shipped → cancelled` **diizinkan**,
+  hanya `completed`/`refunded`/`cancelled` yang terminal/diblokir).
+- `order.service.ts`: `cancelOrder(orderId, storeId, customerId, {tx})` —
+  ownership check (storeId + customerId) + `transitionOrder('cancelled')`.
+  Business rejection → `INVALID_*` code → `FAILED` (bukan infra-abort, lewat
+  SAVEPOINT di `executeClaimedAction`).
+- `action-registry.ts`: `CANCEL_ORDER` typed action, pola `claim → execute →
+  re-check` SAMA seperti `REMOVE_FROM_CART` (reuse Stage-1/Stage-2 idempotensi,
+  **tidak ada Stage-2 kedua**).
+- `CartAuthority` tidak disentuh (target `Order`, bukan `OrderItem`) —
+  grep 0 refs di path cancel, spy 0 calls, `git diff cart-authority.ts` kosong.
+- `routes/actions.ts` **tidak diubah** (dispatch generic by `type`).
+- Test: `test:chat` 267/267, `test:golden` 18/18, `structured-actions` 38/38
+  (+8 baru P6.3.x). `tsc` 0 error, `build` sukses, `pm2` online.
+
+## 🔴 TEMUAN KRITIS BARU — actionsRouter tidak pernah di-mount (P0→P6-2 gap)
+
+Saat implementasi P6-3, ditemukan `app.use('/api/pwa', actionsRouter)` **TIDAK ADA**
+di `index.ts` sebelumnya — endpoint `/api/pwa/:storeSlug/action` kemungkinan
+**TIDAK REACHABLE via HTTP nyata sejak P0** (ADD_TO_CART), meski semua
+unit/integration test lolos (mereka panggil `executeAction()` in-process).
+**Sudah di-mount di P6-3** (`apps/api/src/index.ts` +2 baris: import
+`actionsRouter` + `app.use('/api/pwa', actionsRouter)`), di-flag sebagai
+satu-satunya perubahan di luar scope P6-3 yang tercatat. Tidak ada konflik route
+(pwaRouter tidak punya `/:storeSlug/action`).
+
+BELUM DIVERIFIKASI SEBELUMNYA (sekarang sudah):
+- Sejak commit mana gap ini ada → **`e5ee299`** (dibuktikan via `git log -S actionsRouter`).
+- Apakah pernah ada klaim "sudah jalan di production" untuk ADD_TO_CART/
+  REMOVE/UPDATE → **TIDAK ADA** (tidak perlu ditandai keliru per RAILS §1.3).
+- Re-verifikasi manual di canary `store-f7140b5c`: **keempat action terbukti
+  reachable via HTTP asli** (lihat tabel di atas, bukan cuma test suite).
+
+Status: **DIKETAHUI & DIVERIFIKASI** (bukan lagi "belum dikonfirmasi"). Prioritas
+SEBELUM lanjut ke item lain tetap valid — fitur yang "diklaim selesai" (P0-P6.2)
+sekarang benar-benar berfungsi di production setelah mount.
+
+## Open items (update)
+
+1. ~~Konfirmasi dampak actionsRouter mount gap~~ — **SELESAI**: gap sejak `e5ee299`,
+   tidak ada klaim keliru, keempat action terverifikasi reachable via HTTP di canary.
+2. §6.4 — golden dataset belum cover P3/P4/P5.
+3. §6.6 — `dist/` masih tracked (logs sudah untracked).
+4. Dua migrasi `ActionIdempotency` duplikat (`...000000` vs `...000100`)
+   belum dikonfirmasi superseded.
+5. Kebijakan cancel shipped-order oleh customer sendiri — open product decision,
+   lihat `DECISION-CANCEL-ORDER-STATE-MACHINE.md`.
