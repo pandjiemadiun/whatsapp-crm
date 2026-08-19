@@ -5,6 +5,7 @@ import { ValidationError } from '../errors/ValidationError.js';
 import { ErrorCodes } from '../constants/errorCodes.js';
 import { productService } from './product.service.js';
 import { conversationContextService } from './conversation-context.service.js';
+import { transitionOrder, InvalidOrderTransitionError } from './order-transition.js';
 import { cartAuthority } from './cart-authority.js';
 export class OrderService {
     /**
@@ -338,6 +339,53 @@ export class OrderService {
         catch (error) {
             adapters.logger.error('Failed to remove order item', error, { orderId, orderItemId });
             throw new ApiError(ErrorCodes.ERR_DB, 'Failed to remove order item');
+        }
+    }
+    /**
+     * Cancel an order via the authoritative state machine (order-transition).
+     *
+     * Business invariant: only transitions present in ALLOWED_TRANSITIONS are
+     * permitted. Per the existing single-source-of-truth state machine this
+     * means draft / waiting_address / waiting_payment / pending / confirmed /
+     * packing / paid / shipped MAY cancel, while completed / refunded /
+     * cancelled are terminal and are REJECTED.
+     *
+     * Ownership (store + customer) is validated here — order-transition.ts
+     * documents that "Ownership is validated by the caller". Runs inside an
+     * optional tx so it can participate in the structured-action idempotency
+     * transaction (FOR UPDATE + SAVEPOINT). Business rejections are thrown as
+     * plain errors with an INVALID_-prefixed code so the action registry's
+     * executeClaimedAction records them as FAILED (not an infra abort).
+     */
+    async cancelOrder(orderId, storeId, customerId, options) {
+        const tx = (options?.tx ?? prisma);
+        const order = await tx.order.findUnique({
+            where: { id: orderId },
+            include: { orderItems: { orderBy: { createdAt: 'asc' } } },
+        });
+        if (!order || order.deletedAt) {
+            const err = new Error(`Order ${orderId} not found`);
+            err.code = 'INVALID_ORDER_NOT_FOUND';
+            err.name = 'InvalidOrderStateError';
+            throw err;
+        }
+        if (order.storeId !== storeId || order.customerId !== customerId) {
+            const err = new Error(`Order ${orderId} does not belong to store ${storeId} / customer ${customerId}`);
+            err.code = 'INVALID_ORDER_OWNERSHIP';
+            err.name = 'InvalidOrderStateError';
+            throw err;
+        }
+        try {
+            return await transitionOrder(orderId, 'cancelled', { tx });
+        }
+        catch (e) {
+            if (e instanceof InvalidOrderTransitionError) {
+                const err = new Error(e.message);
+                err.code = 'INVALID_ORDER_TRANSITION';
+                err.name = 'InvalidOrderStateError';
+                throw err;
+            }
+            throw e;
         }
     }
     // ============================================================

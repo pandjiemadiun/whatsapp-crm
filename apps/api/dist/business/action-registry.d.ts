@@ -140,6 +140,41 @@ export declare const UpdateCartQuantityResponseSchema: z.ZodObject<{
     }, z.core.$strip>>;
 }, z.core.$strip>;
 export type UpdateCartQuantityResponse = z.infer<typeof UpdateCartQuantityResponseSchema>;
+/** CANCEL_ORDER request schema (P6-3 — order mutation, idempotent).
+ *  Identifier is orderId (Order.id). Ownership (storeId + customerId) is
+ *  re-validated server-side inside orderService.cancelOrder against the
+ *  tenant-scoped order row, so a client-supplied orderId is never trusted as
+ *  final authority. Reuses the SAME Stage-1/Stage-2 idempotency/lock pattern
+ *  as REMOVE_FROM_CART / UPDATE_CART_QUANTITY (claim → executeClaimedAction,
+ *  FOR UPDATE + re-check, SAVEPOINT). */
+export declare const CancelOrderRequestSchema: z.ZodObject<{
+    actionId: z.ZodString;
+    type: z.ZodLiteral<"CANCEL_ORDER">;
+    payload: z.ZodObject<{
+        orderId: z.ZodString;
+    }, z.core.$strip>;
+}, z.core.$strip>;
+export type CancelOrderRequest = z.infer<typeof CancelOrderRequestSchema>;
+/** CANCEL_ORDER response schema — follows the §5.4 mutation pattern. */
+export declare const CancelOrderResponseSchema: z.ZodObject<{
+    success: z.ZodBoolean;
+    actionId: z.ZodString;
+    type: z.ZodLiteral<"CANCEL_ORDER">;
+    status: z.ZodEnum<{
+        already_applied: "already_applied";
+        applied: "applied";
+        action_in_progress: "action_in_progress";
+    }>;
+    result: z.ZodOptional<z.ZodObject<{
+        orderId: z.ZodString;
+        orderStatus: z.ZodString;
+    }, z.core.$strip>>;
+    error: z.ZodOptional<z.ZodObject<{
+        code: z.ZodString;
+        message: z.ZodString;
+    }, z.core.$strip>>;
+}, z.core.$strip>;
+export type CancelOrderResponse = z.infer<typeof CancelOrderResponseSchema>;
 /** SHOW_RELATED_PRODUCTS request schema (P1 — non-mutating discovery) */
 export declare const ShowRelatedProductsRequestSchema: z.ZodObject<{
     actionId: z.ZodString;
@@ -351,6 +386,19 @@ export declare function handleRemoveFromCart(request: RemoveFromCartRequest, con
  * lineItemId yields a structured ITEM_NOT_FOUND business error (FAILED).
  */
 export declare function handleUpdateCartQuantity(request: UpdateCartQuantityRequest, context: ActionContext): Promise<ActionResult<UpdateCartQuantityResponse>>;
+/**
+ * CANCEL_ORDER Handler (P6-3)
+ * Delegates to OrderService.cancelOrder within the SAME idempotency/lock
+ * pattern as handleAddToCart / handleRemoveFromCart / handleUpdateCartQuantity
+ * (claim → executeClaimedAction, FOR UPDATE + re-check, SAVEPOINT for
+ * business errors). cancelOrder re-validates the orderId ownership
+ * server-side (storeId + customerId against the tenant-scoped Order row) and
+ * enforces the order-transition state machine, so a cross-tenant / not-owned /
+ * terminal-state orderId yields a structured INVALID_* business error (FAILED),
+ * never a raw crash. CartAuthority is NOT touched (target row is Order, not
+ * OrderItem).
+ */
+export declare function handleCancelOrder(request: CancelOrderRequest, context: ActionContext): Promise<ActionResult<CancelOrderResponse>>;
 /**
  * SHOW_RELATED_PRODUCTS Handler (P1 — non-mutating, read-only).
  *
