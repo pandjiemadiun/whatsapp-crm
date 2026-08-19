@@ -235,13 +235,7 @@ export class ConversationService {
             const ops = this.deriveResolvedCartOps(pending, payload, catalog);
             const { valid: dbValid } = await validateCartOpsAgainstDb(ops, storeId);
             if (dbValid.length > 0) {
-              await this.executeCartOps(dbValid, {
-                conversationId,
-                storeId,
-                customerId,
-                messages: [],
-                customerCity: null,
-              } as any, customerMessage);
+              await executeWaCartMutation(dbValid, storeId, customerId, conversationId, messageId);
               // ── P0 SAFETY BOUNDARY: mutasi cart sukses, jangan pernah jalan ke v1 ──
               v2MutationExecuted = true;
             }
@@ -323,14 +317,8 @@ export class ConversationService {
                   qty: qtyPerEntity,
                   price: isRemove ? 0 : (priceMap.get(String(e.value).toLowerCase()) ?? 0),
                 }) as const);
-                // Panggil executeCartOps existing dengan harga dari DB (I13), bukan LLM
-                await this.executeCartOps(ops, {
-                    conversationId,
-                    storeId,
-                    customerId,
-                    messages: [],
-                    customerCity: null
-                } as any, customerMessage);
+                // Panggil executeWaCartMutation (idempoten via claim/FOR UPDATE) — harga dari DB (I13), bukan LLM
+                await executeWaCartMutation(ops, storeId, customerId, conversationId, messageId);
                 // ── P0 SAFETY BOUNDARY: mutasi cart sukses, jangan pernah jalan ke v1 ──
                 v2MutationExecuted = true;
               }
