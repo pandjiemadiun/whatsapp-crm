@@ -3,6 +3,7 @@ import { adapters } from '../adapters/container.js';
 import { fallbackService } from './fallback.service.js';
 import { orderService } from './order.service.js';
 import { cartAuthority } from './cart-authority.js';
+import { executeWaCartMutation } from './action-registry.js';
 import { conversationContextService } from './conversation-context.service.js';
 import { prisma } from '../infrastructure/prisma.js';
 import { productService } from './product.service.js';
@@ -509,11 +510,7 @@ export class ConversationService {
           // Produk tidak ada di DB → tidak dieksekusi (bukan reject transaksi total).
           const { valid: dbValid } = await validateCartOpsAgainstDb(resolved.ops, storeId);
           if (dbValid.length > 0) {
-            await this.executeCartOps(dbValid, {
-              conversationId,
-              storeId,
-              customerId,
-            } as any, customerMessage);
+            await executeWaCartMutation(dbValid, storeId, customerId, conversationId, messageId);
             cartOpsExecuted.push(...dbValid);
           }
         }
@@ -671,7 +668,7 @@ export class ConversationService {
         if (llmResult.cart_ops && llmResult.cart_ops.length > 0) {
           const { valid, missing } = await validateCartOpsAgainstDb(llmResult.cart_ops, storeId);
           if (valid.length > 0) {
-            await this.executeCartOps(valid, pipelineCtx, normalizedMsg);
+            await executeWaCartMutation(valid, storeId, customerId, conversationId, messageId);
             executedAdd = valid.some((o) => o.type === 'add');
             cartOpsExecuted.push(...valid);
           }
