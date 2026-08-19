@@ -39,8 +39,8 @@ dependencies: @prisma/client ^5.10.0, express ^4.18.2, socket.io ^4.8.3,
   web-push, axios, cors, multer
 devDependencies: typescript ^5.3.3, prisma ^5.10.0, jest ^29.7.0, ts-jest, tsx ^4.7.0, oxlint
 ```
-Catatan: kontrak structured actions mengunci **Prisma 5.22.0** (§6A.12) tapi `package.json`
-mem-pin `^5.10.0` — minor mismatch (lihat §6.8, masih LOW/open).
+Catatan: kontrak structured actions mengunci **Prisma 5.22.0** (§6A.12); `package.json` `^5.10.0`
+hanya pin kosmetik — resolved version (package-lock.json) = **5.22.0 persis** (lihat §6.8, ✅ AUDITED).
 
 **`apps/pwa`** (`pwa@0.0.0`, Vite+React) — chatbox web storefront.
 **`apps/dashboard`** (`dashboard@0.0.0`, Vite+React) — merchant admin dashboard.
@@ -256,10 +256,12 @@ P8-CI-FIX (`c6be2d8`) masukkan `test:structured` (115 test) ke CI → gate lengk
 - **III-7/III-8** I11/I12 normalizer — typo lolos / guard belum diverifikasi.
 - **Kata `'mau'` di `ORDER_INTENT_KEYWORDS`** (`fast-path.ts`) bisa short-circuit sebelum `trySop`.
 
-### 6.8 🟡 Prisma version mismatch (kontrak vs package.json)
-Kontrak §6A.12 mengunci **Prisma 5.22.0**; `package.json` `^5.10.0`. Minor; `FOR UPDATE` via
-`$queryRaw` (action-registry) berjalan di keduanya. Perlu cross-check eksplisit sebelum
-deklarasi selesai final (LOW).
+### 6.8 ✅ Prisma version — AUDITED (resolved = 5.22.0, match kontrak §6A.12)
+Kontrak §6A.12 mengunci **Prisma 5.22.0**; `package.json` `^5.10.0`. Audit read-only
+(2026-08-19) konfirmasi resolved version (`@prisma/client`, `prisma`, `@prisma/engines`)
+= **5.22.0 persis** via lockfile — SAMA dengan kontrak. Pin `^5.10.0` murni kosmetik,
+sudah resolve benar ke 5.22.0. `FOR UPDATE` via `$queryRaw` (action-registry) berjalan di
+versi ini. **Tidak ada tindakan diperlukan** (LOW, closed).
 
 ### 6.9 🔴 P7 — WA convergence ke action contract — **OPEN (BELUM DIPUTUSKAN SCOPE)**
 `routes/webhooks.ts` (WA) memanggil `messageProcessorService.processMessage()` — **TIDAK**
@@ -308,8 +310,8 @@ natural-language via Conversation Engine. Opsi belum diputuskan:
 - **P7 WA convergence** — BELUM diputuskan scope (§8.1).
 - **II-5 test-isolation** — audit assertion `actionType`/`store`-wide lintas file test.
 - **6.5** pre-existing test failures (II-1/II-2) — perbaiki di test env (tidak blocking).
-- **6.7** sisa kosmetik / normalizer (I-1, III-4/5/7/8).
-- **6.8** Prisma version cross-check.
+ - **6.7** sisa kosmetik / normalizer (I-1, III-4/5/7/8).
+
 
 ---
 
