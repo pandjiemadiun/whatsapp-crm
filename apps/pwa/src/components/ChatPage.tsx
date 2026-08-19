@@ -428,48 +428,81 @@ export default function ChatPage() {
     [],
   )
 
-  // G2-E.3.2 §10/§11/§12: "+ Keranjang" / "Tambah" must NOT use a client cart.
-  // The PWA has no authoritative cart read today (see §10E), so there is no
-  // client-side cart/counter/badge. +Keranjang sends the authoritative backend
-  // cart-add via the existing /message channel ("tambah <product> ke keranjang"
-  // → conversation engine → CartAuthority). The backend's own reply is rendered
-  // as a chat bubble; nothing is fabricated client-side.
-  const handleAddToCart = useCallback(
-    (product: ProductPayload) => {
-      if (!product.name || inputDisabled) return
-      void onSend(`tambah ${product.name} ke keranjang`)
+  // P4-3: typed structured-action sender. Posts actionId+type+payload to
+  // POST /pwa/:slug/action (NOT raw NL text to /message). Server resolves
+  // identity and returns the authoritative result, which we render as a chat
+  // bubble — no optimistic client computation (§5.5).
+  const renderActionResult = useCallback((type: string, data: any) => {
+    switch (type) {
+      case 'ADD_TO_CART':
+      case 'OPEN_CART': {
+        const cart = (data?.result?.cart ?? data?.result) as any
+        if (cart?.items) {
+          appendAssistant({ type: 'cart', content: 'Isi keranjangmu:', payload: { items: cart.items, total: cart.total ?? null } })
+        }
+        break
+      }
+      case 'OPEN_CATALOG':
+      case 'SHOW_RELATED_PRODUCTS': {
+        const items = (data?.result?.products ?? []) as any[]
+        appendAssistant({ type: 'product_list', content: 'Daftar produk:', payload: { items } })
+        break
+      }
+      case 'OPEN_ORDER_HISTORY': {
+        const orders = (data?.result?.orders ?? []) as any[]
+        appendAssistant({ type: 'order', content: 'Riwayat pesanan:', payload: { orders } })
+        break
+      }
+      // CONTACT_ADMIN: the handoff reply is delivered via WebSocket
+      // (message.created), so we intentionally do NOT append a local bubble.
+      default:
+        break
+    }
+  }, [appendAssistant])
+
+  const sendAction = useCallback(
+    async (type: string, payload?: Record<string, unknown>) => {
+      if (sending || inputDisabled || !webUid || !slug) return
+      setSending(true)
+      setError(null)
+      try {
+        const res = await api.post(`/pwa/${slug}/action`, {
+          uid: webUid,
+          action: { actionId: crypto.randomUUID(), type, payload: payload ?? {} },
+        })
+        const body = res.data
+        if (body?.success && body?.data) {
+          renderActionResult(type, body.data)
+        } else {
+          setError(body?.error || 'Aksi gagal diproses')
+        }
+      } catch (e: any) {
+        setError(e?.response?.data?.error || e?.message || 'Aksi gagal diproses')
+      } finally {
+        setSending(false)
+      }
     },
-    [onSend, inputDisabled],
+    [sending, inputDisabled, webUid, slug, renderActionResult],
   )
 
-  // G2-E.3.2 §3: "Produk Lain" — products carry no `category` field, so "other
-  // products in the same category" falls back to all available products fetched
-  // from GET /products (authoritative store data). Empty → honest fallback msg.
-  // (No category chips rendered because no category data exists.)
+  // G2-E.3.2 §10/§11/§12: "+ Keranjang" / "Tambah" → typed ADD_TO_CART action.
+  const handleAddToCart = useCallback(
+    (product: ProductPayload) => {
+      if (!product.id || inputDisabled) return
+      void sendAction('ADD_TO_CART', { productId: product.id, quantity: 1 })
+    },
+    [sendAction, inputDisabled],
+  )
+
+  // P4-3: "Produk Lain" → typed SHOW_RELATED_PRODUCTS action. The server returns
+  // authoritative related products (same category, same store); rendered as a
+  // product_list bubble — no local fabrication.
   const handleShowRelated = useCallback(
     (product: ProductPayload) => {
-      const others = (products || []).filter((p) => p.id !== product.id)
-      if (!others.length) {
-        appendAssistant({
-          content: 'Hanya produk ini yang tersedia di toko kami.',
-          type: 'text',
-        })
-        return
-      }
-      const items = others.map((p) => ({
-        id: p.id,
-        name: p.name,
-        price: p.price ?? null,
-        stock: p.stock ?? null,
-        imageUrl: p.primaryImageUrl ?? null,
-      }))
-      appendAssistant({
-        content: 'Produk lain yang mungkin cocok:',
-        type: 'product_list',
-        payload: { items },
-      })
+      if (!product.id || inputDisabled) return
+      void sendAction('SHOW_RELATED_PRODUCTS', { productId: product.id })
     },
-    [products, appendAssistant],
+    [sendAction, inputDisabled],
   )
 
   // G2-E.3.2 §9: Hubungi Admin — POST /handoff (reuse engine escalation convention;
@@ -664,7 +697,7 @@ export default function ChatPage() {
               authoritatively ("lihat keranjang" → engine → CartAuthority). */}
           <button
             type="button"
-            onClick={() => { setView('chat'); void onSend('lihat keranjang') }}
+            onClick={() => { setView('chat'); void sendAction('OPEN_CART') }}
             className="w-9 h-9 rounded-full flex items-center justify-center text-primary hover:bg-muted transition-colors"
             aria-label="Keranjang"
           >
@@ -847,21 +880,21 @@ export default function ChatPage() {
           <div className="flex gap-2 overflow-x-auto chat-scroll pb-2 mb-1">
             <button
               type="button"
-              onClick={() => setInput('📖 Katalog')}
+              onClick={() => void sendAction('OPEN_CATALOG')}
               className="flex-shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold text-primary bg-muted hover:bg-muted/80 transition-colors"
             >
               📖 Katalog
             </button>
             <button
               type="button"
-              onClick={() => setInput('📦 Status Pesanan')}
+              onClick={() => void sendAction('OPEN_ORDER_HISTORY')}
               className="flex-shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold text-primary bg-muted hover:bg-muted/80 transition-colors"
             >
               📦 Status Pesanan
             </button>
             <button
               type="button"
-              onClick={() => setInput('🎧 Hubungi CS')}
+              onClick={() => void sendAction('CONTACT_ADMIN')}
               className="flex-shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold text-primary bg-muted hover:bg-muted/80 transition-colors"
             >
               🎧 Hubungi CS

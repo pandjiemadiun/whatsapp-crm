@@ -1,4 +1,5 @@
 import { type ReactNode } from 'react';
+import { formatPrice } from '../utils/format';
 import TextMessage from './TextMessage';
 import ProductCard from './ProductCard';
 import ProductList from './ProductList';
@@ -23,6 +24,7 @@ const WHITELIST: ReadonlyArray<StructuredMessageType> = [
   'cart',
   'quick_reply',
   'handoff',
+  'order',
 ];
 
 function isRecord(p: unknown): p is Record<string, unknown> {
@@ -123,6 +125,39 @@ export default function MessageRenderer({
       return (
         <div className="my-3 w-full max-w-[480px]">
           <HandoffMessage payload={isRecord(payload) ? (payload as unknown as HandoffPayload) : null} content={content} />
+        </div>
+      );
+    }
+    case 'order': {
+      if (!isRecord(payload)) return <TextMessage text={content} />;
+      const orders = (payload as Record<string, unknown>).orders;
+      if (!Array.isArray(orders) || orders.length === 0) return <TextMessage text={content} />;
+      return (
+        <div className="my-3 w-full max-w-[480px]">
+          <ChatBubble role="assistant" source={message.source}>
+            <TextMessage text={content} />
+          </ChatBubble>
+          <div className="flex flex-col gap-2 mt-1">
+            {(orders as any[]).map((o) => (
+              <div key={o.id} className="rounded-2xl border border-border bg-surface p-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Pesanan</span>
+                  <span className="text-xs font-bold">{o.statusLabel}</span>
+                </div>
+                {Array.isArray(o.items) &&
+                  o.items.map((it: any, i: number) => (
+                    <div key={i} className="flex justify-between text-sm mt-1">
+                      <span>{it.productName} × {it.quantity}</span>
+                      <span>{formatPrice(it.subtotal)}</span>
+                    </div>
+                  ))}
+                <div className="flex justify-between text-sm font-bold mt-1 pt-1 border-t border-border">
+                  <span>Total</span>
+                  <span>{formatPrice(o.totalPrice)}</span>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       );
     }
