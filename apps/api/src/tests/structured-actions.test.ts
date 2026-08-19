@@ -1034,9 +1034,15 @@ test('P6.3.2: CANCEL_ORDER invalid payload (non-UUID orderId) rejected before ex
   const dbOrder = await prisma.order.findUnique({ where: { id: orderId } });
   assert.equal(dbOrder!.orderStatus, 'pending', 'order must remain pending after invalid payload');
 
-  // No idempotency record should have been created for the bad attempt
-  const recs = await prisma.actionIdempotency.findMany({ where: { actionType: 'CANCEL_ORDER' } });
-  assert.equal(recs.length, 0, 'no idempotency record for a rejected invalid payload');
+  // No idempotency record should have been created for the bad attempt.
+  // Scope to THIS file's storeId: a leaked CANCEL_ORDER row from an unrelated
+  // test store (e.g. auth.ts registration flow -> store-f7140b5c) must NOT
+  // produce a false negative here. The handler already rejects the invalid
+  // payload before claimAction(); any record for this store would be a real bug.
+  const recs = await prisma.actionIdempotency.findMany({
+    where: { actionType: 'CANCEL_ORDER', storeId },
+  });
+  assert.equal(recs.length, 0, 'no idempotency record for a rejected invalid payload in this store');
 });
 
 test('P6.3.3: CANCEL_ORDER tenant/customer mismatch → rejected, order unchanged, FAILED', async () => {
