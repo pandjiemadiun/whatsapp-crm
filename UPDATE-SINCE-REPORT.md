@@ -46,15 +46,21 @@ Perlu re-run untuk pastikan bukan flaky/false-positive.
   `prisma migrate deploy` di environment fresh karena `...000100` mengubah
   tabel yang dibuat `...000000`).
 
-## Status §6.2 dan §6.3 (dari laporan utama): TIDAK BERUBAH
+## Status §6.2 dan §6.3 (dari laporan utama): **RESOLVED**
 
 - **§6.2** — round-trip `productId → productName → productId` di `handleAddToCart`
-  masih ada. Ini scope P6-1 (belum dikerjakan).
-- **§6.3** — `REMOVE_FROM_CART` / `UPDATE_CART_QUANTITY` / `CANCEL_ORDER` masih belum
-  jadi typed action. Antrian setelah P6-1.
-  > **Update 2026-08-19:** `REMOVE_FROM_CART` + `UPDATE_CART_QUANTITY` SELESAI di P6-2;
-  > `CANCEL_ORDER` SELESAI di P6-3 (lihat "Update Pasca P6-3" di bawah). Lihat juga
-  > 🔴 TEMUAN KRITIS: `actionsRouter` ternyata tidak pernah di-mount sampai P6-3.
+  **SUDAH DIHILANGKAN** di P6-1 (commit `2f834a5`): structured `ADD_TO_CART` sekarang
+  mengirim `productId` langsung ke `CartAuthority.executeOps`, yang pakai
+  `resolveProductById` (skip `resolveProductByName`). Terverifikasi di P6-6/P6-7
+  (diff `git show 2f834a5` + `npm run build` exit 0 di HEAD).
+- **§6.3** — `REMOVE_FROM_CART` + `UPDATE_CART_QUANTITY` sudah typed action di P6-2
+  (commit `3cb91c9`); `CANCEL_ORDER` di P6-3 (commit `ced2fc9`).
+- **🔴 TEMUAN KRITIS (P6-3): `actionsRouter` tidak pernah di-mount sejak `e5ee299`** —
+  `app.use('/api/pwa', actionsRouter)` tidak ada di `index.ts` sampai `ced2fc9`, sehingga
+  `POST /api/pwa/:storeSlug/action` **404 / tidak reachable via HTTP nyata** untuk
+  ADD/REMOVE/UPDATE/CANCEL sejak P0. Ketahuan lewat **curl HTTP asli ke canary**
+  (bukan test suite — test lolos karena panggil `executeAction()` in-process). Fix:
+  router di-mount di `ced2fc9`; keempat action terverifikasi reachable via HTTP nyata.
 
 ## Next task yang disepakati: P6-1
 
