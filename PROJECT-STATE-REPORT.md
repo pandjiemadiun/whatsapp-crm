@@ -251,7 +251,7 @@ P8-CI-FIX (`c6be2d8`) masukkan `test:structured` (115 test) ke CI → gate lengk
 
 ### 6.7 🟡 Lainnya (dari BUG-BELUM-DIBERESKAN.md)
 - **I-1** Qty 0 di receipt ("Brambang (0x)") — Medium, kosmetik.
-- **II-5** Test DB shared isolation lemah (row `store-f7140b5c` bocor lintas file) — Medium, follow-up task terpisah.
+- **II-5** Test DB shared isolation lemah (row `store-f7140b5c` bocor lintas file) — 🟡 **AUDITED (19 Agu 2026): 0 assertion rawan ditemukan** di full-scan `src/tests/`; root cause (cleanup per-prefix) tetap ada tapi harmless karena semua query sudah scope `storeId`/`conversationId`/composite-unique. Hygiene debt, bukan follow-up task.
 - **III-4/III-5** T5 fallback overlap + `appendMessage` race — belum diklasifikasi.
 - **III-7/III-8** I11/I12 normalizer — typo lolos / guard belum diverifikasi.
 - **Kata `'mau'` di `ORDER_INTENT_KEYWORDS`** (`fast-path.ts`) bisa short-circuit sebelum `trySop`.
