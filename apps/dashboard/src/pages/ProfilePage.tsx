@@ -60,9 +60,15 @@ interface ProfileData {
   acceptsQris: boolean;
   acceptsCod: boolean;
   qrisImageUrl: string | null;
-shippingMode: 'pickup' | 'flat';
+  shippingMode: 'pickup' | 'flat';
   shippingFlatInCity: number | null;
   shippingFlatOutCity: number | null;
+  originProvinceId: string | null;
+  originProvinceName: string | null;
+  originCityId: string | null;
+  originCityName: string | null;
+  originSubdistrictId: string | null;
+  originSubdistrictName: string | null;
 }
 
 interface BankAccount {
@@ -158,6 +164,70 @@ export default function ProfilePage() {
   const [form, setForm] = useState({
     name: '', description: '', businessCategory: '', address: '', phoneNumber: '', slug: '', timezone: 'Asia/Jakarta',
   });
+
+  // ─── Origin location (cascading province → city → subdistrict) ───
+  // Stores RajaOngkir location IDs; the legacy free-text `address` above stays
+  // untouched and is still used for street/house detail.
+  const [provinces, setProvinces] = useState<{ id: string; name: string }[]>([]);
+  const [cities, setCities] = useState<{ id: string; name: string }[]>([]);
+  const [subdistricts, setSubdistricts] = useState<{ id: string; name: string }[]>([]);
+  const [origin, setOrigin] = useState({
+    provinceId: '', provinceName: '',
+    cityId: '', cityName: '',
+    subdistrictId: '', subdistrictName: '',
+  });
+
+  const loadProvinces = useCallback(async () => {
+    try {
+      const res = await api.get('/store/locations/provinces');
+      setProvinces(res.data.data || []);
+    } catch {
+      /* reference data optional — ignore on failure */
+    }
+  }, []);
+
+  const loadCities = useCallback(async (provinceId: string) => {
+    if (!provinceId) { setCities([]); setSubdistricts([]); return; }
+    try {
+      const res = await api.get(`/store/locations/cities?provinceId=${encodeURIComponent(provinceId)}`);
+      setCities(res.data.data || []);
+    } catch {
+      setCities([]);
+    }
+  }, []);
+
+  const loadSubdistricts = useCallback(async (cityId: string) => {
+    if (!cityId) { setSubdistricts([]); return; }
+    try {
+      const res = await api.get(`/store/locations/subdistricts?cityId=${encodeURIComponent(cityId)}`);
+      setSubdistricts(res.data.data || []);
+    } catch {
+      setSubdistricts([]);
+    }
+  }, []);
+
+  const onProvinceChange = (id: string) => {
+    const opt = provinces.find((p) => p.id === id);
+    setOrigin({ provinceId: id, provinceName: opt?.name || '', cityId: '', cityName: '', subdistrictId: '', subdistrictName: '' });
+    setCities([]);
+    setSubdistricts([]);
+    loadCities(id);
+    setProfileDirty(true);
+  };
+  const onCityChange = (id: string) => {
+    const opt = cities.find((c) => c.id === id);
+    setOrigin((o) => ({ ...o, cityId: id, cityName: opt?.name || '', subdistrictId: '', subdistrictName: '' }));
+    setSubdistricts([]);
+    loadSubdistricts(id);
+    setProfileDirty(true);
+  };
+  const onSubdistrictChange = (id: string) => {
+    const opt = subdistricts.find((s) => s.id === id);
+    setOrigin((o) => ({ ...o, subdistrictId: id, subdistrictName: opt?.name || '' }));
+    setProfileDirty(true);
+  };
+
+  useEffect(() => { loadProvinces(); }, [loadProvinces]);
 
   const [operatingHours, setOperatingHours] = useState<OperatingHoursData>({
     v: 2,
@@ -332,6 +402,28 @@ setShippingFlatInCity(d.shippingFlatInCity ?? '');
         setShippingLoading(false);
         setProfileDataLoaded(true);
 
+        // Populate saved origin location + load dependent city/subdistrict options
+        setOrigin({
+          provinceId: d.originProvinceId || '',
+          provinceName: d.originProvinceName || '',
+          cityId: d.originCityId || '',
+          cityName: d.originCityName || '',
+          subdistrictId: d.originSubdistrictId || '',
+          subdistrictName: d.originSubdistrictName || '',
+        });
+        if (d.originProvinceId) {
+          api.get(`/store/locations/cities?provinceId=${encodeURIComponent(d.originProvinceId)}`)
+            .then((res) => {
+              setCities(res.data.data || []);
+              if (d.originCityId) {
+                api.get(`/store/locations/subdistricts?cityId=${encodeURIComponent(d.originCityId)}`)
+                  .then((r) => setSubdistricts(r.data.data || []))
+                  .catch(() => {});
+              }
+            })
+            .catch(() => {});
+        }
+
         api.get('/sop')
           .then((res) => {
             const sops = res.data.data || [];
@@ -502,6 +594,14 @@ setShippingFlatInCity(d.shippingFlatInCity ?? '');
         phoneNumber: form.phoneNumber.trim() || null,
         timezone: form.timezone,
         operatingHours: { v: 2, days: operatingHours.days, summary: regenerated },
+        // Origin location (RajaOngkir IDs) — sent as-is; server stores them
+        // without server-side hierarchy validation (client guarantees it).
+        originProvinceId: origin.provinceId || null,
+        originProvinceName: origin.provinceName || null,
+        originCityId: origin.cityId || null,
+        originCityName: origin.cityName || null,
+        originSubdistrictId: origin.subdistrictId || null,
+        originSubdistrictName: origin.subdistrictName || null,
       };
       const res = await api.put('/profile', payload);
       if (res.data.success) {
@@ -918,6 +1018,53 @@ setShippingFlatInCity(d.shippingFlatInCity ?? '');
                 placeholder="Jl. Contoh No. 1, Jakarta"
                 className="w-full px-3 py-2 border border-line dark:border-dline rounded-lg text-sm bg-surface dark:bg-dsurface text-ink placeholder-muted focus:outline-none focus:ring-2 focus:ring-brand disabled:opacity-50 resize-y"
               />
+            </div>
+
+            {/* Lokasi asal toko (cascading dropdown) — ID RajaOngkir untuk origin shipping.
+                Alamat teks di atas TETAP ada & opsional untuk detail jalan/rumah. */}
+            <div className="space-y-3 pt-3 border-t border-line dark:border-dline">
+              <div>
+                <p className="text-sm font-medium text-ink dark:text-surface">Lokasi Asal Toko</p>
+                <p className="text-xs text-muted">Digunakan untuk menghitung ongkir (titik origin pengiriman). Pilih Provinsi → Kota → Kecamatan.</p>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div className="space-y-1">
+                  <label className="text-xs text-muted">Provinsi</label>
+                  <select
+                    value={origin.provinceId}
+                    onChange={(e) => onProvinceChange(e.target.value)}
+                    disabled={saving}
+                    className="w-full px-3 py-2 border border-line dark:border-dline rounded-lg text-sm bg-surface dark:bg-dsurface text-ink focus:outline-none focus:ring-2 focus:ring-brand disabled:opacity-50"
+                  >
+                    <option value="">— Pilih Provinsi —</option>
+                    {provinces.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs text-muted">Kota / Kabupaten</label>
+                  <select
+                    value={origin.cityId}
+                    onChange={(e) => onCityChange(e.target.value)}
+                    disabled={saving || !origin.provinceId}
+                    className="w-full px-3 py-2 border border-line dark:border-dline rounded-lg text-sm bg-surface dark:bg-dsurface text-ink focus:outline-none focus:ring-2 focus:ring-brand disabled:opacity-50"
+                  >
+                    <option value="">— Pilih Kota —</option>
+                    {cities.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs text-muted">Kecamatan</label>
+                  <select
+                    value={origin.subdistrictId}
+                    onChange={(e) => onSubdistrictChange(e.target.value)}
+                    disabled={saving || !origin.cityId}
+                    className="w-full px-3 py-2 border border-line dark:border-dline rounded-lg text-sm bg-surface dark:bg-dsurface text-ink focus:outline-none focus:ring-2 focus:ring-brand disabled:opacity-50"
+                  >
+                    <option value="">— Pilih Kecamatan —</option>
+                    {subdistricts.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                  </select>
+                </div>
+              </div>
             </div>
 
             {/* Slug / Alamat Chat Toko — identitas publik toko di URL PWA */}
