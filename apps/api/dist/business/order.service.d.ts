@@ -42,7 +42,13 @@ export declare class OrderService {
      */
     createOrder(storeId: string, conversationId: string, customerId: string, items: OrderItemInput[]): Promise<OrderWithItems>;
     /**
-     * Update status pesanan. Jika status 'confirmed', set confirmedAt.
+     * Update status pesanan via state machine otoritatif (order-transition).
+     *
+     * FIX (G2-F1): sebelumnya pakai `prisma.order.update` mentah yang BYPASS
+     * `transitionOrder()` — melanggar invarian single-source-of-truth
+     * (order-transition.ts:8-10). Sekarang delegasi penuh ke transitionOrder
+     * agar validasi ALLOWED_TRANSITIONS + invariant confirmedAt tetap berlaku.
+     * Signature dipertahankan (dipakai oleh test integration).
      */
     updateOrderStatus(orderId: string, status: string): Promise<OrderWithItems>;
     /**
