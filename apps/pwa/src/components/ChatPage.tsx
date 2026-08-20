@@ -8,6 +8,7 @@ import Modal from './Modal'
 import NotificationPrompt from './NotificationPrompt'
 import MessageList from './MessageList'
 import ProductDetailSheet from './ProductDetailSheet'
+import CheckoutModal from './CheckoutModal'
 import type { ChatMessage, ChatProduct, StructuredMessageType, ProductPayload } from '../types/chat'
 
 type Store = {
@@ -18,6 +19,9 @@ type Store = {
   businessCategory?: string | null
   operatingHours?: { summary?: string | null } | null
   isActive?: boolean | null
+  acceptsTransfer?: boolean | null
+  acceptsQris?: boolean | null
+  acceptsCod?: boolean | null
 }
 
 type HistoryMsg = ChatMessage
@@ -86,6 +90,8 @@ export default function ChatPage() {
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null)
   const [installBannerOpen, setInstallBannerOpen] = useState(false)
   const [isInstalled, setIsInstalled] = useState(false)
+  // G2-F3: checkout modal state (alamat + metode bayar).
+  const [checkoutOrderId, setCheckoutOrderId] = useState<string | null>(null)
   const [showBrowserChip, setShowBrowserChip] = useState(true)
   const [showPWAStatus, setShowPWAStatus] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
@@ -438,7 +444,7 @@ export default function ChatPage() {
       case 'OPEN_CART': {
         const cart = (data?.result?.cart ?? data?.result) as any
         if (cart?.items) {
-          appendAssistant({ type: 'cart', content: 'Isi keranjangmu:', payload: { items: cart.items, total: cart.total ?? null } })
+          appendAssistant({ type: 'cart', content: 'Isi keranjangmu:', payload: { items: cart.items, total: cart.total ?? null, orderId: cart.orderId } })
         }
         break
       }
@@ -822,6 +828,7 @@ export default function ChatPage() {
           onProductTap={handleProductTap}
           onAddToCart={handleAddToCart}
           onShowRelated={handleShowRelated}
+          onCheckout={setCheckoutOrderId}
           submitting={sending}
           trailing={
           <>
@@ -865,6 +872,21 @@ export default function ChatPage() {
       >
         <p className="text-sm text-foreground/80">Riwayat obrolan ini akan dihapus secara permanen dan kembali ke tampilan toko.</p>
       </Modal>
+
+      {/* G2-F3: checkout modal — alamat + pilih metode bayar (transfer/qris/cod). */}
+      <CheckoutModal
+        open={!!checkoutOrderId}
+        onClose={() => setCheckoutOrderId(null)}
+        storeSlug={slug!}
+        uid={webUid}
+        orderId={checkoutOrderId ?? ''}
+        accepts={{
+          transfer: !!store?.acceptsTransfer,
+          qris: !!store?.acceptsQris,
+          cod: !!store?.acceptsCod,
+        }}
+        onDone={(msg) => showToast(msg)}
+      />
 
       <ProductDetailSheet
         productId={selectedProduct?.id ?? null}

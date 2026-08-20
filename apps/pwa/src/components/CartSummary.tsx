@@ -16,8 +16,8 @@ export interface CartSummaryProps {
   /** Shipping cost — rendered ONLY when the payload/caller provides it.
    *  If absent: do NOT fabricate "Rp 0". */
   shipping?: number | null;
-  /** Wired upstream only if an existing checkout handler exists. */
-  onCheckout?: () => void;
+  /** Wired upstream only if an existing checkout handler exists. Receives the orderId. */
+  onCheckout?: (orderId: string) => void;
   /** "Tambah produk lain" — wired upstream only if an existing handler exists. */
   onAddProduct?: () => void;
   /** "Ubah alamat" — wired upstream only if an existing handler exists. */
@@ -77,8 +77,12 @@ export default function CartSummary({
           <span className="amount">{formatPrice(total)}</span>
         </div>
 
-        {onCheckout && (
-          <button type="button" className="checkout-btn" onClick={onCheckout}>
+        {onCheckout && cart.orderId && (
+          <button
+            type="button"
+            className="checkout-btn"
+            onClick={() => onCheckout(cart.orderId as string)}
+          >
             Checkout Sekarang
           </button>
         )}

@@ -297,6 +297,7 @@ export const OpenCartResponseSchema = z.object({
       subtotal: z.number(),
     })),
     total: z.number().nullable(),
+    orderId: z.string().nullable().optional(),
   }),
   error: z.object({
     code: z.string(),
@@ -1122,6 +1123,7 @@ export async function handleOpenCart(
       result: {
         items: summary.items as any,
         total: summary.total,
+        orderId: summary.orderId,
       },
     },
     status: 'applied',

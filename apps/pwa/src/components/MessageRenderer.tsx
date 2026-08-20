@@ -37,6 +37,7 @@ export default function MessageRenderer({
   onProductTap,
   onAddToCart,
   onShowRelated,
+  onCheckout,
   submitting,
 }: {
   message: ChatMessage;
@@ -44,6 +45,7 @@ export default function MessageRenderer({
   onProductTap?: (product: ProductPayload) => void;
   onAddToCart?: (product: ProductPayload) => void;
   onShowRelated?: (product: ProductPayload) => void;
+  onCheckout?: (orderId: string) => void;
   submitting?: boolean;
 }): ReactNode {
   const { type, payload, content } = message;
@@ -102,7 +104,10 @@ export default function MessageRenderer({
           <ChatBubble role="assistant" source={message.source}>
             <TextMessage text={content} />
           </ChatBubble>
-          <CartSummary cart={payload as unknown as CartPayload} />
+          <CartSummary
+            cart={payload as unknown as CartPayload}
+            onCheckout={onCheckout}
+          />
         </div>
       );
     }

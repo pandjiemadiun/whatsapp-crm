@@ -17,6 +17,7 @@ export interface CartLine {
 export interface CartSummary {
     items: CartLine[];
     total: number | null;
+    orderId?: string;
 }
 export declare class CartError extends Error {
     constructor(message: string);
