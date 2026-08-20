@@ -1,7 +1,10 @@
 /**
- * RajaOngkir location reference adapter — FOUNDATION tests.
+ * RajaOngkir Komerce location adapter — FOUNDATION tests.
  *
  * Mocks the injectable HTTP + a fake Redis. No real RajaOngkir call, no key.
+ * The new Komerce API is search-based: /province for provinces, and
+ * /domestic-destination?search= for cities/subdistricts (no separate
+ * city/subdistrict endpoints, no city_id — city identified by name).
  *
  * Runner:
  *   npx tsx --env-file=../../.env --test --test-force-exit src/tests/location.test.ts
@@ -16,11 +19,14 @@ import {
 import { CacheStore } from '../services/shipping/cached-shipping-cost.service.js';
 
 const PROVINCES: LocationItem[] = [
-  { id: '1', name: 'Bali' },
-  { id: '2', name: 'DKI Jakarta' },
+  { id: '10', name: 'DKI JAKARTA' },
+  { id: '5', name: 'JAWA BARAT' },
 ];
-const CITIES: LocationItem[] = [{ id: '10', name: 'Denpasar', parentId: '1' }];
-const SUBDISTRICTS: LocationItem[] = [{ id: '100', name: 'Denpasar Selatan', parentId: '10' }];
+const DESTINATIONS_JAKARTA = [
+  { id: 17473, province_name: 'DKI JAKARTA', city_name: 'JAKARTA BARAT', district_name: 'GROGOL PETAMBURAN', subdistrict_name: 'GROGOL' },
+  { id: 17474, province_name: 'DKI JAKARTA', city_name: 'JAKARTA BARAT', district_name: 'GROGOL PETAMBURAN', subdistrict_name: 'JELAMBAR' },
+  { id: 17475, province_name: 'DKI JAKARTA', city_name: 'JAKARTA SELATAN', district_name: 'X', subdistrict_name: 'PONDOK' },
+];
 
 class FakeRedis implements CacheStore {
   store = new Map<string, { value: unknown; ttl: number }>();
@@ -33,29 +39,26 @@ class FakeRedis implements CacheStore {
   }
 }
 
-function makeHttp(calls: string[]): LocationHttpFn {
-  return async (url: string, _headers: Record<string, string>) => {
+function makeHttp(calls: string[], opts: { provinces?: any[]; destinations?: any[] }) {
+  return (async (url: string, _headers: Record<string, string>) => {
     calls.push(url);
     if (url.includes('/province')) {
-      return { data: { rajaongkir: { results: PROVINCES.map((p) => ({ province_id: p.id, province: p.name })) } } };
+      return { data: { meta: { status: 'success' }, data: opts.provinces ?? [] } };
     }
-    if (url.includes('/city')) {
-      return { data: { rajaongkir: { results: CITIES.map((c) => ({ city_id: c.id, city_name: c.name, province_id: c.parentId })) } } };
+    if (url.includes('/domestic-destination')) {
+      return { data: { meta: { status: 'success' }, data: opts.destinations ?? [] } };
     }
-    if (url.includes('/subdistrict')) {
-      return { data: { rajaongkir: { results: SUBDISTRICTS.map((s) => ({ subdistrict_id: s.id, subdistrict_name: s.name, city_id: s.parentId })) } } };
-    }
-    return { data: { rajaongkir: { results: [] } } };
-  };
+    return { data: { meta: { status: 'success' }, data: [] } };
+  }) as LocationHttpFn;
 }
 
 const TTL_30D = 30 * 24 * 60 * 60;
 
-describe('RajaOngkirLocationAdapter', () => {
+describe('RajaOngkirLocationAdapter (Komerce)', () => {
   test('getProvinces cache miss → HTTP once, cached with 30-day TTL', async () => {
     const calls: string[] = [];
     const redis = new FakeRedis();
-    const adapter = new RajaOngkirLocationAdapter('KEY', makeHttp(calls), redis);
+    const adapter = new RajaOngkirLocationAdapter('KEY', makeHttp(calls, { provinces: PROVINCES }), redis);
 
     const res = await adapter.getProvinces();
     assert.deepEqual(res, PROVINCES);
@@ -67,7 +70,7 @@ describe('RajaOngkirLocationAdapter', () => {
   test('getProvinces cache hit → HTTP NOT called again', async () => {
     const calls: string[] = [];
     const redis = new FakeRedis();
-    const adapter = new RajaOngkirLocationAdapter('KEY', makeHttp(calls), redis);
+    const adapter = new RajaOngkirLocationAdapter('KEY', makeHttp(calls, { provinces: PROVINCES }), redis);
 
     await adapter.getProvinces();
     const res2 = await adapter.getProvinces();
@@ -75,28 +78,53 @@ describe('RajaOngkirLocationAdapter', () => {
     assert.equal(calls.length, 1, 'second call must hit cache, not HTTP');
   });
 
-  test('getCities caches per-province; same province → hit', async () => {
+  test('getCities(provinceId) searches province NAME, de-dupes city_name', async () => {
     const calls: string[] = [];
     const redis = new FakeRedis();
-    const adapter = new RajaOngkirLocationAdapter('KEY', makeHttp(calls), redis);
+    const adapter = new RajaOngkirLocationAdapter('KEY', makeHttp(calls, { provinces: PROVINCES, destinations: DESTINATIONS_JAKARTA }), redis);
 
-    await adapter.getCities('1');
-    const res2 = await adapter.getCities('1');
-    assert.deepEqual(res2, CITIES);
-    assert.equal(calls.length, 1);
-    assert.ok(calls[0].includes('province=1'), 'city request must carry provinceId');
+    const res = await adapter.getCities('10');
+    // city has no id in Komerce API → id === name
+    assert.deepEqual(res, [
+      { id: 'JAKARTA BARAT', name: 'JAKARTA BARAT' },
+      { id: 'JAKARTA SELATAN', name: 'JAKARTA SELATAN' },
+    ]);
+    // getProvinces (resolve name) + domestic-destination search
+    assert.equal(calls.length, 2);
+    assert.ok(calls[0].includes('/province'));
+    assert.ok(calls[1].includes('rajaongkir.komerce.id/api/v1/destination/domestic-destination'));
+    assert.ok(calls[1].includes('search=DKI%20JAKARTA'));
+    assert.deepEqual(await redis.get('ongkir:ref:city:10'), res);
   });
 
-  test('getSubdistricts hits Starter /subdistrict endpoint (cache miss → HTTP once)', async () => {
+  test('getSubdistricts(cityName) returns subdistrict-level ids (CONFIRMS Starter/Komerce exposes subdistrict data)', async () => {
     const calls: string[] = [];
     const redis = new FakeRedis();
-    const adapter = new RajaOngkirLocationAdapter('KEY', makeHttp(calls), redis);
+    const adapter = new RajaOngkirLocationAdapter('KEY', makeHttp(calls, { destinations: DESTINATIONS_JAKARTA }), redis);
 
-    const res = await adapter.getSubdistricts('10');
-    assert.deepEqual(res, SUBDISTRICTS);
+    const res = await adapter.getSubdistricts('JAKARTA BARAT');
+    assert.deepEqual(res, [
+      { id: '17473', name: 'GROGOL' },
+      { id: '17474', name: 'JELAMBAR' },
+    ]);
     assert.equal(calls.length, 1);
-    assert.ok(calls[0].includes('/starter/subdistrict'), 'must target the Starter subdistrict reference endpoint');
-    assert.ok(calls[0].includes('city=10'), 'subdistrict request must carry cityId');
-    assert.deepEqual(await redis.get('ongkir:ref:subdistrict:10'), SUBDISTRICTS);
+    assert.ok(calls[0].includes('rajaongkir.komerce.id/api/v1/destination/domestic-destination'));
+    assert.ok(calls[0].includes('search=JAKARTA%20BARAT'));
+    assert.deepEqual(await redis.get('ongkir:ref:subdistrict:JAKARTA BARAT'), res);
+  });
+
+  test('getCities cache hit → no extra HTTP (provinces still served from cache)', async () => {
+    const calls: string[] = [];
+    const redis = new FakeRedis();
+    const adapter = new RajaOngkirLocationAdapter('KEY', makeHttp(calls, { provinces: PROVINCES, destinations: DESTINATIONS_JAKARTA }), redis);
+
+    await adapter.getCities('10');
+    const res2 = await adapter.getCities('10');
+    assert.deepEqual(res2, [
+      { id: 'JAKARTA BARAT', name: 'JAKARTA BARAT' },
+      { id: 'JAKARTA SELATAN', name: 'JAKARTA SELATAN' },
+    ]);
+    // first call = /province + /domestic-destination; second = both cached → 0 new
+    assert.equal(calls.length, 2);
   });
 });
