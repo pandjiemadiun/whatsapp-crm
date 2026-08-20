@@ -5,6 +5,7 @@ import { ApiError } from '../errors/ApiError.js';
 import { adapters } from '../adapters/container.js';
 import { prisma } from '../infrastructure/prisma.js';
 import { orderMutationLimiter } from '../middleware/rate-limiters.js';
+import { paymentService } from '../business/payment.service.js';
 
 const router = Router();
 
@@ -119,6 +120,41 @@ router.put('/:id/status', orderMutationLimiter, async (req: AuthenticatedRequest
     }
     adapters.logger.error('Failed to update order status', error as Error);
     res.status(500).json({ error: error?.message || 'Failed to update order status' });
+  }
+});
+
+// POST /api/orders/:id/payment-verify — admin verifikasi bukti bayar (transfer/qris only).
+// Body: { decision: 'approve'|'reject', targetOrderStatus?: string }.
+// Auth: reuse persis authMiddleware (store token) seperti PUT /:id/status.
+// approve -> paymentStatus='paid' + transitionOrder(targetOrderStatus) dalam 1 transaksi.
+//   targetOrderStatus WAJIB untuk approve; bila tidak valid (ALLOWED_TRANSITIONS) seluruh
+//   transaksi rollback. reject -> paymentStatus='rejected' (orderStatus tidak berubah).
+// COD ditolak (400) — endpoint ini eksklusif untuk verifikasi bukti transfer/qris.
+router.post('/:id/payment-verify', orderMutationLimiter, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const storeId = req.user!.storeId;
+    const { id } = req.params;
+    const { decision, targetOrderStatus } = req.body as { decision?: string; targetOrderStatus?: string };
+
+    if (!decision || (decision !== 'approve' && decision !== 'reject')) {
+      return res.status(400).json({ error: "decision harus 'approve' atau 'reject'" });
+    }
+
+    const result = await paymentService.verifyPayment(
+      id,
+      storeId,
+      decision as 'approve' | 'reject',
+      targetOrderStatus,
+      req.user!.email, // identity approver = email dari auth context (bukan storeId yg redundant)
+    );
+
+    res.json({ success: true, data: result });
+  } catch (error: any) {
+    if (error instanceof ApiError) {
+      return res.status(error.statusCode || 500).json({ error: error.message });
+    }
+    adapters.logger.error('Failed to verify payment', error as Error);
+    res.status(500).json({ error: error?.message || 'Failed to verify payment' });
   }
 });
 
