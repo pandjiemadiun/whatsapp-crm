@@ -1,10 +1,12 @@
 import { Router } from 'express';
+import multer from 'multer';
 import { prisma } from '../infrastructure/prisma.js';
 import { conversationLimiter, pwaInitLimiter, pwaProductsLimiter } from '../middleware/rate-limiters.js';
 import { adapters } from '../adapters/container.js';
 import { conversationDeliveryService } from '../services/conversation-delivery.service.js';
 import { eventBus } from '../services/event-bus.service.js';
 import { productService } from '../business/product.service.js';
+import { cartAuthority } from '../business/cart-authority.js';
 import { ApiError } from '../errors/ApiError.js';
 import { ErrorCodes } from '../constants/errorCodes.js';
 import { ResponseSource } from '../domain/types.js';
@@ -744,6 +746,143 @@ router.post('/:storeSlug/payment-report', async (req, res) => {
         }
         adapters.logger.error('PWA payment-report error', err);
         res.status(500).json({ error: 'Failed to report payment' });
+    }
+});
+// POST /api/pwa/:storeSlug/checkout — customer checkout: alamat + pilih metode bayar.
+// Body: { uid, orderId, address, paymentMethod: 'transfer'|'qris'|'cod' }.
+// Reuse CartAuthority.checkout (draft -> waiting_address). COD: selesai (tetap waiting_address,
+// TIDAK panggil payment-report). Transfer/QRIS: order tetap waiting_address; signal frontend
+// untuk upload bukti via payment-report (endpoint terpisah, dipanggil manual customer).
+router.post('/:storeSlug/checkout', async (req, res) => {
+    try {
+        const { storeSlug } = req.params;
+        const { uid, orderId, address, paymentMethod } = req.body;
+        if (!uid || !orderId) {
+            return res.status(400).json({ error: 'uid dan orderId wajib' });
+        }
+        if (!address || !String(address).trim()) {
+            return res.status(400).json({ error: 'Alamat pengiriman wajib diisi' });
+        }
+        if (!['transfer', 'qris', 'cod'].includes(paymentMethod ?? '')) {
+            return res.status(400).json({ error: 'paymentMethod harus transfer/qris/cod' });
+        }
+        const session = await resolveWebSession(storeSlug, uid);
+        if (!session) {
+            const store = await prisma.store.findUnique({
+                where: { slug: storeSlug, deletedAt: null },
+                select: { id: true },
+            });
+            if (!store)
+                return res.status(404).json({ error: 'Store not found' });
+            return res.status(401).json({ error: 'Unauthorized customer' });
+        }
+        // Ownership: order harus milik store + conversation yang sama (tenant isolation).
+        const order = await prisma.order.findFirst({
+            where: {
+                id: orderId,
+                storeId: session.storeId,
+                conversationId: session.conversationId,
+                deletedAt: null,
+            },
+            select: { id: true, orderStatus: true, conversationId: true },
+        });
+        if (!order)
+            return res.status(404).json({ error: 'Order tidak ditemukan' });
+        // Transition draft -> waiting_address (reuse CartAuthority; NO duplication).
+        if (order.orderStatus === 'draft') {
+            await cartAuthority.checkout(session.conversationId, session.storeId);
+        }
+        // Set payment method + shipping address (idempotent untuk re-checkout).
+        await prisma.order.update({
+            where: { id: order.id },
+            data: { paymentMethod, shippingAddress: String(address).trim() },
+        });
+        if (paymentMethod === 'cod') {
+            // COD: SELESAI. Order tetap di waiting_address, TIDAK ada payment-report.
+            return res.json({
+                success: true,
+                data: { orderId: order.id, orderStatus: 'waiting_address', paymentMethod: 'cod', next: 'done' },
+            });
+        }
+        // transfer/qris: menunggu bukti via payment-report (terpisah).
+        return res.json({
+            success: true,
+            data: {
+                orderId: order.id,
+                orderStatus: 'waiting_address',
+                paymentMethod,
+                next: 'upload_proof',
+                paymentReportUrl: `/api/pwa/${storeSlug}/payment-report`,
+            },
+        });
+    }
+    catch (err) {
+        if (err instanceof ApiError)
+            return res.status(err.statusCode || 500).json({ error: err.message });
+        adapters.logger.error('PWA checkout error', err);
+        res.status(500).json({ error: 'Failed to checkout' });
+    }
+});
+// GET /api/pwa/:storeSlug/payment-info — info pembayaran toko (reuse BankAccount model + Store).
+// Dipakai PWA checkout (transfer/qris) untuk menampilkan rekening + QRIS — JANGAN hardcode.
+router.get('/:storeSlug/payment-info', pwaProductsLimiter, async (req, res) => {
+    try {
+        const { storeSlug } = req.params;
+        const store = await prisma.store.findUnique({
+            where: { slug: storeSlug, deletedAt: null },
+            select: {
+                id: true,
+                acceptsTransfer: true,
+                acceptsQris: true,
+                acceptsCod: true,
+                qrisImageUrl: true,
+            },
+        });
+        if (!store)
+            return res.status(404).json({ error: 'Store not found' });
+        const bankAccounts = await prisma.bankAccount.findMany({
+            where: { storeId: store.id, isActive: true, deletedAt: null },
+            select: { bankName: true, accountNumber: true, accountName: true },
+        });
+        res.json({
+            success: true,
+            data: {
+                acceptsTransfer: store.acceptsTransfer,
+                acceptsQris: store.acceptsQris,
+                acceptsCod: store.acceptsCod,
+                qrisImageUrl: store.qrisImageUrl,
+                bankAccounts,
+            },
+        });
+    }
+    catch (err) {
+        adapters.logger.error('PWA payment-info error', err);
+        res.status(500).json({ error: 'Failed to fetch payment info' });
+    }
+});
+// POST /api/pwa/:storeSlug/payment-proof-upload — upload bukti bayar (image) -> URL.
+// Frontend upload lalu kirim URL ke payment-report (endpoint terpisah).
+const proofUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 5 * 1024 * 1024 },
+});
+router.post('/:storeSlug/payment-proof-upload', proofUpload.single('proof'), async (req, res) => {
+    try {
+        const { storeSlug } = req.params;
+        const store = await prisma.store.findUnique({
+            where: { slug: storeSlug, deletedAt: null },
+            select: { id: true },
+        });
+        if (!store)
+            return res.status(404).json({ error: 'Store not found' });
+        if (!req.file)
+            return res.status(400).json({ error: 'No image uploaded' });
+        const { url } = await adapters.catalogStorage.uploadImage(req.file.buffer, `garuda/payment-proof/${store.id}`);
+        res.json({ success: true, data: { url } });
+    }
+    catch (err) {
+        adapters.logger.error('PWA proof upload error', err);
+        res.status(500).json({ error: 'Failed to upload proof' });
     }
 });
 export default router;

@@ -86,6 +86,22 @@ export interface CartPayload {
   items: CartItem[];
   total: number | null;
   cartOpsExecuted?: number;
+  /** orderId of the draft order this cart belongs to (needed for checkout). */
+  orderId?: string;
+}
+
+/** Store payment info for PWA checkout (transfer/qris). Mirrors backend payment-info. */
+export interface BankAccountInfo {
+  bankName: string;
+  accountNumber: string;
+  accountName: string;
+}
+export interface PaymentInfo {
+  acceptsTransfer: boolean;
+  acceptsQris: boolean;
+  acceptsCod: boolean;
+  qrisImageUrl: string | null;
+  bankAccounts: BankAccountInfo[];
 }
 
 /** CartOp / ClarificationOption — server-executed signals, NOT client actions. */

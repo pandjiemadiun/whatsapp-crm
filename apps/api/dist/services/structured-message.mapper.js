@@ -120,7 +120,7 @@ export async function mapStructured(result, conversationId) {
                 // HARD RULE: cart hanya boleh menjadi `cart` bila ada items valid; kosong → text.
                 if (!cart.items.length)
                     return { messageType: 'text', messagePayload: null };
-                return { messageType: 'cart', messagePayload: { ...base, items: cart.items, total: cart.total } };
+                return { messageType: 'cart', messagePayload: { ...base, items: cart.items, total: cart.total, orderId: cart.orderId } };
             }
             case 'product': {
                 return { messageType: 'product', messagePayload: await enrichProduct(base) };
@@ -167,7 +167,7 @@ async function fetchCart(conversationId) {
         subtotal: it.subtotal,
     }));
     const total = active.totalPrice ?? items.reduce((s, it) => s + Number(it.subtotal ?? 0), 0);
-    return { items, total };
+    return { items, total, orderId: active.id };
 }
 /** product public fields: id/name/price dari result metadata, stock+imageUrl dari DB (1 fetch). */
 async function enrichProduct(base) {

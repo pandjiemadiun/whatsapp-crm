@@ -77,7 +77,7 @@ export class CartAuthority {
         }
         const items = this.mapOrderItems(order.orderItems || []);
         const total = order.totalPrice ?? items.reduce((s, i) => s + i.subtotal, 0);
-        return { items, total };
+        return { items, total, orderId: order.id };
     }
     /** Check whether a draft order (cart) exists for this conversation. */
     async hasCart(conversationId) {

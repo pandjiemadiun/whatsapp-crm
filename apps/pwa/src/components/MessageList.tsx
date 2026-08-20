@@ -32,6 +32,7 @@ function MessageBubble({
   onProductTap,
   onAddToCart,
   onShowRelated,
+  onCheckout,
   submitting,
   store,
 }: {
@@ -40,6 +41,7 @@ function MessageBubble({
   onProductTap?: (product: ProductPayload) => void;
   onAddToCart?: (product: ProductPayload) => void;
   onShowRelated?: (product: ProductPayload) => void;
+  onCheckout?: (orderId: string) => void;
   submitting?: boolean;
   store?: EmptyStateProps['store'];
 }) {
@@ -55,6 +57,7 @@ function MessageBubble({
       onProductTap={onProductTap}
       onAddToCart={onAddToCart}
       onShowRelated={onShowRelated}
+      onCheckout={onCheckout}
       submitting={submitting}
     />
   );
@@ -159,6 +162,7 @@ export interface MessageListProps {
   onProductTap?: (product: ProductPayload) => void;
   onAddToCart?: (product: ProductPayload) => void;
   onShowRelated?: (product: ProductPayload) => void;
+  onCheckout?: (orderId: string) => void;
   trailing?: ReactNode;
 }
 
@@ -174,6 +178,7 @@ export default function MessageList({
   onProductTap,
   onAddToCart,
   onShowRelated,
+  onCheckout,
   trailing,
 }: MessageListProps) {
   if (showEmptyState && messages.length === 0) {
@@ -202,6 +207,7 @@ export default function MessageList({
             onProductTap={onProductTap}
             onAddToCart={onAddToCart}
             onShowRelated={onShowRelated}
+            onCheckout={onCheckout}
             submitting={submitting}
             store={store}
           />

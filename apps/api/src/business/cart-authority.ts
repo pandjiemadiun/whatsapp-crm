@@ -56,6 +56,7 @@ export interface CartLine {
 export interface CartSummary {
   items: CartLine[];
   total: number | null;
+  orderId?: string;
 }
 
 // ── Errors ───────────────────────────────────────────────────────────────────
@@ -146,7 +147,7 @@ export class CartAuthority {
 
     const items = this.mapOrderItems((order as any).orderItems || []);
     const total = order.totalPrice ?? items.reduce((s, i) => s + i.subtotal, 0);
-    return { items, total };
+    return { items, total, orderId: order.id };
   }
 
   /** Check whether a draft order (cart) exists for this conversation. */

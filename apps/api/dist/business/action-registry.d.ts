@@ -277,6 +277,7 @@ export declare const OpenCartResponseSchema: z.ZodObject<{
             subtotal: z.ZodNumber;
         }, z.core.$strip>>;
         total: z.ZodNullable<z.ZodNumber>;
+        orderId: z.ZodOptional<z.ZodNullable<z.ZodString>>;
     }, z.core.$strip>;
     error: z.ZodOptional<z.ZodObject<{
         code: z.ZodString;
