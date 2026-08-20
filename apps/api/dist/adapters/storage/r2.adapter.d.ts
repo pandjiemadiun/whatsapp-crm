@@ -31,6 +31,8 @@ export declare class R2Adapter implements StorageAdapter {
     private publicBaseUrl;
     private configured;
     constructor();
+    /** Lazy dynamic import container (putus cycle import container↔adapter, FIX-5). */
+    private getAdapters;
     /** Sync load from env vars (fallback before dotenv is loaded). */
     private reconfigureFromEnv;
     /** Hot-reload from Platform Config (DB-first, env as fallback). */

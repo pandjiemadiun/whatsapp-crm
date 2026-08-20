@@ -25,6 +25,7 @@ export declare class FallbackService {
      * writeV1DiscussedItems, then mirrors to extractedEntities for backward compat.
      */
     private saveDiscussedItems;
+    private writeCanonicalDiscussed;
     /**
      * Deteksi intent koreksi: message mengandng kata "bukan"/"salah"
      * dan menyebut nama produk di confirmedItems. Kembalikan nama produk yang disebut.

@@ -1,9 +1,13 @@
-import { adapters } from '../container.js';
 import { configService } from '../../business/config.service.js';
 import { normalizePhone } from '../../lib/normalize-phone.js';
 export class GOWAAdapter {
     constructor() {
         this.config = null;
+    }
+    /** Lazy dynamic import container (putus cycle import container↔adapter, FIX-5). */
+    async getAdapters() {
+        const { adapters } = await import('../container.js');
+        return adapters;
     }
     async reconfigure() {
         const [baseUrl, username, password] = await Promise.all([
@@ -33,13 +37,13 @@ export class GOWAAdapter {
     async sendMessage(phone, text, config) {
         await this.ensureConfig();
         if (!this.isConfigured()) {
-            adapters.logger.warn('GOWA not configured, skipping send', { phone });
+            (await this.getAdapters()).logger.warn('GOWA not configured, skipping send', { phone });
             throw new Error('GOWA not configured');
         }
         const deviceId = config?.deviceId || config?.token || '';
         const normalizedPhone = normalizePhone(phone);
         try {
-            adapters.logger.info('Sending GOWA message', { phone, textLength: text.length, deviceId });
+            (await this.getAdapters()).logger.info('Sending GOWA message', { phone, textLength: text.length, deviceId });
             const response = await fetch(`${this.config.baseUrl}/send/message`, {
                 method: 'POST',
                 headers: {
@@ -54,15 +58,15 @@ export class GOWAAdapter {
             });
             if (!response.ok) {
                 const errorBody = await response.text();
-                adapters.logger.error('GOWA send failed', undefined, { status: response.status, body: errorBody });
+                (await this.getAdapters()).logger.error('GOWA send failed', undefined, { status: response.status, body: errorBody });
                 throw new Error(`GOWA HTTP ${response.status}: ${errorBody}`);
             }
             const data = await response.json();
-            adapters.logger.info('GOWA message sent successfully', { phone });
+            (await this.getAdapters()).logger.info('GOWA message sent successfully', { phone });
             return data;
         }
         catch (error) {
-            adapters.logger.error('GOWA send error', error);
+            (await this.getAdapters()).logger.error('GOWA send error', error);
             throw error;
         }
     }
@@ -92,11 +96,11 @@ export class GOWAAdapter {
                 body: JSON.stringify(payload),
             });
             if (response.ok) {
-                adapters.logger.debug('GOWA markRead sent', { phone });
+                (await this.getAdapters()).logger.debug('GOWA markRead sent', { phone });
             }
         }
         catch (error) {
-            adapters.logger.error('GOWA markRead failed', error, { phone });
+            (await this.getAdapters()).logger.error('GOWA markRead failed', error, { phone });
         }
     }
     /** GOWA: set presence state (composing/paused) */
@@ -122,11 +126,11 @@ export class GOWAAdapter {
                 body: JSON.stringify(payload),
             });
             if (response.ok) {
-                adapters.logger.debug('GOWA setPresence sent', { phone, state });
+                (await this.getAdapters()).logger.debug('GOWA setPresence sent', { phone, state });
             }
         }
         catch (error) {
-            adapters.logger.error('GOWA setPresence failed', error, { phone });
+            (await this.getAdapters()).logger.error('GOWA setPresence failed', error, { phone });
         }
     }
 }

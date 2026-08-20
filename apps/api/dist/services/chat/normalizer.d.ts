@@ -25,11 +25,12 @@ export declare function tokenize(message: string): string[];
 /**
  * Cek apakah sebuah token fuzzy-match sebuah nama produk.
  *
- * Match jika:
- *   - token === namaProduk (exact), ATAU
- *   - Levenshtein(token, namaProduk) <= 2
+ * Match jika (perbandingan case-INSENSITIVE secara internal):
+ *   - token === namaProduk (exact, case-insensitive), ATAU
+ *   - Levenshtein(token.toLowerCase(), namaProduk.toLowerCase()) <= 2
  *
- * (Case-sensitive pada `===` dan Levenshtein, konsisten dengan spesifikasi.)
+ * Nilai balik tetap `true`/`false`; pemanggil bertanggung jawab
+ * mengembalikan token ASLI (tanpa ubah casing) bila match.
  */
 export declare function fuzzyMatchProduct(token: string, productDictionary: string[]): boolean;
 /**

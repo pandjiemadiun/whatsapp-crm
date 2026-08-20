@@ -1042,3 +1042,23 @@ dari laporan sesi sebelumnya.
   115 test) masuk `.github/workflows/test.yml` → CI gate lengkap: test:chat + test:golden
   + test:structured. Verifikasi lokal: 115 tests / 7 suites pass.
 - Acceptance (TASK VERIFY-CLUSTER + P8-CI-FIX): semua suite hijau; pm2 api online.
+
+### 20 Agu 2026 — G2-F1/F2/FIX-A/FIX-B: Order payment (manual transfer/QRIS) + baseline chat flaky
+- Konteks: G2-F (Checkout/Order/Payment) dikerjakan sebagai endpoint manual-transfer/QRIS
+  (tanpa payment gateway). G2-F1 tambah field paymentMethod/paymentStatus/paymentProofUrl/
+  paymentReportedAt/paymentVerifiedAt/verifiedByAdminId ke Order + perbaiki bug
+  `updateOrderStatus()` yang bypass `transitionOrder()`. G2-F2 tambah `POST /api/pwa/:storeSlug/
+  payment-report` (customer) + `POST /api/orders/:id/payment-verify` (admin) dengan kontrak:
+  approve memanggil `transitionOrder(targetOrderStatus)` dalam 1 transaksi, COD ditolak 400.
+  FIX-A ubah `verifiedByAdminId` dari `storeId` → `req.user.email`. FIX-B investigasi read-only
+  baseline `test:chat` (reasoning-v2 + engine-config-v2) yang dulu gagal.
+- Keputusan: G2-F1 + G2-F2 + FIX-A SELESAI & VERIFIED (tsc 0, build 0, payment.test 10/10,
+  seluruh suite hijau, pm2 api online). Provider = manual transfer/QRIS only; COD settlement
+  DEFERRED (DECISION-COD-SETTLEMENT-DEFERRED.md). FIX-B: baseline chat dikonfirmasi FLAKY
+  (bukan permanent-fail) — 5/5 run terpisah PASS (270/270); `container.ts:38` (`const cache =
+  redisAdapter`) tidak berubah sejak 7 Agu & tidak ada commit terkait di antara baseline dan
+  sekarang. Catatan: cycle import `container.ts`↔adapter sudah diputus di sisi adapter via
+  FIX-5/III-10 (dynamic import) sehingga TDZ tidak lagi reproduksi.
+- Alasan: per-instruction, lanjut G2-F3 (PWA) setelah backlog commit bersih; baseline chat TIDAK
+  ditandai RESOLVED (status flaky, investigasi init-order redisAdapter belum dilakukan).
+- Siapa yang setuju: owner (Panji), Claude.

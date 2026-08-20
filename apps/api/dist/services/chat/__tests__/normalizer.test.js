@@ -17,6 +17,12 @@ describe('normalizer (BAGIAN 1)', () => {
     it('hrg gula + products [gula] -> "harga gula"', () => {
         assert.equal(normalize('hrg gula', ['gula']), 'harga gula');
     });
+    it('Toralin brp (kapital) + products [beras, gula] -> "total berapa" (III-7 edge: case-insensitive typo)', () => {
+        assert.equal(normalize('Toralin brp', ['beras', 'gula']), 'total berapa');
+    });
+    it('ada Ready Pack + products [Ready Pack] -> "ada Ready Pack" (III-8: multi-word produk tidak termutasi)', () => {
+        assert.equal(normalize('ada Ready Pack', ['Ready Pack']), 'ada Ready Pack');
+    });
     it('fuzzy match: berass + product [beras] -> produk dikenali (I12 token tidak diubah)', () => {
         // Spesifikasi: "berass" + produk [beras] -> "beras ada?" (produk dikenali)
         // Catatan: perilaku konsisten I12 — token produk dipertahankan apa adanya
