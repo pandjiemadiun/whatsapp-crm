@@ -1,5 +1,4 @@
 import { IWhatsAppGateway, SendMessageConfig } from '../../services/whatsapp-gateway.interface.js';
-import { adapters } from '../container.js';
 import { configService } from '../../business/config.service.js';
 import { normalizePhone } from '../../lib/normalize-phone.js';
 
@@ -11,6 +10,12 @@ interface GOWAConfig {
 
 export class GOWAAdapter implements IWhatsAppGateway {
   private config: GOWAConfig | null = null;
+
+  /** Lazy dynamic import container (putus cycle import container↔adapter, FIX-5). */
+  private async getAdapters() {
+    const { adapters } = await import('../container.js');
+    return adapters;
+  }
 
   async reconfigure(): Promise<void> {
     const [baseUrl, username, password] = await Promise.all([
@@ -44,7 +49,7 @@ export class GOWAAdapter implements IWhatsAppGateway {
   async sendMessage(phone: string, text: string, config?: SendMessageConfig): Promise<any> {
     await this.ensureConfig();
     if (!this.isConfigured()) {
-      adapters.logger.warn('GOWA not configured, skipping send', { phone });
+      (await this.getAdapters()).logger.warn('GOWA not configured, skipping send', { phone });
       throw new Error('GOWA not configured');
     }
 
@@ -52,7 +57,7 @@ export class GOWAAdapter implements IWhatsAppGateway {
     const normalizedPhone = normalizePhone(phone);
 
     try {
-      adapters.logger.info('Sending GOWA message', { phone, textLength: text.length, deviceId });
+      (await this.getAdapters()).logger.info('Sending GOWA message', { phone, textLength: text.length, deviceId });
 
       const response = await fetch(`${this.config!.baseUrl}/send/message`, {
         method: 'POST',
@@ -69,15 +74,15 @@ export class GOWAAdapter implements IWhatsAppGateway {
 
       if (!response.ok) {
         const errorBody = await response.text();
-        adapters.logger.error('GOWA send failed', undefined, { status: response.status, body: errorBody });
+        (await this.getAdapters()).logger.error('GOWA send failed', undefined, { status: response.status, body: errorBody });
         throw new Error(`GOWA HTTP ${response.status}: ${errorBody}`);
       }
 
       const data = await response.json();
-      adapters.logger.info('GOWA message sent successfully', { phone });
+      (await this.getAdapters()).logger.info('GOWA message sent successfully', { phone });
       return data;
     } catch (error) {
-      adapters.logger.error('GOWA send error', error as Error);
+      (await this.getAdapters()).logger.error('GOWA send error', error as Error);
       throw error;
     }
   }
@@ -110,10 +115,10 @@ export class GOWAAdapter implements IWhatsAppGateway {
       });
 
       if (response.ok) {
-        adapters.logger.debug('GOWA markRead sent', { phone });
+        (await this.getAdapters()).logger.debug('GOWA markRead sent', { phone });
       }
     } catch (error) {
-      adapters.logger.error('GOWA markRead failed', error as Error, { phone });
+      (await this.getAdapters()).logger.error('GOWA markRead failed', error as Error, { phone });
     }
   }
 
@@ -141,10 +146,10 @@ export class GOWAAdapter implements IWhatsAppGateway {
       });
 
       if (response.ok) {
-        adapters.logger.debug('GOWA setPresence sent', { phone, state });
+        (await this.getAdapters()).logger.debug('GOWA setPresence sent', { phone, state });
       }
     } catch (error) {
-      adapters.logger.error('GOWA setPresence failed', error as Error, { phone });
+      (await this.getAdapters()).logger.error('GOWA setPresence failed', error as Error, { phone });
     }
   }
 }
