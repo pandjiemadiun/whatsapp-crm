@@ -138,21 +138,23 @@ router.put('/:id/status', orderMutationLimiter, async (req, res) => {
     }
 });
 // POST /api/orders/:id/payment-verify — admin verifikasi bukti bayar (transfer/qris only).
-// Body: { decision: 'approve'|'reject', targetOrderStatus?: string }.
+// Body: { decision: 'approve'|'reject', targetOrderStatus?: string, reason?: string }.
 // Auth: reuse persis authMiddleware (store token) seperti PUT /:id/status.
 // approve -> paymentStatus='paid' + transitionOrder(targetOrderStatus) dalam 1 transaksi.
 //   targetOrderStatus WAJIB untuk approve; bila tidak valid (ALLOWED_TRANSITIONS) seluruh
 //   transaksi rollback. reject -> paymentStatus='rejected' (orderStatus tidak berubah).
-// COD ditolak (400) — endpoint ini eksklusif untuk verifikasi bukti transfer/qris.
+//   reject DAPAT menyertakan `reason?` opsional -> disimpan ke paymentRejectReason.
+//   JANGAN wajibkan reason (backend maupun UI). COD ditolak (400).
 router.post('/:id/payment-verify', orderMutationLimiter, async (req, res) => {
     try {
         const storeId = req.user.storeId;
         const { id } = req.params;
-        const { decision, targetOrderStatus } = req.body;
+        const { decision, targetOrderStatus, reason } = req.body;
         if (!decision || (decision !== 'approve' && decision !== 'reject')) {
             return res.status(400).json({ error: "decision harus 'approve' atau 'reject'" });
         }
-        const result = await paymentService.verifyPayment(id, storeId, decision, targetOrderStatus, req.user.email);
+        const result = await paymentService.verifyPayment(id, storeId, decision, targetOrderStatus, req.user.email, // identity approver = email dari auth context (bukan storeId yg redundant)
+        reason);
         res.json({ success: true, data: result });
     }
     catch (error) {

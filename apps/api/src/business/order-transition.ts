@@ -183,6 +183,7 @@ function mapOrderWithItems(raw: any): OrderWithItems {
     paymentReportedAt: raw.paymentReportedAt ?? null,
     paymentVerifiedAt: raw.paymentVerifiedAt ?? null,
     verifiedByAdminId: raw.verifiedByAdminId ?? null,
+    paymentRejectReason: raw.paymentRejectReason ?? null,
     shippingAddress: raw.shippingAddress,
     notes: raw.notes,
     confirmedAt: raw.confirmedAt,

@@ -85,6 +85,7 @@ export class PaymentService {
     decision: 'approve' | 'reject',
     targetOrderStatus: string | undefined,
     verifiedByAdminId: string,
+    rejectReason?: string,
   ): Promise<OrderWithItems> {
     const order = await prisma.order.findFirst({
       where: { id: orderId, storeId, deletedAt: null },
@@ -134,6 +135,8 @@ export class PaymentService {
           paymentStatus: 'rejected',
           paymentVerifiedAt: new Date(),
           verifiedByAdminId,
+          // Alasan TOLAK opsional: kalau tidak diberi, biarkan null (JANGAN placeholder default).
+          paymentRejectReason: rejectReason ?? null,
         },
       });
     }

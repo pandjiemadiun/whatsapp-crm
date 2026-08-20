@@ -183,6 +183,7 @@ export interface OrderWithItems {
     paymentReportedAt: Date | null;
     paymentVerifiedAt: Date | null;
     verifiedByAdminId: string | null;
+    paymentRejectReason: string | null;
     shippingAddress: string | null;
     notes: string | null;
     confirmedAt: Date | null;

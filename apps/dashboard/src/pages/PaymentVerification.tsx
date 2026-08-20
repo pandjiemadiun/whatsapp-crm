@@ -5,7 +5,6 @@ import {
   CircleDollarSign, ExternalLink, ImageOff,
 } from 'lucide-react';
 import api from '../services/api';
-import ConfirmDialog from '../components/ConfirmDialog';
 
 // ── Local UI-only label maps (backend is the authority for transitions) ──
 const ORDER_STATUS_LABELS: Record<string, string> = {
@@ -42,6 +41,7 @@ interface PaymentOrder {
   paymentMethod: string | null;
   paymentProofUrl: string | null;
   paymentReportedAt: string | null;
+  paymentRejectReason: string | null;
   totalPrice: number | null;
   currency: string;
   customerId: string;
@@ -109,6 +109,7 @@ export default function PaymentVerification() {
 
   // Reject confirm state
   const [rejectOrder, setRejectOrder] = useState<PaymentOrder | null>(null);
+  const [rejectReason, setRejectReason] = useState('');
   const [rejectLoading, setRejectLoading] = useState(false);
 
   const loadOrders = useCallback(async () => {
@@ -191,20 +192,37 @@ export default function PaymentVerification() {
     }
   };
 
+  const openReject = (order: PaymentOrder) => {
+    setRejectOrder(order);
+    setRejectReason(''); // alasan OPSIONAL — boleh dikosongkan
+  };
+
+  const closeReject = () => {
+    if (rejectLoading) return;
+    setRejectOrder(null);
+    setRejectReason('');
+  };
+
   const confirmReject = async () => {
     if (!rejectOrder) return;
     setRejectLoading(true);
     try {
-      const res = await api.post(`/orders/${rejectOrder.id}/payment-verify`, { decision: 'reject' });
+      // reason OPSIONAL: hanya dikirim kalau diisi (JANGAN wajibkan, JANGAN placeholder).
+      const body: Record<string, string> = { decision: 'reject' };
+      const trimmed = rejectReason.trim();
+      if (trimmed) body.reason = trimmed;
+      const res = await api.post(`/orders/${rejectOrder.id}/payment-verify`, body);
       if (res.data.success) {
         setOrders((prev) => prev.filter((o) => o.id !== rejectOrder.id));
         showFeedback('success', 'Pembayaran ditolak');
         setRejectOrder(null);
+        setRejectReason('');
       }
     } catch (err: any) {
       const msg = err?.response?.data?.error || 'Gagal menolak pembayaran';
       showFeedback('error', msg);
       setRejectOrder(null);
+      setRejectReason('');
     } finally {
       setRejectLoading(false);
     }
@@ -334,7 +352,7 @@ export default function PaymentVerification() {
                   Setujui
                 </button>
                 <button
-                  onClick={() => setRejectOrder(order)}
+                  onClick={() => openReject(order)}
                   className="px-3 py-2 rounded-lg border border-red-200 text-red-600 text-xs font-semibold hover:bg-red-50 dark:hover:bg-red-900/20 transition flex items-center justify-center gap-1"
                 >
                   <Ban className="w-3.5 h-3.5" />
@@ -415,18 +433,57 @@ export default function PaymentVerification() {
         </div>
       )}
 
-      {/* Reject confirm */}
+      {/* Reject dialog (alasan OPSIONAL — tidak wajib, tidak blocking submit) */}
       {rejectOrder && (
-        <ConfirmDialog
-          title="Tolak Pembayaran"
-          message={`Tolak bukti pembayaran untuk pesanan ${rejectOrder.id.slice(0, 8)}…?`}
-          consequence="Pesanan akan ditandai dibayar = DITOLAK. Keputusan ini final melalui sistem."
-          confirmLabel="Tolak Pembayaran"
-          cancelLabel="Batal"
-          confirmClass="bg-red-600 hover:bg-red-700"
-          onConfirm={confirmReject}
-          onCancel={() => !rejectLoading && setRejectOrder(null)}
-        />
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={!rejectLoading ? closeReject : undefined}>
+          <div className="bg-surface dark:bg-dcard rounded-xl shadow-xl w-full max-w-md p-6" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-start justify-between mb-4">
+              <h2 className="text-base font-semibold text-ink dark:text-surface flex items-center gap-2">
+                <Ban className="w-5 h-5 text-red-600" />
+                Tolak Pembayaran
+              </h2>
+              <button onClick={closeReject} disabled={rejectLoading} className="p-1.5 text-muted hover:text-ink rounded-lg transition disabled:opacity-50">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <p className="text-sm text-muted mb-4 break-words">
+              Tolak bukti pembayaran untuk pesanan{' '}
+              <span className="font-mono text-xs">{rejectOrder.id.slice(0, 8)}…</span>?
+              Pesanan akan ditandai dibayar = DITOLAK.
+            </p>
+
+            <label className="block text-xs font-medium text-muted mb-1.5">
+              Alasan penolakan <span className="text-muted/70">(opsional — boleh dikosongkan)</span>
+            </label>
+            <textarea
+              value={rejectReason}
+              onChange={(e) => setRejectReason(e.target.value)}
+              disabled={rejectLoading}
+              rows={3}
+              placeholder="Mis. bukti tidak sesuai nominal, foto buram, dsb. (boleh dikosongkan)"
+              className="w-full border border-line dark:border-dline rounded-lg px-3 py-2 text-sm text-ink dark:text-surface bg-surface dark:bg-dsurface focus:outline-none focus:ring-2 focus:ring-brand resize-none disabled:opacity-50"
+            />
+
+            <div className="flex gap-3 justify-end mt-6">
+              <button
+                onClick={closeReject}
+                disabled={rejectLoading}
+                className="px-4 py-2 bg-gray-100 dark:bg-dline text-gray-700 dark:text-gray-300 rounded-lg text-sm font-medium hover:bg-gray-200 dark:hover:bg-gray-600 transition disabled:opacity-50"
+              >
+                Batal
+              </button>
+              <button
+                onClick={confirmReject}
+                disabled={rejectLoading}
+                className="px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700 transition disabled:opacity-50 flex items-center gap-1.5"
+              >
+                {rejectLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Ban className="w-3.5 h-3.5" />}
+                Tolak Pembayaran
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

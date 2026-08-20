@@ -27,6 +27,8 @@ interface Order {
   orderStatus: string;
   shippingAddress: string | null;
   createdAt: string;
+  paymentStatus?: string | null;
+  paymentRejectReason?: string | null;
 }
 
 type FilterTab = 'needs_action' | 'processing' | 'done' | 'cancelled' | 'all';
@@ -721,6 +723,12 @@ export default function OrderManager() {
                       <div>
                         <p className="text-xs font-medium text-muted">Alamat Pengiriman</p>
                         <p className="text-sm text-ink dark:text-surface mt-0.5">{detailOrder.shippingAddress}</p>
+                      </div>
+                    )}
+                    {detailOrder.paymentStatus === 'rejected' && detailOrder.paymentRejectReason && (
+                      <div className="rounded-lg border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20 px-3 py-2.5">
+                        <p className="text-xs font-medium text-red-700 dark:text-red-400">Alasan Penolakan Pembayaran</p>
+                        <p className="text-sm text-red-800 dark:text-red-300 mt-0.5 whitespace-pre-wrap break-words">{detailOrder.paymentRejectReason}</p>
                       </div>
                     )}
                     <p className="text-xs text-muted dark:text-gray-500">

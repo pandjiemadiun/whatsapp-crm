@@ -13,7 +13,7 @@ export declare class PaymentService {
      *    paymentStatus tetap pending_verification.
      *  - reject: set paymentStatus='rejected'. orderStatus TIDAK berubah.
      */
-    verifyPayment(orderId: string, storeId: string, decision: 'approve' | 'reject', targetOrderStatus: string | undefined, verifiedByAdminId: string): Promise<OrderWithItems>;
+    verifyPayment(orderId: string, storeId: string, decision: 'approve' | 'reject', targetOrderStatus: string | undefined, verifiedByAdminId: string, rejectReason?: string): Promise<OrderWithItems>;
 }
 export declare const paymentService: PaymentService;
 //# sourceMappingURL=payment.service.d.ts.map

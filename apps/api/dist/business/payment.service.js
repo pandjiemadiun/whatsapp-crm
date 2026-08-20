@@ -64,7 +64,7 @@ export class PaymentService {
      *    paymentStatus tetap pending_verification.
      *  - reject: set paymentStatus='rejected'. orderStatus TIDAK berubah.
      */
-    async verifyPayment(orderId, storeId, decision, targetOrderStatus, verifiedByAdminId) {
+    async verifyPayment(orderId, storeId, decision, targetOrderStatus, verifiedByAdminId, rejectReason) {
         const order = await prisma.order.findFirst({
             where: { id: orderId, storeId, deletedAt: null },
         });
@@ -112,6 +112,8 @@ export class PaymentService {
                     paymentStatus: 'rejected',
                     paymentVerifiedAt: new Date(),
                     verifiedByAdminId,
+                    // Alasan TOLAK opsional: kalau tidak diberi, biarkan null (JANGAN placeholder default).
+                    paymentRejectReason: rejectReason ?? null,
                 },
             });
         }
