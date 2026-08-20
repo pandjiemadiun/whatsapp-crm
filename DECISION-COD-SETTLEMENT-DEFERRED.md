@@ -67,5 +67,26 @@ Opsi (A) dari OPEN ITEM di atas **SEBAGIAN** diwujudkan lewat G2-F6b:
   tetap butuh keputusan arsitektur terpisah kalau nanti dibutuhkan.
 
 Kesimpulan: settlement COD kini bisa dicatat manual oleh admin (visibility +
-  aksi eksplisit), tapi otomatisasi/transisi status order tetap deferred
-  sesuai keputusan awal.
+aksi eksplisit), tapi otomatisasi/transisi status order tetap deferred
+sesuai keputusan awal.
+
+## UPDATE 2026-08-20 — Opsi (B) RESMI DITUTUP (bukan deferred lagi)
+
+Konteks: owner mengevaluasi integrasi RajaOngkir (shipping cost API) sebagai
+kandidat mekanisme Opsi (B) — TERNYATA TIDAK RELEVAN. RajaOngkir adalah
+kalkulator ongkir (harga kirim), BUKAN pelacak status pengiriman/konfirmasi
+barang diterima. Fitur lacak resi (waybill tracking) yang bisa memberi
+sinyal "barang sampai" adalah kapabilitas TERPISAH yang butuh integrasi
+nomor resi per order + polling/webhook — scope besar, TIDAK ADA rencana
+sekarang.
+
+Keputusan: Opsi (B) (mekanisme fulfillment/delivery otomatis konfirmasi
+COD paid) RESMI DITUTUP untuk saat ini — bukan "menunggu keputusan", tapi
+"tidak ada jalur teknis yang sudah tersedia/direncanakan untuk itu". Kalau
+nanti ada rencana integrasi lacak resi kurir, ini dibuka kembali sebagai
+task terpisah.
+
+Opsi (A) (admin manual tandai lunas, `cod-settle` endpoint) TETAP dan
+DIKUNCI sebagai satu-satunya mekanisme settlement COD.
+
+Siapa yang setuju: owner (Pandjie), Claude.
