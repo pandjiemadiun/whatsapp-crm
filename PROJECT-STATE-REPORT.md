@@ -2,7 +2,7 @@
 
 > **Dokumen ini dibuat untuk onboarding ke project baru (Claude/AI coding agent).**
 > Semua klaim status di bawah diverifikasi terhadap **source code, test, dan git log aktual**
-> di working tree `/home/ubuntu/garuda` pada **2026-08-20** (HEAD `ebc4637`). Tidak ada klaim
+> di working tree `/home/ubuntu/garuda` pada **2026-08-20** (HEAD `ba136a5`). Tidak ada klaim
 > yang diambil mentah dari roadmap/STATUS lama tanpa cross-check ke kode.
 >
 > **ATURAN RAILS.md BERLAKU:** tidak ada kode yang diubah dalam pembuatan dokumen ini
@@ -182,7 +182,7 @@ pelajaran (jangan biarkan pekerjaan besar menggantung uncommitted) tidak hilang.
 | **G2-C** | Commerce Domain Refactor | CartAuthority single cart authority ✅ |
 | **G2-D** | Conversation State Refactor | `workspace_v2` ✅ (P3) |
 | **G2-E** | Storefront UI/UX | banyak done (PWA deploy `qlobot.web.id`, realtime+push FASE 1-4) |
-| **G2-F** | Checkout/Order/Payment | **IN PROGRESS** — F1 (schema+bugfix) SELESAI, F2 (payment-report/verify) SELESAI, F3-F5 (PWA/dashboard/golden) belum mulai. Provider = manual transfer/QRIS only, COD settlement DEFERRED (lihat DECISION-COD-SETTLEMENT-DEFERRED.md) |
+| **G2-F** | Checkout/Order/Payment | **SELESAI (F1–F4)** — F1 (schema+bugfix) SELESAI, F2 (payment-report/verify) SELESAI, F3 (PWA checkout) SELESAI, F4 (dashboard payment verification UI + `GET /orders/:id/valid-next-states`) SELESAI. F5 (golden/integration) BELUM. Provider = manual transfer/QRIS only, COD settlement DEFERRED (lihat DECISION-COD-SETTLEMENT-DEFERRED.md) |
 | **G2-G** | Realtime + Scale Hardening | socket.io + presence ✅; multi-instance BELUM |
 | **G2-H** | Release Readiness | **BELUM** — gate terakhir |
 
@@ -317,7 +317,7 @@ natural-language via Conversation Engine. Opsi belum diputuskan:
 
 ## 9. CARA VERIFIKASI (untuk siapapun yang lanjutkan)
 
-> Working tree BERSIH (semua ter-commit & ter-push ke `origin/main`, HEAD `ebc4637`).
+> Working tree BERSIH (semua ter-commit & ter-push ke `origin/main`, HEAD `ba136a5`).
 > Tidak ada lagi peringatan "jangan git reset --hard" karena file menggantung uncommitted.
 
 ### 9.1 Build & typecheck (dari `apps/api`)
@@ -407,6 +407,7 @@ BUG-BELUM-DIBERESKAN, RAILS §6) jadi kadaluarsa / kontradiktif. Audit jadi butu
 | DB schema | `prisma/schema.prisma` (committed, **ADA ActionIdempotency**) |
 | Migrasi ActionIdempotency | `prisma/migrations/20260816000000_*` + `...00100_*` (rantai prerequisite) |
 | Order state machine | `business/order-transition.ts`, `business/order.service.ts` |
+| Order payment verification | `routes/orders.ts` — `POST /:id/payment-verify` (G2-F2) + `GET /:id/valid-next-states` (read-only, reuse `getAllowedTransitions`, G2-F4) |
 | CI | `.github/workflows/test.yml` (test:chat + test:golden + test:structured) |
 
 ## APPENDIX B — Kontrak terkunci (jangan dilanggar tanpa persetujuan owner)
@@ -419,6 +420,6 @@ BUG-BELUM-DIBERESKAN, RAILS §6) jadi kadaluarsa / kontradiktif. Audit jadi butu
 ---
 
 *Laporan dibuat read-only (tidak ada kode diubah). Semua klaim diverifikasi ke source/test/git
-log working tree `/home/ubuntu/garuda` per 2026-08-19 (HEAD `c6be2d8`). Klaim yang tidak bisa
+log working tree `/home/ubuntu/garuda` per 2026-08-20 (HEAD `ba136a5`). Klaim yang tidak bisa
 diverifikasi mandiri ditandai [DUGAAN] atau "belum diverifikasi". INSIDEN unreported-work gap
 ada di §10.*

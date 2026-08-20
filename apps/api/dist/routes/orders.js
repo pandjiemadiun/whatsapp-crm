@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { authMiddleware } from '../middleware/auth.js';
-import { transitionOrder, ALLOWED_TRANSITIONS } from '../business/order-transition.js';
+import { transitionOrder, ALLOWED_TRANSITIONS, getAllowedTransitions } from '../business/order-transition.js';
 import { ApiError } from '../errors/ApiError.js';
 import { adapters } from '../adapters/container.js';
 import { prisma } from '../infrastructure/prisma.js';
@@ -20,12 +20,19 @@ const VALID_ORDER_STATUSES = [
     'completed',
     'refunded',
 ];
-// GET /api/orders — List orders for the authenticated store
+// GET /api/orders — List orders for the authenticated store.
+// Optional ?paymentStatus= filter (tenant-scoped via storeId) for callers
+// like the Payment Verification dashboard page.
 router.get('/', async (req, res) => {
     try {
         const storeId = req.user.storeId;
+        const paymentStatus = req.query.paymentStatus;
         const orders = await prisma.order.findMany({
-            where: { storeId, deletedAt: null },
+            where: {
+                storeId,
+                deletedAt: null,
+                ...(paymentStatus ? { paymentStatus } : {}),
+            },
             orderBy: { createdAt: 'desc' },
         });
         res.json({ success: true, data: orders });
@@ -62,6 +69,29 @@ router.get('/:id', async (req, res) => {
     catch (error) {
         adapters.logger.error('Failed to fetch order detail', error);
         res.status(500).json({ error: error?.message || 'Failed to fetch order detail' });
+    }
+});
+// GET /api/orders/:id/valid-next-states — READ-ONLY: next legal orderStatus
+// values from the order's CURRENT state. Reuses the authoritative state
+// machine (getAllowedTransitions) — NO new transition logic here. Frontend
+// uses this purely as a UI aid; payment-verify remains the final validator.
+router.get('/:id/valid-next-states', async (req, res) => {
+    try {
+        const storeId = req.user.storeId;
+        const { id } = req.params;
+        const order = await prisma.order.findFirst({
+            where: { id, storeId, deletedAt: null },
+            select: { orderStatus: true },
+        });
+        if (!order) {
+            return res.status(404).json({ error: 'Pesanan tidak ditemukan' });
+        }
+        const nextStates = getAllowedTransitions(order.orderStatus);
+        res.json({ success: true, data: nextStates });
+    }
+    catch (error) {
+        adapters.logger.error('Failed to fetch valid next states', error);
+        res.status(500).json({ error: error?.message || 'Failed to fetch valid next states' });
     }
 });
 // PUT /api/orders/:id/status — Update order status with ownership check
