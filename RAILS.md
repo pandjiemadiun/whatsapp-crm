@@ -948,6 +948,30 @@ dari laporan sesi sebelumnya.
 
 ---
 
+- **G2-F6a + G2-F6b (20 Agu 2026):** Penutup item minor G2-F sesudah F5.
+  - **F6a:** `Order.paymentRejectReason` (String?, nullable) via migrasi + schema; `payment-verify`
+    terima field `reason?` opsional → simpan ke `paymentRejectReason` kalau ada, null kalau tidak
+    (JANGAN wajibkan, JANGAN placeholder). Dashboard `PaymentVerification` dapat dialog reject dengan
+    textarea alasan OPSIONAL (boleh dikosongkan, tidak blocking). `OrderManager` menampilkan
+    `paymentRejectReason` di detail order (histori/audit). Approve flow tidak disentuh.
+  - **F6b:** endpoint `POST /api/orders/:id/cod-settle` (reuse authMiddleware) — GUARD: HANYA jalan
+    kalau `paymentMethod==='cod'` DAN `paymentStatus==='unpaid'`, selain itu 400. Efek:
+    `paymentStatus='paid'` + `paymentVerifiedAt` + `verifiedByAdminId`. **TIDAK** memanggil
+    `transitionOrder()` — `orderStatus` tidak berubah (sesuai DECISION-COD-SETTLEMENT-DEFERRED.md).
+    Settlement otomatis DILARANG. GET `/api/orders` dapat filter `?paymentMethod=` (additive).
+    Dashboard: halaman BARU `CODOrders.tsx` (terpisah dari Payment Verification) dengan tab
+    Belum Lunas (unpaid) / Sudah Lunas (paid) + tombol "Tandai Lunas" → `cod-settle`; nav "COD"
+    terpisah di samping "Verifikasi Pembayaran". `payment-report`/`payment-verify` tidak disentuh.
+  - **DECISION-COD-SETTLEMENT-DEFERRED.md DIUPDATE:** tambah bagian "UPDATE 20 Agu 2026 (G2-F6b)"
+    — Opsi (A) SEBAGIAN diimplementasi (admin manual tandai COD lunas + visibilitas terpisah); yang
+    TETAP DEFERRED: integrasi ke `orderStatus`/fulfillment (cod-settle sengaja tidak panggil
+    transitionOrder) + Opsi (B) mekanisme fulfillment/delivery terpisah (belum ada).
+  - **Keputusan:** G2-F resmi DITUTUP TOTAL (F1–F6). Bukti: tsc 0, build OK, test:payment 37/37
+    (F6a: reject+reason tersimpan / tanpa reason null; F6b: cod-settle sukses/non-cod/sudah-paid/
+    tenant-isolation + filter ?paymentMethod=cod), migration diterapkan, pm2 restart. Commit
+    `8ee1104` (F6a) + `50d4d25` (F6b). TIDAK ada perubahan logic `payment.service.ts`/
+    `order-transition.ts` selain field mapper `paymentRejectReason` (F6a).
+
 ## 6.x LOG RETROAKTIF — cluster structured actions / P4 / P8 (POST-HOC, 19 Agu 2026)
 
 > **⚠️ PENTING — jangan disamarkan sebagai laporan tepat waktu.** Entri di bawah
