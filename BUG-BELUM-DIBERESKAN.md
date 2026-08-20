@@ -17,6 +17,27 @@
 
 ---
 
+## 0. BUG TERATASI (ditemukan saat testing G2-F3, 20 Agu 2026) — interpreter maxTokens truncation
+
+- **Gejala:** SETIAP pesan chat balas `"Maaf kak, saya kurang paham. Bisa diulang?"`
+  (dead-end fallback `conversation.service.ts:711`) — chat praktis mati.
+- **Root cause:** model Gemini primary (`gemini-3.6-flash`) memancarkan ~140 "thinking"
+  tokens yang dihitung DALAM kuota `maxOutputTokens`. `interpreter.ts` (`runOneCall`)
+  memakai `maxTokens: 250` → JSON `InterpreterResultV2` ter-potong di tengah objek →
+  `JSON.parse` gagal → `runOneCall` return `null` → Stage 5 dead-end. Gemini tetap
+  HTTP 200 sehingga gateway TIDAK fallback ke Groq.
+- **Fix:** `interpreter.ts` `maxTokens: 250 -> 1024` (selaras `GPT_OSS_MAX_TOKENS_FLOOR`
+  di `groq.adapter.ts`) + `extractJson()` hardening (toleransi markdown fence).
+- **Status:** ✅ RESOLVED — commit `81ea8a6` (`fix(chat): interpreter maxTokens 250->1024
+  + extractJson hardening`). Verifikasi E2E via PWA `/message` (balasan normal, bukan
+  dead-end) + 40/40 test pass (interpreter/reasoning-v2/pwa-checkout).
+- **Dampak:** TIDAK ADA customer terdampak — website belum rilis (konteks severity, bukan
+  alasan skip proses). Ditemukan opportunistically saat testing G2-F3; di luar scope
+  TASK G2-F3 asli, tapi genuinely blocking sehingga langsung diperbaiki & diverifikasi
+  lengkap sebelum dilaporkan (exception RAILS §1.4).
+
+---
+
 ## I. BUG PRODUKSI (nyata, user terdampak)
 
 | ID | Bug | Lokasi | Severity | Note |

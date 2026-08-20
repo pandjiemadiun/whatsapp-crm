@@ -1076,3 +1076,18 @@ dari laporan sesi sebelumnya.
   Lihat BUG-BELUM-DIBERESKAN.md II-2 (sekarang RESOLVED).
 - **II-1 (reasoning-v2): BELUM dikoreksi status-nya di sini** — status final menunggu hasil
   investigasi terpisah (G2-F2-DOCS-CORRECT Bagian B). Lihat BUG-BELUM-DIBERESKAN.md II-1.
+
+### 20 Agu 2026 — interpreter maxTokens fix (G2-F3 testing, opportune)
+- **Temuan:** saat testing G2-F3, chat selalu balas `"Maaf kak, saya kurang paham. Bisa
+  diulang?"` (dead-end `conversation.service.ts:711`). Akar: Gemini 3.6-flash thinking
+  tokens (~140) vs `interpreter.ts` `maxTokens: 250` lama → JSON ter-potong → `JSON.parse`
+  gagal → `runOneCall` null → dead-end tiap pesan. Groq tidak pernah fallback (Gemini 200).
+- **Fix:** `interpreter.ts` `maxTokens -> 1024` + `extractJson()` hardening. Commit
+  `81ea8a6`. Verifikasi E2E PWA `/message` + 40/40 test pass.
+- **Konteks (RAILS §1.4 exception):** ditemukan opportunistically saat testing G2-F3, di
+  luar scope TASK G2-F3 asli. Exception §1.4 berlaku karena genuinely blocking (chat
+  sepenuhnya mati), bukan nice-to-have, dan sudah diverifikasi lengkap (root cause +
+  bukti E2E + test) SEBELUM dilaporkan — bukan sekadar di-skip.
+- **Dampak:** TIDAK ADA customer terdampak, website belum rilis. Ini konteks severity
+  (bug production-blocking secara teknis, tapi belum ada trafik nyata), BUKAN alasan
+  untuk melewati proses investigasi/verifikasi.
