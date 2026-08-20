@@ -1113,3 +1113,44 @@ dari laporan sesi sebelumnya.
   endpoint `valid-next-states` jadi single source of truth supaya UI mengikuti backend bila
   ALLOWED_TRANSITIONS berubah. Tidak ada field/table baru — `valid-next-states` murni read endpoint.
 - **Siapa yang setuju:** owner (Panji), AI CLI.
+
+### 20 Agu 2026 — G2-F5: CI coverage audit + golden dataset checkout/payment
+- **Audit (BAGIAN A, read-only):** seluruh suite test G2-F (F2/F3/F4) TIDAK pernah dijalankan
+  CI sejak masing-masing dibuat — gap tersembunyi paling lama ~4h28m.
+  - `apps/api/src/business/tests/payment.test.ts` (G2-F2, 10 test) — ada di `src/business/tests/`,
+    TIDAK di-wire ke script npm manapun → TIDAK ter-cover sejak `ebc4637` (01:46 UTC).
+  - `apps/api/src/tests/pwa-checkout.test.ts` (G2-F3, 8 test) — di `src/tests/` tapi tidak masuk
+    list explicit `test:golden` maupun glob `test:structured` (`structured-actions*`) → TIDAK
+    ter-cover sejak `16a954b` (05:05 UTC).
+  - `apps/api/src/tests/payment-verify-routes.e2e.test.ts` (G2-F4, 7 test) — sama, tidak masuk
+    `test:golden`/`test:structured` → TIDAK ter-cover sejak `ed41e0c` (06:02 UTC).
+  - `test:chat` (jest) HANYA jalankan `src/services/chat/__tests__/**` + `src/services/chat/tests/**`
+    (lihat `jest.config.cjs`), sehingga file node:test di luar chat otomatis tidak ke-cover.
+  - Ini pola sama persis II-6 / P8-CI-FIX (`c6be2d8`): seluruh cluster fitur payment/checkout
+    (F2+F3+F4) bisa regresi tanpa CI merah.
+- **Fix (BAGIAN B):** `apps/api/package.json` tambah script `test:payment` (list explicit 4 file:
+  `payment.test.ts` + `pwa-checkout.test.ts` + `payment-verify-routes.e2e.test.ts` +
+  `golden-payment.e2e.test.ts`) — domain-based naming, bukan phase-based. `.github/workflows/test.yml`
+  tambah step `Run test:payment` SETELAH `Run test:structured` (MUST pass, 0 failure), ikuti pola
+  P8-CI-FIX. Verifikasi lokal full sequence test:chat (270/270) → test:golden (26/26) →
+  test:structured (115/115) → test:payment (30/30), semua exit 0, tanpa interaksi antar-suite.
+- **Golden dataset (BAGIAN C):** file BARU `apps/api/src/tests/golden-payment.e2e.test.ts` (5 case,
+  mutation-tested pola P6-5) — dipisah dari `golden-dataset.test.ts` (chat-pipeline) agar tidak
+  mengganggu baseline 26/26 dan scope-nya jelas ke `test:payment`. Case:
+  (a) draft→checkout transfer→payment-report→verify approve(target=paid)→paymentStatus=paid +
+  orderStatus berubah; (b) COD checkout→tetap waiting_address, payment-report order COD→400;
+  (c) verify reject→paymentStatus=rejected, orderStatus TIDAK berubah; (d) verify approve TANPA
+  targetOrderStatus→400; (e) verify approve targetOrderStatus TIDAK VALID→rollback penuh,
+  paymentStatus tetap pending_verification.
+- **Mutation test (WAJIB, ×5):** tiap case dibuktikan guard-nya load-bearing — revert 1 baris fix
+  di `payment.service.ts` → case jadi MERAH, kembalikan → HIJAU. Target mutasi:
+  (a) `paymentStatus:'paid'` di tx update → case (a) gagal assert paid;
+  (b) guard `order.paymentMethod==='cod'` → case (b) dapat 200 bukan 400;
+  (c) `paymentStatus:'rejected'` di reject → case (c) gagal assert rejected;
+  (d) guard `if(!targetOrderStatus) throw` → case (d) dapat 200 bukan 400;
+  (e) `catch` `InvalidOrderTransitionError` di-swallow (hilang rollback) → case (e) dapat 200 +
+  paymentStatus 'paid' bukan 400/pending_verification. SEMUA mutasi di-revert (payment.service.ts
+  tidak ada perubahan permanen — `git diff` bersih).
+- **Keputusan:** G2-F5 SELESAI & VERIFIED — tsc 0, test:payment 30/30, full CI sequence hijau,
+  mutation ×5 proven. Commit `e293040`. TIDAK ada perubahan logic `payment.service.ts`/
+  `order-transition.ts`/`payment-verify` (hanya test + CI).
