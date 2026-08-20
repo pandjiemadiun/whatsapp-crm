@@ -1101,7 +1101,7 @@ dari laporan sesi sebelumnya.
   single source of truth). Reject panggil `POST /:id/payment-verify` `{decision:'reject'}`.
 - **Keputusan:** G2-F4 SELESAI & VERIFIED — tsc 0, dashboard build 0, e2e baru
   `payment-verify-routes.e2e.test.ts` 7/7, `payment.test.ts` 10/10 (tanpa regresi), pm2
-  api+dashboard restart, manual live approve/reject + DB readback before/after. Commit `ba136a5`.
+  api+dashboard restart, manual live approve/reject + DB readback before/after. Commit `ed41e0c`.
 - **OPEN ITEM KECIL (bukan bug):** reject TIDAK wajib pakai reason. Ini keputusan scope G2-F2
   yang sudah LOCKED — `verifyPayment` reject hanya terima `{decision:'reject'}`, tidak ada field
   reason, dan endpoint dilarang diubah (kontrak final). Kalau owner mau reason wajib di reject,

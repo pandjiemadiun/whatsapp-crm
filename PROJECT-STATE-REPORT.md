@@ -2,7 +2,7 @@
 
 > **Dokumen ini dibuat untuk onboarding ke project baru (Claude/AI coding agent).**
 > Semua klaim status di bawah diverifikasi terhadap **source code, test, dan git log aktual**
-> di working tree `/home/ubuntu/garuda` pada **2026-08-20** (HEAD `ba136a5`). Tidak ada klaim
+> di working tree `/home/ubuntu/garuda` pada **2026-08-20** (HEAD `ed41e0c`). Tidak ada klaim
 > yang diambil mentah dari roadmap/STATUS lama tanpa cross-check ke kode.
 >
 > **ATURAN RAILS.md BERLAKU:** tidak ada kode yang diubah dalam pembuatan dokumen ini
@@ -317,7 +317,7 @@ natural-language via Conversation Engine. Opsi belum diputuskan:
 
 ## 9. CARA VERIFIKASI (untuk siapapun yang lanjutkan)
 
-> Working tree BERSIH (semua ter-commit & ter-push ke `origin/main`, HEAD `ba136a5`).
+> Working tree BERSIH (semua ter-commit & ter-push ke `origin/main`, HEAD `ed41e0c`).
 > Tidak ada lagi peringatan "jangan git reset --hard" karena file menggantung uncommitted.
 
 ### 9.1 Build & typecheck (dari `apps/api`)
@@ -420,6 +420,6 @@ BUG-BELUM-DIBERESKAN, RAILS §6) jadi kadaluarsa / kontradiktif. Audit jadi butu
 ---
 
 *Laporan dibuat read-only (tidak ada kode diubah). Semua klaim diverifikasi ke source/test/git
-log working tree `/home/ubuntu/garuda` per 2026-08-20 (HEAD `ba136a5`). Klaim yang tidak bisa
+log working tree `/home/ubuntu/garuda` per 2026-08-20 (HEAD `ed41e0c`). Klaim yang tidak bisa
 diverifikasi mandiri ditandai [DUGAAN] atau "belum diverifikasi". INSIDEN unreported-work gap
 ada di §10.*
