@@ -15,6 +15,7 @@ import WhatsAppConnect from './pages/WhatsAppConnect'
 import ConversationInbox from './pages/ConversationInbox'
 import OrderManager from './pages/OrderManager'
 import PaymentVerification from './pages/PaymentVerification'
+import CODOrders from './pages/CODOrders'
 import AiSettings from './pages/AiSettings'
 import ProfilePage from './pages/ProfilePage'
 import ProductsPage from './pages/ProductsPage'
@@ -76,6 +77,7 @@ function App() {
             <Route path="conversations" element={<ConversationInbox />} />
             <Route path="orders" element={<OrderManager />} />
             <Route path="payment-verification" element={<PaymentVerification />} />
+            <Route path="cod-orders" element={<CODOrders />} />
             <Route path="products" element={<ProductsPage />} />
             <Route path="analytics" element={<AnalyticsPage />} />
             <Route path="ai-settings" element={<AiSettings />} />

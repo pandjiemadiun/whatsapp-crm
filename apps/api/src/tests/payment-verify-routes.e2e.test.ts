@@ -124,6 +124,16 @@ async function makePendingPaymentOrder(sId: string, cId: string, convId: string,
   return o.id;
 }
 
+// Helper: buat order COD dengan paymentStatus='unpaid'
+async function makeCodOrder(sId: string, cId: string, convId: string, productId: string = productA, paymentStatus: string = 'unpaid') {
+  const o = (await orderService.createOrder(sId, convId, cId, [{ productId, quantity: 1 }])) as unknown as { id: string };
+  await prisma.order.update({
+    where: { id: o.id },
+    data: { paymentMethod: 'cod', paymentStatus },
+  });
+  return o.id;
+}
+
 // ─────────────────────────────────────────────────────────────
 // valid-next-states (new endpoint)
 // ─────────────────────────────────────────────────────────────
@@ -158,16 +168,18 @@ test('C. GET valid-next-states — 404 order milik store lain / tidak ada', asyn
 // GET /api/orders?paymentStatus= (tenant-scoped filter, new)
 // ─────────────────────────────────────────────────────────────
 
-test('D. GET /api/orders?paymentStatus=pending_verification — hanya order terkait store + status', async () => {
-  const oId = await makePendingPaymentOrder(storeId, custA, convA);
-  await makePendingPaymentOrder(store2Id, custB, convB, productB); // milik store2, tidak boleh muncul
-  const res = await jsonFetch('/api/orders?paymentStatus=pending_verification', {
+test('D2. GET /api/orders?paymentMethod=cod — hanya order COD milik store (tenant-scoped)', async () => {
+  const codId = await makeCodOrder(storeId, custA, convA, productA, 'unpaid');
+  await makePendingPaymentOrder(storeId, custA, convA); // transfer, bukan COD
+  await makeCodOrder(store2Id, custB, convB, productB, 'unpaid'); // COD milik store2
+  const res = await jsonFetch('/api/orders?paymentMethod=cod', {
     headers: { Authorization: `Bearer ${storeToken}` },
   });
   assert.equal(res.status, 200);
   const body = await parseJson(res);
   const ids = body.data.map((o: any) => o.id);
-  assert.ok(ids.includes(oId));
+  assert.ok(ids.includes(codId));
+  assert.ok(body.data.every((o: any) => o.paymentMethod === 'cod'));
   assert.ok(body.data.every((o: any) => o.storeId === storeId));
 });
 
@@ -214,4 +226,79 @@ test('G. payment-verify reject — 200, paymentStatus=rejected, orderStatus tida
   const body = await parseJson(res);
   assert.equal(body.data.paymentStatus, 'rejected');
   assert.equal(body.data.orderStatus, 'pending');
+  // reason tidak dikirim -> null (JANGAN wajibkan, JANGAN placeholder)
+  const db = await prisma.order.findUnique({ where: { id: orderId } });
+  assert.equal(db!.paymentRejectReason, null);
+});
+
+test('G2. payment-verify reject + reason — 200, paymentRejectReason tersimpan', async () => {
+  const orderId = await makePendingPaymentOrder(storeId, custA, convA);
+  const res = await jsonFetch(`/api/orders/${orderId}/payment-verify`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${storeToken}` },
+    body: JSON.stringify({ decision: 'reject', reason: 'Bukti tidak sesuai nominal' }),
+  });
+  assert.equal(res.status, 200);
+  const body = await parseJson(res);
+  assert.equal(body.data.paymentStatus, 'rejected');
+  assert.equal(body.data.paymentRejectReason, 'Bukti tidak sesuai nominal');
+  const db = await prisma.order.findUnique({ where: { id: orderId } });
+  assert.equal(db!.paymentRejectReason, 'Bukti tidak sesuai nominal');
+});
+
+// ─────────────────────────────────────────────────────────────
+// cod-settle (G2-F6b) — admin tandai COD lunas (manual)
+// ─────────────────────────────────────────────────────────────
+
+test('H. cod-settle cod+unpaid — 200, paymentStatus=paid, orderStatus TIDAK berubah', async () => {
+  const orderId = await makeCodOrder(storeId, custA, convA, productA, 'unpaid'); // orderStatus 'pending'
+  const res = await jsonFetch(`/api/orders/${orderId}/cod-settle`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${storeToken}` },
+    body: JSON.stringify({}),
+  });
+  assert.equal(res.status, 200);
+  const body = await parseJson(res);
+  assert.equal(body.success, true);
+  assert.equal(body.data.paymentStatus, 'paid');
+  assert.equal(body.data.orderStatus, 'pending'); // DILARANG ubah orderStatus
+  assert.ok(body.data.paymentVerifiedAt);
+  assert.equal(body.data.verifiedByAdminId, 'g2f4-1@garuda.test');
+
+  const db = await prisma.order.findUnique({ where: { id: orderId } });
+  assert.equal(db!.paymentStatus, 'paid');
+  assert.equal(db!.orderStatus, 'pending');
+});
+
+test('I. cod-settle untuk non-cod (transfer+unpaid) — 400', async () => {
+  const orderId = await makePendingPaymentOrder(storeId, custA, convA); // transfer + pending_verification
+  const res = await jsonFetch(`/api/orders/${orderId}/cod-settle`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${storeToken}` },
+    body: JSON.stringify({}),
+  });
+  assert.equal(res.status, 400);
+  const db = await prisma.order.findUnique({ where: { id: orderId } });
+  assert.equal(db!.paymentStatus, 'pending_verification'); // tidak berubah
+});
+
+test('J. cod-settle untuk cod yang SUDAH paid — 400', async () => {
+  const orderId = await makeCodOrder(storeId, custA, convA, productA, 'paid');
+  const res = await jsonFetch(`/api/orders/${orderId}/cod-settle`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${storeToken}` },
+    body: JSON.stringify({}),
+  });
+  assert.equal(res.status, 400);
+  const db = await prisma.order.findUnique({ where: { id: orderId } });
+  assert.equal(db!.paymentStatus, 'paid'); // tetap paid, tidak double-settle
+});
+
+test('K. cod-settle tenant isolation — order milik store lain → 404', async () => {
+  const orderId = await makeCodOrder(store2Id, custB, convB, productB, 'unpaid'); // milik store2
+  const res = await jsonFetch(`/api/orders/${orderId}/cod-settle`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${storeToken}` }, // store1 mencoba settle milik store2
+  });
+  assert.equal(res.status, 404);
 });
