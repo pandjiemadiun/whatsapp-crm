@@ -54,6 +54,8 @@ import { scheduleFollowUps } from './bootstrap/scheduleFollowUps.js';
 import { scheduleLearning } from './bootstrap/scheduleLearning.js';
 import { requestIdMiddleware } from './middleware/requestId.js';
 import { errorHandler } from './middleware/errorHandler.js';
+import { metricsMiddleware } from './middleware/metrics.middleware.js';
+import systemMetricsRouter from './routes/admin/system-metrics.js';
 import logger from './utils/logger.js';
 import { getEncryptionKey } from './utils/encryption.js';
 // Menyesuaikan __dirname untuk TypeScript ESM
@@ -85,6 +87,9 @@ app.use(cors({
 }));
 // Request correlation ID (must be after CORS, before everything else)
 app.use(requestIdMiddleware);
+// Basic system metrics — per-request tracking (rolling window, in-memory).
+// Must be mounted early so it captures latency/status for ALL requests.
+app.use(metricsMiddleware);
 // Maintenance mode check (skip health check and root)
 app.use(maintenanceModeMiddleware);
 // Health check routes (mounted BEFORE other routes, AFTER CORS)
@@ -115,6 +120,7 @@ app.use('/api/admin/analytics', adminAuthMiddleware, adminAnalyticsRoutes);
 app.use('/api/admin/magic-paste', adminAuthMiddleware, adminMagicPasteRoutes);
 app.use('/api/admin/engine', adminAuthMiddleware, adminEngineRoutes);
 app.use('/api/admin/mission-control', adminAuthMiddleware, requireAdminRole(['super_admin']), missionControlRouter);
+app.use('/api/admin/metrics', adminAuthMiddleware, systemMetricsRouter);
 app.use('/api/admin', adminProductsRoutes);
 // Store-owner product routes (auth) — mounted BEFORE public catalog
 app.use('/api/products', storeProductsRouter);
