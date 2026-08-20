@@ -9,6 +9,7 @@ import { ApiError } from '../errors/ApiError.js';
 import { ErrorCodes } from '../constants/errorCodes.js';
 import { ResponseSource } from '../domain/types.js';
 import { executeHandoff } from '../services/handoff.service.js';
+import { paymentService } from '../business/payment.service.js';
 
 const router = Router();
 
@@ -776,6 +777,54 @@ router.post('/:storeSlug/clear', async (req: Request, res: Response) => {
   } catch (err) {
     adapters.logger.error('PWA clear error', err as Error);
     res.status(500).json({ error: 'Failed to clear chat' });
+  }
+});
+
+// POST /api/pwa/:storeSlug/payment-report — customer lapor bukti bayar (transfer/qris).
+// Body: { uid, orderId, paymentMethod: 'transfer'|'qris', proofUrl }.
+// Tenant isolation: resolve web session (store+customer), lalu paymentService.reportPayment
+// memvalidasi order milik store+customer yang sama. orderStatus TIDAK disentuh.
+router.post('/:storeSlug/payment-report', async (req: Request, res: Response) => {
+  try {
+    const { storeSlug } = req.params;
+    const { uid, orderId, paymentMethod, proofUrl } = req.body as {
+      uid?: string;
+      orderId?: string;
+      paymentMethod?: string;
+      proofUrl?: string;
+    };
+
+    if (!uid || !orderId || !paymentMethod || !proofUrl) {
+      return res.status(400).json({ error: 'uid, orderId, paymentMethod, dan proofUrl wajib' });
+    }
+    if (paymentMethod === 'cod') {
+      return res.status(400).json({ error: 'COD tidak mendukung lapor bukti transfer/qris' });
+    }
+
+    const session = await resolveWebSession(storeSlug, uid);
+    if (!session) {
+      const store = await prisma.store.findUnique({
+        where: { slug: storeSlug, deletedAt: null },
+        select: { id: true },
+      });
+      if (!store) return res.status(404).json({ error: 'Store not found' });
+      return res.status(401).json({ error: 'Unauthorized customer' });
+    }
+
+    const result = await paymentService.reportPayment(
+      orderId,
+      session.storeId,
+      session.customerId,
+      paymentMethod,
+      proofUrl,
+    );
+    res.json({ success: true, data: result });
+  } catch (err: any) {
+    if (err instanceof ApiError) {
+      return res.status(err.statusCode || 500).json({ error: err.message });
+    }
+    adapters.logger.error('PWA payment-report error', err as Error);
+    res.status(500).json({ error: 'Failed to report payment' });
   }
 });
 

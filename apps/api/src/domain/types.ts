@@ -193,6 +193,12 @@ export interface OrderWithItems {
   totalPrice: number | null;
   currency: string;
   orderStatus: string;
+  paymentMethod: string | null;
+  paymentStatus: string;
+  paymentProofUrl: string | null;
+  paymentReportedAt: Date | null;
+  paymentVerifiedAt: Date | null;
+  verifiedByAdminId: string | null;
   shippingAddress: string | null;
   notes: string | null;
   confirmedAt: Date | null;
