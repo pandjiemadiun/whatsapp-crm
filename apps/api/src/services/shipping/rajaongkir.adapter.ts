@@ -6,14 +6,25 @@ import {
 } from './shipping-cost-provider.interface.js';
 
 /**
- * RajaOngkir STARTER tier adapter.
+ * RajaOngkir Komerce (v2) COST adapter — STARTER tier.
  *
- * Starter is FREE and ONLY supports city-level (NOT subdistrict) lookups, with
- * couriers limited to: jne, pos, tiki. The HTTP call is injectable so tests
- * never hit the real API (no key exists in this environment yet).
+ * Platform sekarang: rajaongkir.komerce.id (bukan api.rajaongkir.com yang mati).
+ * Endpoint cost: POST /api/v1/calculate/domestic-cost, body form-urlencoded:
+ *   origin, destination, weight, courier, price=lowest
+ *
+ * origin/destination = SUBDISTRICT/kecamatan ID hasil destination search
+ * (SAMA PERSIS dengan ID di rajaongkir-location.adapter), BUKAN city ID.
+ * Starter ternyata dapat granularity kecamatan penuh untuk COST juga.
+ *
+ * Couriers: hanya yang TERBUKTI jalan di akun Starter ini (diverifikasi live):
+ *   jne ✓, tiki ✓. pos ✗ (404 "not found" — tidak tersedia di plan ini).
+ * Jangan asumsikan courier dokumentasi lain (sicepat, dse, dst) aktif.
+ *
+ * Response FLAT (bukan nested rajaongkir.results[] lama):
+ *   { meta, data: [{ code, service, cost, etd }] }
  */
 
-export const RAJAONGKIR_STARTER_COURIERS = ['jne', 'pos', 'tiki'] as const;
+export const RAJAONGKIR_STARTER_COURIERS = ['jne', 'tiki'] as const;
 export type RajaOngkirStarterCourier = (typeof RAJAONGKIR_STARTER_COURIERS)[number];
 
 /** Injectable HTTP post so the real API can be mocked in tests. */
@@ -23,7 +34,8 @@ export type HttpPostFn = (
   headers: Record<string, string>,
 ) => Promise<{ data: unknown }>;
 
-const DEFAULT_BASE_URL = 'https://api.rajaongkir.com/starter/cost';
+const DEFAULT_BASE_URL =
+  'https://rajaongkir.komerce.id/api/v1/calculate/domestic-cost';
 
 const defaultHttpPost: HttpPostFn = (url, data, headers) =>
   axios.post(url, new URLSearchParams(data).toString(), {
@@ -39,8 +51,8 @@ export class RajaOngkirAdapter implements ShippingCostProvider {
   ) {}
 
   async getCost(
-    originCityId: string,
-    destinationCityId: string,
+    originId: string,
+    destinationId: string,
     weightGrams: number,
     courier: string,
   ): Promise<ShippingCostResult[] | ShippingCostError> {
@@ -59,10 +71,11 @@ export class RajaOngkirAdapter implements ShippingCostProvider {
       const res = await this.httpPost(
         this.baseUrl,
         {
-          origin: String(originCityId),
-          destination: String(destinationCityId),
+          origin: String(originId),
+          destination: String(destinationId),
           weight: String(Math.round(weightGrams)),
           courier: c,
+          price: 'lowest',
         },
         {
           key: this.apiKey,
@@ -79,24 +92,21 @@ export class RajaOngkirAdapter implements ShippingCostProvider {
 
   private parse(data: unknown): ShippingCostResult[] | null {
     try {
-      const results = (data as any)?.rajaongkir?.results;
+      const results = (data as any)?.data;
       if (!Array.isArray(results)) return null;
 
       const out: ShippingCostResult[] = [];
-      for (const r of results) {
-        if (!Array.isArray(r.costs)) continue;
-        for (const svc of r.costs) {
-          if (!Array.isArray(svc.cost) || svc.cost.length === 0) continue;
-          const first = svc.cost[0];
-          out.push({
-            courier: r.code,
-            service: svc.service,
-            cost: Number(first.value),
-            etd: String(first.etd ?? ''),
-          });
-        }
+      for (const svc of results) {
+        // Flat Komerce v2 shape: { code, service, cost, etd }.
+        if (svc.code == null || svc.service == null) continue;
+        out.push({
+          courier: String(svc.code),
+          service: String(svc.service),
+          cost: Number(svc.cost),
+          etd: String(svc.etd ?? ''),
+        });
       }
-      return out;
+      return out.length > 0 ? out : null;
     } catch {
       return null;
     }

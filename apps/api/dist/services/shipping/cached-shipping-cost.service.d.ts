@@ -9,7 +9,7 @@ export declare class CachedShippingCostService {
     private readonly redis;
     private readonly quotaLimit;
     constructor(provider: ShippingCostProvider, redis?: CacheStore, quotaLimit?: number);
-    getCost(originCityId: string, destinationCityId: string, weightGrams: number, courier: string): Promise<ShippingCostResult[] | ShippingCostError>;
+    getCost(originId: string, destinationId: string, weightGrams: number, courier: string): Promise<ShippingCostResult[] | ShippingCostError>;
 }
 export declare const cachedShippingCostService: CachedShippingCostService;
 //# sourceMappingURL=cached-shipping-cost.service.d.ts.map
