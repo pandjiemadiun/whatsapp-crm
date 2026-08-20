@@ -16,10 +16,16 @@ export interface ShippingCostResult {
 }
 export interface ShippingCostProvider {
     /**
-     * Returns an array of available services for the given city-to-city pair.
-     * One courier may yield multiple services (e.g. JNE REG + JNE YES) → array.
+     * Returns an array of available services for the given origin→destination pair.
+     * One courier may yield multiple services (e.g. JNE CTC + JNE YES) → array.
      * On failure returns one of the `ShippingCostError` codes instead of throwing.
+     *
+     * @param originId subdistrict/kecamatan ID hasil RajaOngkir destination search
+     *   (SAMA dengan ID di rajaongkir-location.adapter) — BUKAN city ID, meski nama
+     *   field lama menyiratkan itu. Starter Komerce mendukung granularity kecamatan
+     *   penuh untuk cost, bukan sekadar city-level.
+     * @param destinationId subdistrict/kecamatan ID tujuan (sama penjelasan originId).
      */
-    getCost(originCityId: string, destinationCityId: string, weightGrams: number, courier: string): Promise<ShippingCostResult[] | ShippingCostError>;
+    getCost(originId: string, destinationId: string, weightGrams: number, courier: string): Promise<ShippingCostResult[] | ShippingCostError>;
 }
 //# sourceMappingURL=shipping-cost-provider.interface.d.ts.map

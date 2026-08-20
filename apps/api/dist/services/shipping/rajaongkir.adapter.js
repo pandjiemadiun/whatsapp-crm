@@ -1,13 +1,24 @@
 import axios from 'axios';
 /**
- * RajaOngkir STARTER tier adapter.
+ * RajaOngkir Komerce (v2) COST adapter — STARTER tier.
  *
- * Starter is FREE and ONLY supports city-level (NOT subdistrict) lookups, with
- * couriers limited to: jne, pos, tiki. The HTTP call is injectable so tests
- * never hit the real API (no key exists in this environment yet).
+ * Platform sekarang: rajaongkir.komerce.id (bukan api.rajaongkir.com yang mati).
+ * Endpoint cost: POST /api/v1/calculate/domestic-cost, body form-urlencoded:
+ *   origin, destination, weight, courier, price=lowest
+ *
+ * origin/destination = SUBDISTRICT/kecamatan ID hasil destination search
+ * (SAMA PERSIS dengan ID di rajaongkir-location.adapter), BUKAN city ID.
+ * Starter ternyata dapat granularity kecamatan penuh untuk COST juga.
+ *
+ * Couriers: hanya yang TERBUKTI jalan di akun Starter ini (diverifikasi live):
+ *   jne ✓, tiki ✓. pos ✗ (404 "not found" — tidak tersedia di plan ini).
+ * Jangan asumsikan courier dokumentasi lain (sicepat, dse, dst) aktif.
+ *
+ * Response FLAT (bukan nested rajaongkir.results[] lama):
+ *   { meta, data: [{ code, service, cost, etd }] }
  */
-export const RAJAONGKIR_STARTER_COURIERS = ['jne', 'pos', 'tiki'];
-const DEFAULT_BASE_URL = 'https://api.rajaongkir.com/starter/cost';
+export const RAJAONGKIR_STARTER_COURIERS = ['jne', 'tiki'];
+const DEFAULT_BASE_URL = 'https://rajaongkir.komerce.id/api/v1/calculate/domestic-cost';
 const defaultHttpPost = (url, data, headers) => axios.post(url, new URLSearchParams(data).toString(), {
     headers,
     timeout: 10000,
@@ -18,7 +29,7 @@ export class RajaOngkirAdapter {
         this.httpPost = httpPost;
         this.baseUrl = baseUrl;
     }
-    async getCost(originCityId, destinationCityId, weightGrams, courier) {
+    async getCost(originId, destinationId, weightGrams, courier) {
         const c = courier.toLowerCase();
         if (!RAJAONGKIR_STARTER_COURIERS.includes(c)) {
             // Starter tier cannot serve this courier — honest rejection, not a fake quote.
@@ -29,10 +40,11 @@ export class RajaOngkirAdapter {
         }
         try {
             const res = await this.httpPost(this.baseUrl, {
-                origin: String(originCityId),
-                destination: String(destinationCityId),
+                origin: String(originId),
+                destination: String(destinationId),
                 weight: String(Math.round(weightGrams)),
                 courier: c,
+                price: 'lowest',
             }, {
                 key: this.apiKey,
                 'content-type': 'application/x-www-form-urlencoded',
@@ -46,26 +58,22 @@ export class RajaOngkirAdapter {
     }
     parse(data) {
         try {
-            const results = data?.rajaongkir?.results;
+            const results = data?.data;
             if (!Array.isArray(results))
                 return null;
             const out = [];
-            for (const r of results) {
-                if (!Array.isArray(r.costs))
+            for (const svc of results) {
+                // Flat Komerce v2 shape: { code, service, cost, etd }.
+                if (svc.code == null || svc.service == null)
                     continue;
-                for (const svc of r.costs) {
-                    if (!Array.isArray(svc.cost) || svc.cost.length === 0)
-                        continue;
-                    const first = svc.cost[0];
-                    out.push({
-                        courier: r.code,
-                        service: svc.service,
-                        cost: Number(first.value),
-                        etd: String(first.etd ?? ''),
-                    });
-                }
+                out.push({
+                    courier: String(svc.code),
+                    service: String(svc.service),
+                    cost: Number(svc.cost),
+                    etd: String(svc.etd ?? ''),
+                });
             }
-            return out;
+            return out.length > 0 ? out : null;
         }
         catch {
             return null;

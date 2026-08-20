@@ -50,7 +50,7 @@ class FakeRedis implements CacheStore {
   }
 }
 
-const PARAMS = { origin: '1', destination: '2', weight: 500, courier: 'jne' } as const;
+const PARAMS = { originId: '1', destinationId: '2', weight: 500, courier: 'jne' } as const;
 
 describe('CachedShippingCostService', () => {
   test('cache miss → provider called once, result cached with 7-day TTL', async () => {
@@ -58,7 +58,7 @@ describe('CachedShippingCostService', () => {
     const redis = new FakeRedis();
     const svc = new CachedShippingCostService(makeProvider(SAMPLE, calls), redis, 100);
 
-    const res = await svc.getCost(PARAMS.origin, PARAMS.destination, PARAMS.weight, PARAMS.courier);
+    const res = await svc.getCost(PARAMS.originId, PARAMS.destinationId, PARAMS.weight, PARAMS.courier);
 
     assert.deepEqual(res, SAMPLE);
     assert.equal(calls.length, 1, 'provider should be called exactly once');
@@ -115,28 +115,52 @@ describe('CachedShippingCostService', () => {
 });
 
 describe('RajaOngkirAdapter (HTTP injectable — no real API)', () => {
-  test('parses Starter cost response into ShippingCostResult[]', async () => {
+  test('parses flat Komerce v2 cost response into ShippingCostResult[]', async () => {
     const fakeHttp = async () => ({
       data: {
-        rajaongkir: {
-          results: [
-            {
-              code: 'jne',
-              costs: [
-                { service: 'REG', cost: [{ value: 20000, etd: '2-3' }] },
-                { service: 'YES', cost: [{ value: 30000, etd: '1-1' }] },
-              ],
-            },
-          ],
-        },
+        meta: { message: 'Success Calculate Domestic Shipping cost', code: 200, status: 'success' },
+        data: [
+          { name: 'JNE', code: 'jne', service: 'REG', description: 'JNE REG', cost: 20000, etd: '2-3' },
+          { name: 'JNE', code: 'jne', service: 'YES', description: 'JNE YES', cost: 30000, etd: '1-1' },
+        ],
       },
     });
     const adapter = new RajaOngkirAdapter('FAKE_KEY', fakeHttp as any);
     const res = await adapter.getCost('1', '2', 500, 'jne');
 
     assert.ok(Array.isArray(res));
-    assert.equal((res as ShippingCostResult[]).length, 2);
-    assert.equal((res as ShippingCostResult[])[0].courier, 'jne');
+    const arr = res as ShippingCostResult[];
+    assert.equal(arr.length, 2);
+    assert.equal(arr[0].courier, 'jne');
+    assert.equal(arr[0].service, 'REG');
+    assert.equal(arr[0].cost, 20000);
+    assert.equal(arr[0].etd, '2-3');
+  });
+
+  test('parses live-shaped response (subdistrict IDs, flat cost/etd)', async () => {
+    // Exact structure from verified live call step 2:
+    // origin 17473 (GROGOL) → destination 17717 (KEBON PALA), jne 1000g.
+    const fakeHttp = async () => ({
+      data: {
+        meta: { message: 'Success Calculate Domestic Shipping cost', code: 200, status: 'success' },
+        data: [
+          { name: 'Jalur Nugraha Ekakurir (JNE)', code: 'jne', service: 'CTC', description: 'JNE City Courier', cost: 10000, etd: '1 day' },
+          { name: 'Jalur Nugraha Ekakurir (JNE)', code: 'jne', service: 'CTCYES', description: 'JNE City Courier', cost: 18000, etd: '1 day' },
+        ],
+      },
+    });
+    const adapter = new RajaOngkirAdapter('FAKE_KEY', fakeHttp as any);
+    const res = await adapter.getCost('17473', '17717', 1000, 'jne');
+
+    assert.ok(Array.isArray(res));
+    const arr = res as ShippingCostResult[];
+    assert.equal(arr.length, 2);
+    assert.equal(arr[0].courier, 'jne');
+    assert.equal(arr[0].service, 'CTC');
+    assert.equal(arr[0].cost, 10000);
+    assert.equal(arr[0].etd, '1 day');
+    assert.equal(arr[1].service, 'CTCYES');
+    assert.equal(arr[1].cost, 18000);
   });
 
   test('rejects unsupported courier (non-Starter tier)', async () => {
@@ -145,7 +169,7 @@ describe('RajaOngkirAdapter (HTTP injectable — no real API)', () => {
     assert.equal(res, 'PROVIDER_ERROR');
   });
 
-  test('supported couriers are exactly jne/pos/tiki', () => {
-    assert.deepEqual([...RAJAONGKIR_STARTER_COURIERS], ['jne', 'pos', 'tiki']);
+  test('supported couriers are exactly jne/tiki (pos verified 404 on Starter)', () => {
+    assert.deepEqual([...RAJAONGKIR_STARTER_COURIERS], ['jne', 'tiki']);
   });
 });

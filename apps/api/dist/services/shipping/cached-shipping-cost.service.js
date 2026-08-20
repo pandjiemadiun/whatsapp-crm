@@ -3,7 +3,7 @@ import { rajaOngkirAdapter } from './rajaongkir.adapter.js';
 /**
  * Cached shipping-cost wrapper. Wraps ANY ShippingCostProvider and adds:
  *   - a GLOBAL (non-per-store) cache keyed by
- *     ongkir:cost:{originCityId}:{destinationCityId}:{courier}:{weightBucket}
+ *     ongkir:cost:{originId}:{destinationId}:{courier}:{weightBucket}
  *   - a daily quota guard (Redis counter, WIB date) that short-circuits to
  *     QUOTA_EXCEEDED BEFORE calling the provider.
  *
@@ -40,10 +40,10 @@ export class CachedShippingCostService {
         this.redis = redis;
         this.quotaLimit = quotaLimit;
     }
-    async getCost(originCityId, destinationCityId, weightGrams, courier) {
+    async getCost(originId, destinationId, weightGrams, courier) {
         const c = courier.toLowerCase();
         const bucket = weightBucket(weightGrams);
-        const cacheKey = `ongkir:cost:${originCityId}:${destinationCityId}:${c}:${bucket}`;
+        const cacheKey = `ongkir:cost:${originId}:${destinationId}:${c}:${bucket}`;
         // 1) Cache HIT → return immediately, NO provider call, NO quota consumption.
         const cached = await this.redis.get(cacheKey);
         if (cached) {
@@ -57,7 +57,7 @@ export class CachedShippingCostService {
         }
         // 3) Cache MISS + quota OK → call provider with the BUCKETED weight so the
         //    cached price is the REAL price for that rounded weight.
-        const result = await this.provider.getCost(originCityId, destinationCityId, bucket, c);
+        const result = await this.provider.getCost(originId, destinationId, bucket, c);
         // Provider/validation error → return honestly, do NOT consume quota, do NOT cache.
         if (typeof result === 'string') {
             return result;
