@@ -930,76 +930,82 @@ async getResponse(
         mentionedAt: new Date().toISOString(),
       }));
 
-      // G2-D.6: Read existing state from canonical (authority: workspace_v2)
-      const current = await prisma.conversationContext.findUnique({
+      // Probe: pastikan row ada. Bila belum (pertama kali), pakai upsert
+      // create — idempoten, tak ada RMW race di jalur inisialisasi ini.
+      const probe = await prisma.conversationContext.findUnique({
         where: { conversationId },
         select: { extractedEntities: true, sessionKey: true, sessionExpireAt: true },
       });
-      const existingEntities = conversationContextService.parseExtractedEntities(current?.extractedEntities);
-      const existingDiscussed = existingEntities.discussedItems || [];
-      const existingLastAmbiguous = existingEntities.lastAmbiguousPrompt || null;
-
-      // Fix BUG-7: Dedup new items against existing discussedItems by product name
-      const existingProductNames = new Set(
-        existingDiscussed.map(d => d.product.toLowerCase())
-      );
-      const dedupedNew = newItems.filter(
-        n => !existingProductNames.has(n.product.toLowerCase())
-      );
-
-      // Fix BUG-1: new items di BELAKANG (bukan depan) supaya slice(-10) jangan drop item baru
-      const mergedDiscussedItems: DiscussedItem[] = [
-        ...existingDiscussed,
-        ...dedupedNew,
-      ].slice(-10);
-
-      // Jika tryProduct mengembalikan hasil ambigu (2+ products), set lastAmbiguousPrompt
-      // sehingga turn berikutnya bisa resolve (mis. "dua-duanya", "kangkung aja")
       const isAmbiguous = productIds.length > 1;
-      const newLastAmbiguous = isAmbiguous
-        ? existingLastAmbiguous || option.content
-        : null;
 
-      await prisma.conversationContext.upsert({
-        where: { conversationId },
-        update: {
-          extractedEntities: {
-            ...existingEntities,
-            discussedItems: mergedDiscussedItems,
-            lastAmbiguousPrompt: newLastAmbiguous,
-          } as unknown as Prisma.InputJsonValue,
-        },
-        create: {
-          conversationId,
-          lastMessages: '[]',
-          sessionKey: current?.sessionKey ?? crypto.randomUUID(),
-          sessionExpireAt: current?.sessionExpireAt ?? new Date(Date.now() + 3_600_000),
-          extractedEntities: {
-            discussedItems: mergedDiscussedItems,
-            confirmedItems: [],
-            lastAmbiguousPrompt: isAmbiguous ? option.content : null,
-          } as unknown as Prisma.InputJsonValue,
-        },
-      });
-
-      adapters.logger.debug('Discussed items appended to extractedEntities (backward compat mirror)', {
-        conversationId,
-        count: mergedDiscussedItems.length,
-        products: matchedNames,
-      });
-
-      // G2-D.6: PRIMARY write to canonical (workspace_v2) via writeV1DiscussedItems
-      try {
-        await canonicalConversationStateService.writeV1DiscussedItems(
-          conversationId,
-          mergedDiscussedItems,
-          newLastAmbiguous,
-        );
-      } catch (err) {
-        adapters.logger.warn('saveDiscussedItems: failed to write to canonical', {
-          conversationId,
-          error: err instanceof Error ? err.message : String(err),
+      if (!probe) {
+        const merged = newItems.slice(-10);
+        const lastAmbiguous = isAmbiguous ? option.content : null;
+        await prisma.conversationContext.upsert({
+          where: { conversationId },
+          update: {
+            extractedEntities: {
+              discussedItems: merged,
+              lastAmbiguousPrompt: lastAmbiguous,
+            } as unknown as Prisma.InputJsonValue,
+          },
+          create: {
+            conversationId,
+            lastMessages: '[]',
+            sessionKey: crypto.randomUUID(),
+            sessionExpireAt: new Date(Date.now() + 3_600_000),
+            extractedEntities: {
+              discussedItems: merged,
+              confirmedItems: [],
+              lastAmbiguousPrompt: lastAmbiguous,
+            } as unknown as Prisma.InputJsonValue,
+          },
         });
+        await this.writeCanonicalDiscussed(conversationId, merged, lastAmbiguous);
+        return;
+      }
+
+      // FIX-3 (III-4 sisa): update via atomicCas (P3.4 pola) — CAS updatedAt +
+      // retry otomatis bila ada writer lain (race 2 pesan konkuren 1 conversation
+      // bisa saling timpa kolom discussedItems). Telah di-CAS, tidak lagi
+      // read-modify-write polos seperti sebelumnya.
+      const saved = await conversationContextService.atomicCasExtractedEntities<{
+        items: DiscussedItem[];
+        lastAmbiguous: string | null;
+      }>(
+        conversationId,
+        'saveDiscussedItems',
+        async (row) => {
+          const existingEntities = conversationContextService.parseExtractedEntities(row.extractedEntities);
+          const existingDiscussed = existingEntities.discussedItems || [];
+          const existingLastAmbiguous = existingEntities.lastAmbiguousPrompt || null;
+
+          // Fix BUG-7: Dedup new items against existing discussedItems by product name
+          const existingProductNames = new Set(existingDiscussed.map(d => d.product.toLowerCase()));
+          const dedupedNew = newItems.filter(n => !existingProductNames.has(n.product.toLowerCase()));
+
+          // Fix BUG-1: new items di BELAKANG (bukan depan) supaya slice(-10) jangan drop item baru
+          const mergedDiscussedItems: DiscussedItem[] = [...existingDiscussed, ...dedupedNew].slice(-10);
+
+          // Jika tryProduct ambigu (2+ products), set lastAmbiguousPrompt untuk turn berikutnya
+          const newLastAmbiguous = isAmbiguous ? existingLastAmbiguous || option.content : null;
+
+          const result = await prisma.conversationContext.updateMany({
+            where: { conversationId, updatedAt: row.updatedAt },
+            data: {
+              extractedEntities: {
+                ...existingEntities,
+                discussedItems: mergedDiscussedItems,
+                lastAmbiguousPrompt: newLastAmbiguous,
+              } as unknown as Prisma.InputJsonValue,
+            },
+          });
+          return { count: result.count, value: { items: mergedDiscussedItems, lastAmbiguous: newLastAmbiguous } };
+        }
+      );
+
+      if (saved) {
+        await this.writeCanonicalDiscussed(conversationId, saved.items, saved.lastAmbiguous);
       }
     } catch (err) {
       adapters.logger.warn('Failed to save discussedItems', {
@@ -1008,6 +1014,25 @@ async getResponse(
       });
     }
   }
+  private async writeCanonicalDiscussed(
+    conversationId: string,
+    items: DiscussedItem[],
+    lastAmbiguous: string | null
+  ): Promise<void> {
+    try {
+      adapters.logger.debug('Discussed items appended to extractedEntities (backward compat mirror)', {
+        conversationId,
+        count: items.length,
+      });
+      await canonicalConversationStateService.writeV1DiscussedItems(conversationId, items, lastAmbiguous);
+    } catch (err) {
+      adapters.logger.warn('saveDiscussedItems: failed to write to canonical', {
+        conversationId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
   // ── Helpers ──
 
   /**
