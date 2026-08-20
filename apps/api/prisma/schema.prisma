@@ -221,6 +221,7 @@ model Order {
   paymentReportedAt     DateTime? // kapan customer melaporkan/submit bukti
   paymentVerifiedAt     DateTime? // kapan admin memverifikasi → paid
   verifiedByAdminId     String?  // id admin/user (plain string; no relation — JANGAN buat model baru)
+  paymentRejectReason   String?  // alasan TOLAK opsional (nullable; JANGAN wajibkan) untuk histori/audit
   shippingAddress       String?
   notes                 String?
   extractedAt           DateTime @default(now())

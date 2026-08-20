@@ -165,6 +165,28 @@ test('i. payment-verify reject -> rejected, orderStatus unchanged', async () => 
   assert.ok(r.paymentVerifiedAt);
 });
 
+// i2. reject dengan reason -> tersimpan ke paymentRejectReason
+test('i2. payment-verify reject + reason -> paymentRejectReason tersimpan', async () => {
+  const o = await makeOrder(custA, storeId);
+  await paymentService.reportPayment(o.id, storeId, custA, 'transfer', 'https://proof/6');
+  const r = await paymentService.verifyPayment(o.id, storeId, 'reject', undefined, storeId, 'Bukti kurang jelas');
+  assert.equal(r.paymentStatus, 'rejected');
+  assert.equal(r.paymentRejectReason, 'Bukti kurang jelas');
+  const db = await prisma.order.findUnique({ where: { id: o.id } });
+  assert.equal(db!.paymentRejectReason, 'Bukti kurang jelas');
+});
+
+// i3. reject tanpa reason -> paymentRejectReason tetap null (JANGAN wajibkan)
+test('i3. payment-verify reject tanpa reason -> paymentRejectReason null', async () => {
+  const o = await makeOrder(custA, storeId);
+  await paymentService.reportPayment(o.id, storeId, custA, 'transfer', 'https://proof/7');
+  const r = await paymentService.verifyPayment(o.id, storeId, 'reject', undefined, storeId);
+  assert.equal(r.paymentStatus, 'rejected');
+  assert.equal(r.paymentRejectReason, null);
+  const db = await prisma.order.findUnique({ where: { id: o.id } });
+  assert.equal(db!.paymentRejectReason, null);
+});
+
 // j. tenant isolation: store lain / customer lain tidak bisa report/verify
 test('j. tenant isolation — order milik store/customer lain ditolak', async () => {
   const o = await makeOrder(custA, storeId); // store1 order
