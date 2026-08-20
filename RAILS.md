@@ -1091,3 +1091,25 @@ dari laporan sesi sebelumnya.
 - **Dampak:** TIDAK ADA customer terdampak, website belum rilis. Ini konteks severity
   (bug production-blocking secara teknis, tapi belum ada trafik nyata), BUKAN alasan
   untuk melewati proses investigasi/verifikasi.
+
+### 20 Agu 2026 — G2-F4: Dashboard payment verification UI + `valid-next-states` endpoint
+- **Konteks:** G2-F4 tambah halaman dashboard "Verifikasi Pembayaran" yang menampilkan order
+  `paymentStatus='pending_verification'` (tenant-scoped via storeId, filter `?paymentStatus=`
+  di `GET /api/orders`) + bukti transfer (gambar/link), method, dan `paymentReportedAt`.
+  Approve WAJIB memilih `targetOrderStatus` eksplisit dari daftar transisi valid yang di-fetch
+  dari endpoint baru `GET /api/orders/:id/valid-next-states` (reuse `getAllowedTransitions`,
+  single source of truth). Reject panggil `POST /:id/payment-verify` `{decision:'reject'}`.
+- **Keputusan:** G2-F4 SELESAI & VERIFIED — tsc 0, dashboard build 0, e2e baru
+  `payment-verify-routes.e2e.test.ts` 7/7, `payment.test.ts` 10/10 (tanpa regresi), pm2
+  api+dashboard restart, manual live approve/reject + DB readback before/after. Commit `ba136a5`.
+- **OPEN ITEM KECIL (bukan bug):** reject TIDAK wajib pakai reason. Ini keputusan scope G2-F2
+  yang sudah LOCKED — `verifyPayment` reject hanya terima `{decision:'reject'}`, tidak ada field
+  reason, dan endpoint dilarang diubah (kontrak final). Kalau owner mau reason wajib di reject,
+  itu perubahan kontrak TERPISAH (bukan bagian G2-F4). Frontend juga TIDAK auto-retry/tebak ulang
+  kalau backend tolak target — pesan error backend ditampilkan apa adanya.
+- **Alasan:** backend (G2-F2) MEWAJIBKAN admin kirim `targetOrderStatus` eksplisit saat approve
+  (tidak boleh ditebak sistem). Maka dashboard wajib sediakan UI pemilihan dari transisi valid,
+  bukan satu tombol "Confirm" polos. Hardcode state machine di frontend ditolak (risiko drift);
+  endpoint `valid-next-states` jadi single source of truth supaya UI mengikuti backend bila
+  ALLOWED_TRANSITIONS berubah. Tidak ada field/table baru — `valid-next-states` murni read endpoint.
+- **Siapa yang setuju:** owner (Panji), AI CLI.
