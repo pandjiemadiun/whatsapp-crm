@@ -41,3 +41,31 @@ Dua kandidat desain, BELUM dipilih:
 **TIDAK diimplementasikan di G2-F.** Task terpisah setelah owner
 memutuskan, dan setelah ada kejelasan soal fulfillment/delivery
 architecture (belum ada di project ini saat ini).
+---
+
+## UPDATE 20 Agu 2026 (G2-F6b) — Opsi (A) SEBAGIAN diimplementasi
+
+Opsi (A) dari OPEN ITEM di atas **SEBAGIAN** diwujudkan lewat G2-F6b:
+
+- Endpoint `POST /api/orders/:id/cod-settle` memungkinkan admin **manual**
+  menandai `paymentStatus` pesanan COD jadi `paid` (set `paymentVerifiedAt`,
+  `verifiedByAdminId` = email auth context). Guard ketat: HANYA jalan kalau
+  `paymentMethod==='cod'` DAN `paymentStatus==='unpaid'`, selain itu 400.
+- Dashboard mendapat halaman **terpisah** "COD" (di samping "Verifikasi
+  Pembayaran") dengan tab **Belum Lunas** (`unpaid`) vs **Sudah Lunas**
+  (`paid`) supaya merchant langsung tahu mana yang perlu ditagih ke kurir
+  vs sudah beres. Tombol "Tandai Lunas" memanggil `cod-settle`.
+
+**YANG TETAP DEFERRED (belum diimplementasi):**
+- Integrasi ke `orderStatus` / fulfillment. `cod-settle` **SENGAJA tidak
+  memanggil `transitionOrder()`** — `orderStatus` tidak berubah sama sekali.
+  Admin tetap lanjutkan order via `PUT /:id/status` secara terpisah kalau
+  perlu. Keputusan produk soal "kapan COD otomatis mengubah orderStatus"
+  belum diambil.
+- Opsi (B) — mekanisme fulfillment/delivery terpisah yang mengonfirmasi COD
+  `paid` sebagai bagian dari lifecycle pengiriman — **TETAP belum ada**, dan
+  tetap butuh keputusan arsitektur terpisah kalau nanti dibutuhkan.
+
+Kesimpulan: settlement COD kini bisa dicatat manual oleh admin (visibility +
+  aksi eksplisit), tapi otomatisasi/transisi status order tetap deferred
+  sesuai keputusan awal.
