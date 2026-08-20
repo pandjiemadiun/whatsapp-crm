@@ -3,7 +3,7 @@ import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import {
   LogOut, User, LayoutDashboard, Inbox, Package, BarChart3,
   MessageSquare, BookOpen, Bot, Phone, UserCircle,
-  Menu, X, Sun, Moon, Bell, CircleDollarSign,
+  Menu, X, Sun, Moon, Bell, CircleDollarSign, Banknote,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
@@ -18,6 +18,7 @@ const navGroups: Array<{ label: string; items: Array<{ label: string; path: stri
       { label: 'Inbox', path: '/dashboard/conversations', icon: Inbox },
       { label: 'Orders', path: '/dashboard/orders', icon: Package },
       { label: 'Verifikasi Pembayaran', path: '/dashboard/payment-verification', icon: CircleDollarSign },
+      { label: 'COD', path: '/dashboard/cod-orders', icon: Banknote },
       { label: 'Products', path: '/dashboard/products', icon: Package },
     ],
   },

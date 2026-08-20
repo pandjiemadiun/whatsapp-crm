@@ -21,17 +21,19 @@ const VALID_ORDER_STATUSES = [
     'refunded',
 ];
 // GET /api/orders — List orders for the authenticated store.
-// Optional ?paymentStatus= filter (tenant-scoped via storeId) for callers
-// like the Payment Verification dashboard page.
+// Optional ?paymentStatus= and ?paymentMethod= filters (tenant-scoped via
+// storeId) for callers like the Payment Verification / COD dashboard pages.
 router.get('/', async (req, res) => {
     try {
         const storeId = req.user.storeId;
         const paymentStatus = req.query.paymentStatus;
+        const paymentMethod = req.query.paymentMethod;
         const orders = await prisma.order.findMany({
             where: {
                 storeId,
                 deletedAt: null,
                 ...(paymentStatus ? { paymentStatus } : {}),
+                ...(paymentMethod ? { paymentMethod } : {}),
             },
             orderBy: { createdAt: 'desc' },
         });
@@ -163,6 +165,47 @@ router.post('/:id/payment-verify', orderMutationLimiter, async (req, res) => {
         }
         adapters.logger.error('Failed to verify payment', error);
         res.status(500).json({ error: error?.message || 'Failed to verify payment' });
+    }
+});
+// POST /api/orders/:id/cod-settle — admin TANDAI COD LUNAS (manual).
+// Auth: reuse persis authMiddleware (store token) seperti payment-verify.
+// GUARD: HANYA jalan kalau Order.paymentMethod==='cod' DAN paymentStatus==='unpaid'.
+//   Selain itu -> 400. (Non-COD / COD yang sudah bukan unpaid ditolak.)
+// EFEK: set paymentStatus='paid', paymentVerifiedAt=now, verifiedByAdminId=<auth email>.
+// DILARANG memanggil transitionOrder() — orderStatus TIDAK berubah sama sekali.
+// Settlement otomatis DILARANG (sesuai DECISION-COD-SETTLEMENT-DEFERRED.md): admin
+// tetap lanjutkan order via PUT /:id/status secara terpisah kalau perlu.
+router.post('/:id/cod-settle', orderMutationLimiter, async (req, res) => {
+    try {
+        const storeId = req.user.storeId;
+        const { id } = req.params;
+        const order = await prisma.order.findFirst({
+            where: { id, storeId, deletedAt: null },
+        });
+        if (!order) {
+            return res.status(404).json({ error: 'Pesanan tidak ditemukan' });
+        }
+        // Guard: endpoint ini EKSKLUSIF untuk COD.
+        if (order.paymentMethod !== 'cod') {
+            return res.status(400).json({ error: 'cod-settle hanya berlaku untuk pesanan COD' });
+        }
+        // Guard: hanya yang masih unpaid yang boleh diselesaikan.
+        if (order.paymentStatus !== 'unpaid') {
+            return res.status(400).json({ error: 'Pesanan COD sudah diselesaikan (bukan status unpaid)' });
+        }
+        const updated = await prisma.order.update({
+            where: { id },
+            data: {
+                paymentStatus: 'paid',
+                paymentVerifiedAt: new Date(),
+                verifiedByAdminId: req.user.email, // identity settler = email dari auth context
+            },
+        });
+        res.json({ success: true, data: updated });
+    }
+    catch (error) {
+        adapters.logger.error('Failed to settle COD payment', error);
+        res.status(500).json({ error: error?.message || 'Failed to settle COD payment' });
     }
 });
 export default router;
