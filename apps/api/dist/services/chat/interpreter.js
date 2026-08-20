@@ -3,8 +3,17 @@
  * src/services/chat/interpreter.ts
  *
  * Hanya dipanggil jika normalizer + resolver + tier SEMUA miss (Stage 4).
- * SATU panggilan Groq. Config: temp 0.2, jsonMode, maxTokens 250.
+ * SATU panggilan LLM (gateway: Gemini primary). Config: temp 0.2, jsonMode,
+ * maxTokens 1024 (lihat catatan di bawah).
  * I8: max 1 LLM call per message.
+ *
+ * PENTING — maxTokens: 250 terlalu kecil untuk model Gemini yang memancarkan
+ * "thinking"/reasoning tokens (~140 token) di dalam kuota maxOutputTokens.
+ * Sisa token tidak cukup untuk JSON lengkap → respon ter-potong di tengah objek
+ * → JSON.parse gagal → runOneCall return null → conversation.service jatuh ke
+ * dead-end fallback "Maaf kak, saya kurang paham. Bisa diulang?" PADA SETIAP
+ * pesan. Diambil 1024 (selaras dengan GPT_OSS_MAX_TOKENS_FLOOR di groq.adapter)
+ * agar JSON selalu utuh.
  *
  * Legacy buy-signal + context-interpreter logic absorbed into runOneCall —
  * buy_signal + intent + cart_ops in a single Groq call.
@@ -70,12 +79,12 @@ Schema:\n${INTERPRETER_SCHEMA}\n]` +
         try {
             const result = await llmGateway.generate(prompt, {
                 temperature: 0.2,
-                maxTokens: 250,
+                maxTokens: 1024,
                 jsonMode: true,
                 intent: 'conversation-interpreter',
                 conversationId: ctx.conversationId,
             });
-            const parsed = JSON.parse(result.content);
+            const parsed = JSON.parse(extractJson(result.content));
             // Validation
             if (!parsed.intent || typeof parsed.confidence !== 'number') {
                 lastError = new Error(`Invalid schema: ${JSON.stringify(parsed).slice(0, 200)}`);
@@ -182,6 +191,21 @@ export function validateCartOps(cartOps, storeProducts) {
         }
     }
     return { valid, missing };
+}
+/**
+ * extractJson — toleransi JSON yang mungkin dibungkus markdown code fence
+ * (```json ... ```) atau teks pengantar. Kembalikan substring objek JSON
+ * paling luar; jika tidak ada, kembalikan string asli (agar JSON.parse tetap
+ * melempar error yang bisa di-handle retry/validasi di runOneCall).
+ */
+function extractJson(content) {
+    const fenced = content.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    const candidate = fenced ? fenced[1].trim() : content.trim();
+    const start = candidate.indexOf('{');
+    const end = candidate.lastIndexOf('}');
+    if (start !== -1 && end > start)
+        return candidate.slice(start, end + 1);
+    return candidate;
 }
 /**
  * truncateTo2Sentences — memotong teks ke (paling banyak) 2 kalimat pertama.
