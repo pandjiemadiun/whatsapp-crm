@@ -49,6 +49,12 @@ router.get('/', async (req, res) => {
                 shippingMode: store.shippingMode,
                 shippingFlatInCity: store.shippingFlatInCity,
                 shippingFlatOutCity: store.shippingFlatOutCity,
+                originProvinceId: store.originProvinceId,
+                originProvinceName: store.originProvinceName,
+                originCityId: store.originCityId,
+                originCityName: store.originCityName,
+                originSubdistrictId: store.originSubdistrictId,
+                originSubdistrictName: store.originSubdistrictName,
             },
         });
     }
@@ -60,7 +66,7 @@ router.get('/', async (req, res) => {
 router.put('/', async (req, res) => {
     try {
         const storeId = req.user.storeId;
-        const { name, description, businessCategory, address, phoneNumber, timezone, operatingHours, slug } = req.body;
+        const { name, description, businessCategory, address, phoneNumber, timezone, operatingHours, slug, originProvinceId, originProvinceName, originCityId, originCityName, originSubdistrictId, originSubdistrictName, } = req.body;
         const updateData = {};
         if (name !== undefined) {
             if (!name.trim())
@@ -79,6 +85,22 @@ router.put('/', async (req, res) => {
             updateData.timezone = timezone;
         if (operatingHours !== undefined)
             updateData.operatingHours = operatingHours || null;
+        // Origin location (RajaOngkir IDs) — additive, client-supplied as-is.
+        // No server-side hierarchy validation (provinsi↔kota↔kecamatan consistency)
+        // on purpose: the cascading dropdown guarantees consistency client-side,
+        // and over-validating here is scope creep for now.
+        if (originProvinceId !== undefined)
+            updateData.originProvinceId = originProvinceId || null;
+        if (originProvinceName !== undefined)
+            updateData.originProvinceName = originProvinceName || null;
+        if (originCityId !== undefined)
+            updateData.originCityId = originCityId || null;
+        if (originCityName !== undefined)
+            updateData.originCityName = originCityName || null;
+        if (originSubdistrictId !== undefined)
+            updateData.originSubdistrictId = originSubdistrictId || null;
+        if (originSubdistrictName !== undefined)
+            updateData.originSubdistrictName = originSubdistrictName || null;
         // Slug: hanya update bila dikirim berupa value nonempty. Empty/null/undefined
         // → biarkan slug lama (merchant bisa mengupdate field lain tanpa sentuh slug).
         if (slug !== undefined && slug !== null && String(slug).trim() !== '') {
