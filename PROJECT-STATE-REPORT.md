@@ -183,7 +183,7 @@ pelajaran (jangan biarkan pekerjaan besar menggantung uncommitted) tidak hilang.
 | **G2-D** | Conversation State Refactor | `workspace_v2` ✅ (P3) |
 | **G2-E** | Storefront UI/UX | banyak done (PWA deploy `qlobot.web.id`, realtime+push FASE 1-4) |
 | **G2-F** | Checkout/Order/Payment | **SELESAI TOTAL (F1–F6)** — F1 (schema+bugfix) SELESAI, F2 (payment-report/verify) SELESAI, F3 (PWA checkout) SELESAI, F4 (dashboard payment verification UI + `GET /orders/:id/valid-next-states`) SELESAI, F5 (CI coverage audit + golden dataset checkout/payment, mutation-tested) SELESAI, F6 (F6a: paymentRejectReason opsional di payment-verify + UI reject dialog; F6b: endpoint `cod-settle` + halaman dashboard COD terpisah) SELESAI (commit `50d4d25`). F6a/F6b ditemukan sebagai penutup item minor setelah F5 (reject-reason untuk audit + visibilitas COD). COD settlement ke `orderStatus`/fulfillment TETAP DEFERRED (lihat DECISION-COD-SETTLEMENT-DEFERRED.md) |
-| **G2-G** | Realtime + Scale Hardening | socket.io + presence ✅; multi-instance BELUM |
+| **G2-G** | Realtime + Scale Hardening | **AUDIT BASELINE SELESAI** (lihat `AUDIT-BASELINE-G2-G.md`); breakdown sub-fase BELUM diputuskan |
 | **G2-H** | Release Readiness | **BELUM** — gate terakhir |
 
 ---
