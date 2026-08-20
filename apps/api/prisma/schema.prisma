@@ -215,6 +215,12 @@ model Order {
   totalPrice            Float?
   currency              String   @default("IDR")
   orderStatus           String   @default("pending") // draft | waiting_address | waiting_payment | paid | packing | shipped | pending | cancelled | completed | refunded
+  paymentMethod         String?  // 'transfer' | 'qris' | 'cod' (null = not chosen yet / legacy order)
+  paymentStatus         String   @default("unpaid") // 'unpaid' | 'pending_verification' | 'paid' | 'rejected'
+  paymentProofUrl       String?  // upload bukti transfer/qris oleh customer
+  paymentReportedAt     DateTime? // kapan customer melaporkan/submit bukti
+  paymentVerifiedAt     DateTime? // kapan admin memverifikasi → paid
+  verifiedByAdminId     String?  // id admin/user (plain string; no relation — JANGAN buat model baru)
   shippingAddress       String?
   notes                 String?
   extractedAt           DateTime @default(now())

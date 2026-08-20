@@ -246,22 +246,27 @@ export class OrderService {
         }
     }
     /**
-     * Update status pesanan. Jika status 'confirmed', set confirmedAt.
+     * Update status pesanan via state machine otoritatif (order-transition).
+     *
+     * FIX (G2-F1): sebelumnya pakai `prisma.order.update` mentah yang BYPASS
+     * `transitionOrder()` — melanggar invarian single-source-of-truth
+     * (order-transition.ts:8-10). Sekarang delegasi penuh ke transitionOrder
+     * agar validasi ALLOWED_TRANSITIONS + invariant confirmedAt tetap berlaku.
+     * Signature dipertahankan (dipakai oleh test integration).
      */
     async updateOrderStatus(orderId, status) {
         const existing = await this.getOrderById(orderId);
         try {
-            const row = await prisma.order.update({
-                where: { id: orderId },
-                data: {
-                    orderStatus: status,
-                },
-                include: { orderItems: true },
-            });
+            const updated = await transitionOrder(orderId, status, { actor: 'system' });
             adapters.logger.info('Order status updated', { orderId, status, previous: existing.orderStatus });
-            return this.mapOrderWithItems(row);
+            return updated;
         }
         catch (error) {
+            if (error instanceof InvalidOrderTransitionError) {
+                throw new ApiError(ErrorCodes.ERR_VALIDATION, error.message);
+            }
+            if (error instanceof ApiError)
+                throw error;
             adapters.logger.error('Failed to update order status', error, { orderId, status });
             throw new ApiError(ErrorCodes.ERR_DB, 'Failed to update order status');
         }
@@ -400,6 +405,12 @@ export class OrderService {
             totalPrice: raw.totalPrice,
             currency: raw.currency,
             orderStatus: raw.orderStatus,
+            paymentMethod: raw.paymentMethod ?? null,
+            paymentStatus: raw.paymentStatus ?? 'unpaid',
+            paymentProofUrl: raw.paymentProofUrl ?? null,
+            paymentReportedAt: raw.paymentReportedAt ?? null,
+            paymentVerifiedAt: raw.paymentVerifiedAt ?? null,
+            verifiedByAdminId: raw.verifiedByAdminId ?? null,
             shippingAddress: raw.shippingAddress,
             notes: raw.notes,
             confirmedAt: raw.confirmedAt,
