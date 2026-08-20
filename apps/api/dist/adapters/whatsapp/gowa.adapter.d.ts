@@ -1,6 +1,8 @@
 import { IWhatsAppGateway, SendMessageConfig } from '../../services/whatsapp-gateway.interface.js';
 export declare class GOWAAdapter implements IWhatsAppGateway {
     private config;
+    /** Lazy dynamic import container (putus cycle import container↔adapter, FIX-5). */
+    private getAdapters;
     reconfigure(): Promise<void>;
     private ensureConfig;
     isConfigured(): boolean;

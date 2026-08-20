@@ -1,5 +1,4 @@
 import { v2 as cloudinary } from 'cloudinary';
-import { adapters } from '../container.js';
 import { r2Adapter } from './r2.adapter.js';
 import { configService } from '../../business/config.service.js';
 class CloudinaryAdapter {
@@ -48,10 +47,16 @@ class CloudinaryAdapter {
     getProviderName() {
         return 'cloudinary';
     }
+    /** Lazy dynamic import container (putus cycle import container↔adapter, FIX-5). */
+    async getAdapters() {
+        const { adapters } = await import('../container.js');
+        return adapters;
+    }
     async uploadImage(buffer, folder) {
         if (!this.configured) {
             throw new Error('Cloudinary is not configured');
         }
+        const adapters = await this.getAdapters();
         return new Promise((resolve, reject) => {
             const stream = cloudinary.uploader.upload_stream({ folder, resource_type: 'image', transformation: [{ width: 512, height: 512, crop: 'limit', quality: 80 }] }, (error, result) => {
                 if (error || !result) {

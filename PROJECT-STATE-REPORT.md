@@ -2,7 +2,7 @@
 
 > **Dokumen ini dibuat untuk onboarding ke project baru (Claude/AI coding agent).**
 > Semua klaim status di bawah diverifikasi terhadap **source code, test, dan git log aktual**
-> di working tree `/home/ubuntu/garuda` pada **2026-08-19** (HEAD `22caa82`). Tidak ada klaim
+> di working tree `/home/ubuntu/garuda` pada **2026-08-20** (HEAD `ebc4637`). Tidak ada klaim
 > yang diambil mentah dari roadmap/STATUS lama tanpa cross-check ke kode.
 >
 > **ATURAN RAILS.md BERLAKU:** tidak ada kode yang diubah dalam pembuatan dokumen ini
@@ -182,7 +182,7 @@ pelajaran (jangan biarkan pekerjaan besar menggantung uncommitted) tidak hilang.
 | **G2-C** | Commerce Domain Refactor | CartAuthority single cart authority ✅ |
 | **G2-D** | Conversation State Refactor | `workspace_v2` ✅ (P3) |
 | **G2-E** | Storefront UI/UX | banyak done (PWA deploy `qlobot.web.id`, realtime+push FASE 1-4) |
-| **G2-F** | Checkout/Order/Payment | `routes/orders.ts`, `order.service.ts` ada; payment provider BELUM |
+| **G2-F** | Checkout/Order/Payment | **IN PROGRESS** — F1 (schema+bugfix) SELESAI, F2 (payment-report/verify) SELESAI, F3-F5 (PWA/dashboard/golden) belum mulai. Provider = manual transfer/QRIS only, COD settlement DEFERRED (lihat DECISION-COD-SETTLEMENT-DEFERRED.md) |
 | **G2-G** | Realtime + Scale Hardening | socket.io + presence ✅; multi-instance BELUM |
 | **G2-H** | Release Readiness | **BELUM** — gate terakhir |
 
@@ -317,7 +317,7 @@ natural-language via Conversation Engine. Opsi belum diputuskan:
 
 ## 9. CARA VERIFIKASI (untuk siapapun yang lanjutkan)
 
-> Working tree BERSIH (semua ter-commit & ter-push ke `origin/main`, HEAD `c6be2d8`).
+> Working tree BERSIH (semua ter-commit & ter-push ke `origin/main`, HEAD `ebc4637`).
 > Tidak ada lagi peringatan "jangan git reset --hard" karena file menggantung uncommitted.
 
 ### 9.1 Build & typecheck (dari `apps/api`)

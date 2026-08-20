@@ -140,22 +140,75 @@ export class ConversationContextService {
      */
     async appendMessage(conversationId, message) {
         try {
-            const raw = await prisma.conversationContext.findUnique({
-                where: { conversationId },
+            // FIX-4 (III-5): tulis lastMessages via atomicCasMessages (P3.4 pola,
+            // CAS updatedAt + retry) — mencegah last-write-wins race pada RMW
+            // lastMessages (2 turn konkuren 1 conversation).
+            const saved = await this.atomicCasMessages(conversationId, 'appendMessage', async (row) => {
+                const messages = this.parseMessages(row.lastMessages);
+                messages.push(message);
+                const trimmed = messages.slice(-MAX_CONTEXT_MESSAGES);
+                const result = await prisma.conversationContext.updateMany({
+                    where: { conversationId, updatedAt: row.updatedAt },
+                    data: { lastMessages: trimmed },
+                });
+                return { count: result.count, value: trimmed };
             });
-            if (!raw)
-                return;
-            const messages = this.parseMessages(raw.lastMessages);
-            messages.push(message);
-            const trimmed = messages.slice(-MAX_CONTEXT_MESSAGES);
-            await prisma.conversationContext.update({
-                where: { conversationId },
-                data: { lastMessages: trimmed },
-            });
+            if (!saved) {
+                adapters.logger.warn('appendMessage: optimistic lock exhausted, message not appended', { conversationId });
+            }
         }
         catch (error) {
             adapters.logger.error('Failed to append message to context', error, { conversationId });
         }
+    }
+    /**
+     * Atomic CAS untuk kolom `lastMessages` (FIX-4, III-5) — pola SAMA
+     * seperti `atomicCas` (updatedAt compare + updateMany count-check +
+     * retry max `ATOMIC_MAX_ATTEMPTS`). Mencegah last-write-wins race pada
+     * read-modify-write `lastMessages`.
+     */
+    async atomicCasMessages(conversationId, operation, writer) {
+        for (let attempt = 0; attempt <= ATOMIC_MAX_ATTEMPTS; attempt++) {
+            let row;
+            try {
+                row = await prisma.conversationContext.findUnique({
+                    where: { conversationId },
+                    select: { lastMessages: true, updatedAt: true },
+                });
+            }
+            catch (error) {
+                adapters.logger.error('atomicCasMessages read failed', error, { conversationId, operation });
+                return null;
+            }
+            if (!row) {
+                adapters.logger.debug('Context not found, skipping atomic appendMessage', { conversationId, operation });
+                return null;
+            }
+            let outcome;
+            try {
+                outcome = await writer(row);
+            }
+            catch (error) {
+                adapters.logger.error('atomicCasMessages write failed', error, { conversationId, operation });
+                return null;
+            }
+            // count === null → writer memutuskan tidak perlu menulis (terminal)
+            if (outcome.count === null)
+                return outcome.value;
+            // count > 0 → committed
+            if (outcome.count > 0) {
+                adapters.logger.debug('Atomic message append committed', { conversationId, operation, attempt });
+                return outcome.value;
+            }
+            // count === 0 → writer lain menang (updatedAt berubah) → retry
+            if (attempt < ATOMIC_MAX_ATTEMPTS) {
+                const wait = ATOMIC_BACKOFF_MS[attempt] ?? 200;
+                adapters.logger.warn('Optimistic lock conflict (appendMessage), retrying', { conversationId, operation, attempt, wait });
+                await new Promise((r) => setTimeout(r, wait));
+            }
+        }
+        adapters.logger.error('Optimistic lock conflict exhausted retries (appendMessage)', { conversationId, operation });
+        return null;
     }
     /**
      * Perpanjang masa berlaku sesi (default 60 menit lagi).

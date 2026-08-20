@@ -33,6 +33,13 @@ export declare class ConversationContextService {
      */
     appendMessage(conversationId: string, message: ConversationMessage): Promise<void>;
     /**
+     * Atomic CAS untuk kolom `lastMessages` (FIX-4, III-5) — pola SAMA
+     * seperti `atomicCas` (updatedAt compare + updateMany count-check +
+     * retry max `ATOMIC_MAX_ATTEMPTS`). Mencegah last-write-wins race pada
+     * read-modify-write `lastMessages`.
+     */
+    private atomicCasMessages;
+    /**
      * Perpanjang masa berlaku sesi (default 60 menit lagi).
      */
     refreshSession(conversationId: string, sessionExpireMinutes?: number): Promise<void>;

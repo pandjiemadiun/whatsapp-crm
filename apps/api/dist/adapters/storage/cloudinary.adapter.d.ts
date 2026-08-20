@@ -6,6 +6,8 @@ declare class CloudinaryAdapter implements StorageAdapter {
     reconfigure(): Promise<void>;
     isConfigured(): boolean;
     getProviderName(): string;
+    /** Lazy dynamic import container (putus cycle import container↔adapter, FIX-5). */
+    private getAdapters;
     uploadImage(buffer: Buffer, folder: string): Promise<{
         url: string;
     }>;
