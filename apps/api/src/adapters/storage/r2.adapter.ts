@@ -1,7 +1,6 @@
 import { S3Client, PutObjectCommand, DeleteObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import sharp from 'sharp';
-import { adapters } from '../container.js';
 import { configService } from '../../business/config.service.js';
 
 /**
@@ -42,6 +41,12 @@ export class R2Adapter implements StorageAdapter {
     this.configured = false;
     // Sync load from env (fallback) — reconfigureFromConfig() will override from Platform Config
     this.reconfigureFromEnv();
+  }
+
+  /** Lazy dynamic import container (putus cycle import container↔adapter, FIX-5). */
+  private async getAdapters() {
+    const { adapters } = await import('../container.js');
+    return adapters;
   }
 
   /** Sync load from env vars (fallback before dotenv is loaded). */
@@ -96,7 +101,7 @@ export class R2Adapter implements StorageAdapter {
           secretAccessKey: credSecret,
         },
       });
-      adapters.logger.info('[R2] Reconfigured from Platform Config', {
+      (await this.getAdapters()).logger.info('[R2] Reconfigured from Platform Config', {
         accountId: credAccountId.substring(0, 8) + '...',
         bucket: this.bucket,
       });
@@ -160,7 +165,7 @@ export class R2Adapter implements StorageAdapter {
           .webp({ quality: 80 })
           .toBuffer();
       } catch {
-        adapters.logger.warn('R2 sharp processing failed, uploading original', { key });
+        (await this.getAdapters()).logger.warn('R2 sharp processing failed, uploading original', { key });
         processedBuffer = buffer;
       }
 
@@ -179,10 +184,10 @@ export class R2Adapter implements StorageAdapter {
         ? `${this.publicBaseUrl}/${key}`
         : await this.getSignedUrl(key);
 
-      adapters.logger.info('R2 upload success', { key });
+      (await this.getAdapters()).logger.info('R2 upload success', { key });
       return { url };
     } catch (error) {
-      adapters.logger.error('R2 upload failed', error as Error, { key });
+      (await this.getAdapters()).logger.error('R2 upload failed', error as Error, { key });
       throw new Error('Upload gambar gagal');
     }
   }
@@ -193,9 +198,9 @@ export class R2Adapter implements StorageAdapter {
       await this.client.send(
         new DeleteObjectCommand({ Bucket: this.bucket, Key: key })
       );
-      adapters.logger.info('R2 delete success', { key });
+      (await this.getAdapters()).logger.info('R2 delete success', { key });
     } catch (error) {
-      adapters.logger.warn('R2 delete failed', error as Error);
+      (await this.getAdapters()).logger.warn('R2 delete failed', error as Error);
     }
   }
 
