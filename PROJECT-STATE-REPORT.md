@@ -2,7 +2,7 @@
 
 > **Dokumen ini dibuat untuk onboarding ke project baru (Claude/AI coding agent).**
 > Semua klaim status di bawah diverifikasi terhadap **source code, test, dan git log aktual**
-> di working tree `/home/ubuntu/garuda` pada **2026-08-20** (HEAD `ed41e0c`). Tidak ada klaim
+> di working tree `/home/ubuntu/garuda` pada **2026-08-20** (HEAD `e293040`). Tidak ada klaim
 > yang diambil mentah dari roadmap/STATUS lama tanpa cross-check ke kode.
 >
 > **ATURAN RAILS.md BERLAKU:** tidak ada kode yang diubah dalam pembuatan dokumen ini
@@ -182,7 +182,7 @@ pelajaran (jangan biarkan pekerjaan besar menggantung uncommitted) tidak hilang.
 | **G2-C** | Commerce Domain Refactor | CartAuthority single cart authority ✅ |
 | **G2-D** | Conversation State Refactor | `workspace_v2` ✅ (P3) |
 | **G2-E** | Storefront UI/UX | banyak done (PWA deploy `qlobot.web.id`, realtime+push FASE 1-4) |
-| **G2-F** | Checkout/Order/Payment | **SELESAI (F1–F4)** — F1 (schema+bugfix) SELESAI, F2 (payment-report/verify) SELESAI, F3 (PWA checkout) SELESAI, F4 (dashboard payment verification UI + `GET /orders/:id/valid-next-states`) SELESAI. F5 (golden/integration) BELUM. Provider = manual transfer/QRIS only, COD settlement DEFERRED (lihat DECISION-COD-SETTLEMENT-DEFERRED.md) |
+| **G2-F** | Checkout/Order/Payment | **SELESAI (F1–F5)** — F1 (schema+bugfix) SELESAI, F2 (payment-report/verify) SELESAI, F3 (PWA checkout) SELESAI, F4 (dashboard payment verification UI + `GET /orders/:id/valid-next-states`) SELESAI, F5 (CI coverage audit + golden dataset checkout/payment, mutation-tested) SELESAI (commit `e293040`). Provider = manual transfer/QRIS only, COD settlement DEFERRED (lihat DECISION-COD-SETTLEMENT-DEFERRED.md) |
 | **G2-G** | Realtime + Scale Hardening | socket.io + presence ✅; multi-instance BELUM |
 | **G2-H** | Release Readiness | **BELUM** — gate terakhir |
 
@@ -317,7 +317,7 @@ natural-language via Conversation Engine. Opsi belum diputuskan:
 
 ## 9. CARA VERIFIKASI (untuk siapapun yang lanjutkan)
 
-> Working tree BERSIH (semua ter-commit & ter-push ke `origin/main`, HEAD `ed41e0c`).
+> Working tree BERSIH (semua ter-commit & ter-push ke `origin/main`, HEAD `e293040`).
 > Tidak ada lagi peringatan "jangan git reset --hard" karena file menggantung uncommitted.
 
 ### 9.1 Build & typecheck (dari `apps/api`)
@@ -330,9 +330,12 @@ npm run build             # WAJIB — generate dist/
 ### 9.2 Test
 ```bash
 cd /home/ubuntu/garuda/apps/api
-npm run test:chat         # Jest: baseline 1 failed test (reasoning-v2, II-1); full suite 267/267 hijau (engine-config-v2 6/6, §6.5)
-npm run test:golden       # node:test golden-dataset: 23/23 pass
+npm run test:chat         # Jest: 270/270 hijau (baseline 0 failed, reasoning-v2 + engine-config-v2)
+npm run test:golden       # node:test golden-dataset: 26/26 pass
 npm run test:structured   # node:test structured-actions*: 115 tests / 7 suites pass (P8-CI-FIX)
+npm run test:payment      # node:test G2-F suites: 30 tests / 4 files pass (G2-F5, commit `e293040`)
+#   - payment.test.ts (F2, 10) + pwa-checkout.test.ts (F3, 8) + payment-verify-routes.e2e.test.ts (F1/F4, 7)
+#     + golden-payment.e2e.test.ts (G2-F5 golden checkout/payment, 5, mutation-tested)
 ```
 
 ### 9.3 Restart & log (produksi VPS `root@vps3541799`, repo `/home/ubuntu/garuda`)
@@ -420,6 +423,6 @@ BUG-BELUM-DIBERESKAN, RAILS §6) jadi kadaluarsa / kontradiktif. Audit jadi butu
 ---
 
 *Laporan dibuat read-only (tidak ada kode diubah). Semua klaim diverifikasi ke source/test/git
-log working tree `/home/ubuntu/garuda` per 2026-08-20 (HEAD `ed41e0c`). Klaim yang tidak bisa
+log working tree `/home/ubuntu/garuda` per 2026-08-20 (HEAD `e293040`). Klaim yang tidak bisa
 diverifikasi mandiri ditandai [DUGAAN] atau "belum diverifikasi". INSIDEN unreported-work gap
 ada di §10.*
