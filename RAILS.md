@@ -1062,3 +1062,17 @@ dari laporan sesi sebelumnya.
 - Alasan: per-instruction, lanjut G2-F3 (PWA) setelah backlog commit bersih; baseline chat TIDAK
   ditandai RESOLVED (status flaky, investigasi init-order redisAdapter belum dilakukan).
 - Siapa yang setuju: owner (Panji), Claude.
+
+### 20 Agu 2026 — KOREKSI entri di atas (G2-F2-DOCS-CORRECT)
+- **Koreksi hash FIX-5:** entri di atas merujuk FIX-5/III-10 dengan hash `60eb1f3`. Hash
+  tersebut **STALE/dangling** — hash benar di `main` adalah `6385322`
+  (`6385322 refactor(adapters): break container cycle import via dynamic import (FIX-5, III-10)`).
+- **Koreksi kesimpulan II-2 (engine-config-v2):** pernyataan "tidak ada commit terkait / flaky,
+  root cause container.ts:38 TIDAK berubah sejak 7 Agu" adalah **SALAH**. Root cause (cycle import
+  `container.ts`↔3 adapter) SUDAH ditangani FIX-5 (`6385322`, III-10) **SEBELUM** investigasi FIX-B
+  dilakukan. FIX-B kemarin salah scope grep — hanya mengecek `container.ts`, tidak mengecek 3 file
+  adapter (`cloudinary.adapter.ts`, `r2.adapter.ts`, `gowa.adapter.ts`) yang sebenarnya diubah
+  (static `import { adapters }` → dynamic `await import('../container.js')` di dalam `getAdapters()`).
+  Lihat BUG-BELUM-DIBERESKAN.md II-2 (sekarang RESOLVED).
+- **II-1 (reasoning-v2): BELUM dikoreksi status-nya di sini** — status final menunggu hasil
+  investigasi terpisah (G2-F2-DOCS-CORRECT Bagian B). Lihat BUG-BELUM-DIBERESKAN.md II-1.
