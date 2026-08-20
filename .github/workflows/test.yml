@@ -147,3 +147,12 @@ jobs:
       - name: Run test:structured (structured-actions suite)
         working-directory: apps/api
         run: npm run test:structured
+
+      # ── test:payment (node:test) — MUST pass, 0 failure ───────────────────
+      # TASK G2-F5 — payment/checkout/payment-verify suites (G2-F2/F3/F4 + golden
+      # checkout/payment cases) SEBELUMNYA TIDAK ter-cover CI (gap sejak ebc4637/
+      # 16a954b/ed41e0c). Regresi layer payment bisa lolos tanpa terdeteksi
+      # (pola II-6 / actionsRouter lama). Global, FAIL CI jika ada test gagal.
+      - name: Run test:payment (payment/checkout/payment-verify + golden cases)
+        working-directory: apps/api
+        run: npm run test:payment
