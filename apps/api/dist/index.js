@@ -30,6 +30,7 @@ import adminMagicPasteRoutes from './routes/admin/magic-paste.js';
 import adminEngineRoutes from './routes/admin/engine.js';
 import missionControlRouter from './routes/admin/mission-control.js';
 import adminAnalyticsRoutes from './routes/admin/analytics.js';
+import locationRouter from './routes/admin/locations.js';
 import productsRouter from './routes/products.js';
 import storeProductsRouter from './routes/store-products.js';
 import analyticsRouter from './routes/analytics.js';
@@ -39,6 +40,7 @@ import sopRouter from './routes/sop.js';
 import pwaRouter from './routes/pwa.js';
 import actionsRouter from './routes/actions.js';
 import { adminAuthMiddleware } from './middleware/adminAuth.js';
+import { authMiddleware } from './middleware/auth.js';
 import { requireAdminRole } from './middleware/adminAuthGuard.js';
 import { initializeDefaultConfigs } from './bootstrap/initializeConfig.js';
 import { maintenanceModeMiddleware } from './middleware/maintenanceMode.js';
@@ -121,6 +123,10 @@ app.use('/api/admin/magic-paste', adminAuthMiddleware, adminMagicPasteRoutes);
 app.use('/api/admin/engine', adminAuthMiddleware, adminEngineRoutes);
 app.use('/api/admin/mission-control', adminAuthMiddleware, requireAdminRole(['super_admin']), missionControlRouter);
 app.use('/api/admin/metrics', adminAuthMiddleware, systemMetricsRouter);
+app.use('/api/admin/locations', adminAuthMiddleware, locationRouter);
+// Merchant-facing mirror of the location reference endpoints (same router,
+// store-owner auth) for the dashboard's cascading address dropdown.
+app.use('/api/store/locations', authMiddleware, locationRouter);
 app.use('/api/admin', adminProductsRoutes);
 // Store-owner product routes (auth) — mounted BEFORE public catalog
 app.use('/api/products', storeProductsRouter);
