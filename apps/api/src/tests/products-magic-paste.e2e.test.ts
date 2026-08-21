@@ -36,9 +36,20 @@ async function parseJson<T = any>(res: Response): Promise<T> {
   return (await res.json()) as T;
 }
 
-/** Stub LLM agar deterministik — default return object */
-function stubLLM(payload: unknown) {
-  const content = typeof payload === 'string' ? payload : JSON.stringify(payload);
+/** Stub LLM agar deterministik — default return object.
+ *  injectWeight=false untuk simulasi teks tanpa berat (uji needsWeightInput). */
+function stubLLM(payload: unknown, injectWeight = true) {
+  let p = payload;
+  if (
+    injectWeight &&
+    p &&
+    typeof p === 'object' &&
+    !('error' in (p as Record<string, unknown>))
+  ) {
+    const w = (p as Record<string, unknown>).weight;
+    p = { ...(p as Record<string, unknown>), weight: w ?? 250 };
+  }
+  const content = typeof p === 'string' ? p : JSON.stringify(p);
   (adapters.ai as any).generate = async () => ({
     content,
     provider: 'stub',
@@ -145,13 +156,13 @@ test('4. Validation: text > 2000 chars → 400', async () => {
   assert.equal(res.status, 400);
 });
 
-test('5. Validation: storeId not UUID → 400', async () => {
+test('5. Validation: storeId not UUID → 404 (store lookup, schema only enforces min(1))', async () => {
   const res = await jsonFetch('/api/admin/products/magic-paste', {
     method: 'POST',
     headers: { Authorization: `Bearer ${adminToken}` },
     body: JSON.stringify({ storeId: 'not-a-uuid', text: 'Kangkung 5000 stok 100' }),
   });
-  assert.equal(res.status, 400);
+  assert.equal(res.status, 404);
 });
 
 test('6. Store: not exist → 404', async () => {
@@ -510,7 +521,7 @@ test('31. LLM: parse error (malformed JSON) → fallback regex / 400', async () 
   const res = await jsonFetch('/api/admin/products/magic-paste', {
     method: 'POST',
     headers: { Authorization: `Bearer ${adminToken}` },
-    body: JSON.stringify({ storeId, text: 'Tahu 2500 stok 80' }),
+    body: JSON.stringify({ storeId, text: 'Tahu 2500 stok 80 300gr' }),
   });
   assert.ok(res.status === 201 || res.status === 400);
 });
@@ -576,47 +587,54 @@ test('36. Cleanup: semua test products terhapus', async () => {
 // ── Unit test tambahan: regex fallback (tanpa LLM) ──
 test('37. Regex fallback: harga "5 ribu" → 5000', async () => {
   stubLLM('invalid'); // paksa fallback regex
-  const result = await productService.magicPaste(storeId, 'Produk RegEx 5 ribu stok 3');
+  const result = await productService.magicPaste(storeId, 'Produk RegEx 5 ribu stok 3 250gr');
   assert.ok(result.product, 'product harus ter-create (non-preview)');
   assert.equal(result.product!.price, 5000);
   assert.equal(result.product!.stock, 3);
+  assert.equal(result.product!.weight, 250);
 });
 
 test('38. Regex fallback: "1 juta" → 1000000', async () => {
   stubLLM('invalid');
-  const result = await productService.magicPaste(storeId, 'Produk Juta 1 juta');
+  const result = await productService.magicPaste(storeId, 'Produk Juta 1 juta 250gr');
   assert.ok(result.product);
   assert.equal(result.product!.price, 1000000);
+  assert.equal(result.product!.weight, 250);
 });
 
 test('39. Regex fallback: "15rb" menempel tanpa spasi → 15000', async () => {
   stubLLM('invalid');
-  const result = await productService.magicPaste(storeId, 'Beras premium 15rb per kg');
+  const result = await productService.magicPaste(storeId, 'Beras premium 15rb per kg 250gr');
   assert.ok(result.product);
   assert.equal(result.product!.price, 15000);
+  assert.equal(result.product!.weight, 250);
 });
 
 test('40. Regex fallback: "5K" menempel → 5000', async () => {
   stubLLM('invalid');
-  const result = await productService.magicPaste(storeId, 'Produk K 5K');
+  const result = await productService.magicPaste(storeId, 'Produk K 5K 250gr');
   assert.ok(result.product);
   assert.equal(result.product!.price, 5000);
+  assert.equal(result.product!.weight, 250);
 });
 
 test('41. Regex fallback: harga bukan multiplier (5000) tetap benar', async () => {
   stubLLM('invalid');
-  const result = await productService.magicPaste(storeId, 'Kangkung segar 5000 stok 100 ikat, kategori sayuran');
+  const result = await productService.magicPaste(storeId, 'Kangkung segar 5000 stok 100 ikat, kategori sayuran 250gr');
   assert.ok(result.product);
   assert.equal(result.product!.price, 5000);
   assert.equal(result.product!.stock, 100);
+  assert.equal(result.product!.weight, 250);
 });
 
 test('41b. Regex fallback: kuantitas "1kg" tidak tertukar dengan harga (40.000)', async () => {
   stubLLM('invalid');
-  const result = await productService.magicPaste(storeId, 'bawang 1kg 40.000');
+  const result = await productService.magicPaste(storeId, 'bawang 1kg 40.000 250gr');
   assert.ok(result.product);
   assert.equal(result.product!.price, 40000);
   assert.equal(result.product!.name, 'bawang');
+  // ekstrak berat ambil satuan PERTAMA di teks ("1kg" → 1000), bukan "250gr"
+  assert.equal(result.product!.weight, 1000);
 });
 
 test('42. Preview mode: product null, extractedEntities terisi', async () => {
@@ -625,4 +643,47 @@ test('42. Preview mode: product null, extractedEntities terisi', async () => {
   assert.equal(result.product, null);
   assert.equal(result.extractedEntities.name, 'Preview Item');
   assert.equal(result.extractedEntities.price, 5000);
+});
+
+// ─────────────────────────────────────────────────────────────
+// WEIGHT EXTRACTION (Unit 2)
+// ─────────────────────────────────────────────────────────────
+
+test('43. Weight: LLM returns weight → product.weight tersimpan + di extractedEntities', async () => {
+  stubLLM({ name: 'Kaos', price: 75000, stock: 20, categoryName: null, unit: null, description: null, weight: 500, confidence: 0.9 });
+  const res = await jsonFetch('/api/admin/products/magic-paste', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${adminToken}` },
+    body: JSON.stringify({ storeId, text: 'Kaos 75000 stok 20' }),
+  });
+  assert.equal(res.status, 201);
+  const body = await parseJson(res);
+  assert.equal(body.data.product.weight, 500);
+  assert.equal(body.data.extractedEntities.weight, 500);
+  assert.equal(body.data.needsWeightInput, undefined);
+});
+
+test('44. Weight: diekstrak dari teks via regex fallback "200gr"', async () => {
+  stubLLM('invalid'); // paksa fallback regex
+  const result = await productService.magicPaste(storeId, 'Baju olahraga 200gr 50000');
+  assert.ok(result.product);
+  assert.equal(result.product!.weight, 200);
+  assert.equal(result.product!.price, 50000);
+});
+
+test('45. Weight: TIDAK ada di teks → tidak create, needsWeightInput=true (preview)', async () => {
+  // Stub LLM TANPA weight (injectWeight=false) → service harus tolak create.
+  stubLLM({ name: 'Gula', price: 12000, stock: 30, categoryName: null, unit: null, description: null, confidence: 0.9 }, false);
+  const res = await jsonFetch('/api/admin/products/magic-paste', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${adminToken}` },
+    body: JSON.stringify({ storeId, text: 'Gula 12000 stok 30' }),
+  });
+  // Tidak 201 (tidak create), melainkan 200 preview dengan flag.
+  assert.equal(res.status, 200);
+  const body = await parseJson(res);
+  assert.equal(body.data.product, null);
+  assert.equal(body.data.needsWeightInput, true);
+  assert.ok(Array.isArray(body.data.warning));
+  assert.ok(body.data.warning.some((w: string) => /[Bb]erat/.test(w)));
 });
