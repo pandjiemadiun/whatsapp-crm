@@ -19,6 +19,8 @@ export interface ExtractedMagicPasteData {
   categoryHint: string | null;
   /** Skor keyakinan 0.0–1.0 */
   confidence: number;
+  /** true bila berat tidak ditemukan di teks → produk belum bisa dibuat, perlu input manual */
+  needsWeightInput?: boolean;
 }
 
 /**
@@ -40,6 +42,8 @@ export interface MagicPasteResponse {
     };
     extractedEntities: ExtractedMagicPasteData;
     warning: string[] | null;
+    /** true bila berat tidak ada di teks → produk tidak dibuat (perlu input manual) */
+    needsWeightInput?: boolean;
   };
   error?: {
     code?: string;

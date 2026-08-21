@@ -11,6 +11,7 @@ interface ProductForm {
   name: string;
   price: string;
   stock: string;
+  weight: string;
   sku: string;
   description: string;
   categoryId: string;
@@ -39,6 +40,7 @@ export function ProductFormModal({ productId, storeId, initialData, onClose, onS
     name: '',
     price: '',
     stock: '',
+    weight: '',
     sku: '',
     description: '',
     categoryId: '',
@@ -56,6 +58,7 @@ export function ProductFormModal({ productId, storeId, initialData, onClose, onS
         name: initialData?.name || '',
         price: initialData?.price || '',
         stock: initialData?.stock || '',
+        weight: initialData?.weight || '',
         sku: initialData?.sku || '',
         description: initialData?.description || '',
         categoryId: initialData?.categoryId || '',
@@ -95,6 +98,7 @@ export function ProductFormModal({ productId, storeId, initialData, onClose, onS
         name: form.name.trim(),
         price: Number(form.price),
         stock: form.stock ? Number(form.stock) : null,
+        weight: form.weight ? Number(form.weight) : null,
         sku: form.sku.trim() || undefined,
         description: form.description.trim() || undefined,
         categoryId: form.categoryId || undefined,
@@ -173,6 +177,18 @@ export function ProductFormModal({ productId, storeId, initialData, onClose, onS
                 className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
               />
             </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Berat (gram) *</label>
+              <input
+                type="number"
+                min={1}
+                value={form.weight}
+                onChange={(e) => setForm({ ...form, weight: e.target.value })}
+                required
+                placeholder="contoh: 500"
+                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+            </div>
           </div>
 
           <div>
@@ -223,7 +239,7 @@ export function ProductFormModal({ productId, storeId, initialData, onClose, onS
             </button>
             <button
               type="submit"
-              disabled={saving || !form.name || !form.price}
+              disabled={saving || !form.name || !form.price || !form.weight}
               className="flex items-center gap-1 px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:bg-indigo-300 transition"
             >
               {saving ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
