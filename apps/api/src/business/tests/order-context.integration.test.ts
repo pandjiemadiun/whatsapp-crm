@@ -34,7 +34,19 @@ async function cleanup() {
 before(async () => {
   await cleanup();
   const store = await prisma.store.create({
-    data: { id: `${TEST_PREFIX}-store`, name: 'Test Store 1.9.2', email: 'test-1.9.2@garuda.test' },
+    data: {
+      id: `${TEST_PREFIX}-store`,
+      name: 'Test Store 1.9.2',
+      email: 'test-1.9.2@garuda.test',
+      phoneNumber: '+6281200000003',
+      address: 'Jl. Test No. 3',
+      originProvinceId: 'prov-test-3',
+      originProvinceName: 'Jawa Barat',
+      originCityId: 'city-test-3',
+      originCityName: 'Bandung',
+      originSubdistrictId: 'sub-test-3',
+      originSubdistrictName: 'Coblong',
+    },
   });
   storeId = store.id;
 

@@ -11,19 +11,19 @@ model Store {
   id                    String   @id @default(uuid())
   name                  String
   slug                  String?  @unique
-  phoneNumber           String?
+  phoneNumber           String
   profilePhotoUrl       String?
   description           String?
   businessCategory      String?
-  address                String?
+  address                String
   // Merchant origin location (RajaOngkir IDs) for shipping-cost origin.
-  // Additive + nullable — legacy free-text `address` is NOT touched.
-  originProvinceId      String?
-  originProvinceName    String?
-  originCityId          String?
-  originCityName        String?
-  originSubdistrictId   String?
-  originSubdistrictName String?
+  // Wajib diisi saat registrasi toko (NOT NULL).
+  originProvinceId      String
+  originProvinceName    String
+  originCityId          String
+  originCityName        String
+  originSubdistrictId   String
+  originSubdistrictName String
   email                 String?  @unique
   timezone              String   @default("Asia/Jakarta")
   operatingHours        Json?

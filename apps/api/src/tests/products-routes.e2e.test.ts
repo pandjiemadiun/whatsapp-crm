@@ -49,7 +49,19 @@ before(async () => {
 
   // ── Seed data test ──
   const store = await prisma.store.create({
-    data: { id: `${PREFIX}-store`, name: 'E2E Store', email: `${PREFIX}@store.test` },
+    data: {
+      id: `${PREFIX}-store`,
+      name: 'E2E Store',
+      email: `${PREFIX}@store.test`,
+      phoneNumber: '+6281200000006',
+      address: 'Jl. Test No. 6',
+      originProvinceId: 'prov-test-6',
+      originProvinceName: 'Jawa Barat',
+      originCityId: 'city-test-6',
+      originCityName: 'Bandung',
+      originSubdistrictId: 'sub-test-6',
+      originSubdistrictName: 'Coblong',
+    },
   });
   storeId = store.id;
 

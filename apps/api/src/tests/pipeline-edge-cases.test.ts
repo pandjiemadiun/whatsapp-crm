@@ -75,7 +75,18 @@ describe('EDGE CASE 2: Circuit Breaker Reset vs Human Takeover', () => {
     const ec2StoreId = crypto.randomUUID();
     // Buat store dulu (foreign key constraint)
     await prisma.store.create({
-      data: { id: ec2StoreId, name: 'EC2 Test Store' },
+      data: {
+        id: ec2StoreId,
+        name: 'EC2 Test Store',
+        phoneNumber: '+6281200000011',
+        address: 'Jl. Test No. 11',
+        originProvinceId: 'prov-test-11',
+        originProvinceName: 'Jawa Barat',
+        originCityId: 'city-test-11',
+        originCityName: 'Bandung',
+        originSubdistrictId: 'sub-test-11',
+        originSubdistrictName: 'Coblong',
+      },
     });
 
     const TEST_CONV_ID = `${ec2StoreId}:ec2-customer`;

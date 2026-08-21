@@ -66,13 +66,33 @@ before(async () => {
       id: `${TEST_PREFIX}-store`,
       name: 'Test Cart Store',
       email: 'test-cart@garuda.test',
+      phoneNumber: '+6281200000008',
+      address: 'Jl. Test No. 8',
+      originProvinceId: 'prov-test-8',
+      originProvinceName: 'Jawa Barat',
+      originCityId: 'city-test-8',
+      originCityName: 'Bandung',
+      originSubdistrictId: 'sub-test-8',
+      originSubdistrictName: 'Coblong',
     },
   });
   storeId = store.id;
 
   // Create "other store" first (needed for cross-tenant product FK)
   await prisma.store.create({
-    data: { id: `${TEST_PREFIX}-other`, name: 'Other Store', email: 'other@garuda.test' },
+    data: {
+      id: `${TEST_PREFIX}-other`,
+      name: 'Other Store',
+      email: 'other@garuda.test',
+      phoneNumber: '+6281200000009',
+      address: 'Jl. Test No. 9',
+      originProvinceId: 'prov-test-9',
+      originProvinceName: 'Jawa Barat',
+      originCityId: 'city-test-9',
+      originCityName: 'Bandung',
+      originSubdistrictId: 'sub-test-9',
+      originSubdistrictName: 'Coblong',
+    },
   });
 
   // Create test products

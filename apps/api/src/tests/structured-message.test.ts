@@ -152,7 +152,21 @@ test('FASE 2 structured-message', async (t) => {
   await prisma.customer.deleteMany({ where: { webUid: WEB_UID } });
   await prisma.store.deleteMany({ where: { slug: STORE_SLUG } });
 
-  await prisma.store.create({ data: { id: STORE_ID, name: 'Struct Test', slug: STORE_SLUG } });
+  await prisma.store.create({
+    data: {
+      id: STORE_ID,
+      name: 'Struct Test',
+      slug: STORE_SLUG,
+      phoneNumber: '+6281200000007',
+      address: 'Jl. Test No. 7',
+      originProvinceId: 'prov-test-7',
+      originProvinceName: 'Jawa Barat',
+      originCityId: 'city-test-7',
+      originCityName: 'Bandung',
+      originSubdistrictId: 'sub-test-7',
+      originSubdistrictName: 'Coblong',
+    },
+  });
   await prisma.customer.create({ data: { id: CUST_ID, storeId: STORE_ID, webUid: WEB_UID, phone: null } });
   await prisma.conversation.create({
     data: { id: CONV_ID, storeId: STORE_ID, customerId: CUST_ID, channel: 'web', customerPhone: null },

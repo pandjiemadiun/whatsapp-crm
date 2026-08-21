@@ -246,6 +246,13 @@ httpServer.listen(PORT, async () => {
         id: 'store-1',
         name: 'Toko Uji Coba',
         phoneNumber: '+6281234567890',
+        address: process.env.DEFAULT_STORE_ADDRESS || 'Alamat belum diisi',
+        originProvinceId: process.env.DEFAULT_STORE_PROVINCE_ID || '',
+        originProvinceName: process.env.DEFAULT_STORE_PROVINCE_NAME || '',
+        originCityId: process.env.DEFAULT_STORE_CITY_ID || '',
+        originCityName: process.env.DEFAULT_STORE_CITY_NAME || '',
+        originSubdistrictId: process.env.DEFAULT_STORE_SUBDISTRICT_ID || '',
+        originSubdistrictName: process.env.DEFAULT_STORE_SUBDISTRICT_NAME || '',
       },
     });
     const envStoreId = process.env.DEFAULT_STORE_ID;
@@ -257,6 +264,13 @@ httpServer.listen(PORT, async () => {
           id: envStoreId,
           name: process.env.DEFAULT_STORE_NAME || 'Default Store',
           phoneNumber: process.env.DEFAULT_STORE_PHONE || '+6280000000000',
+          address: process.env.DEFAULT_STORE_ADDRESS || 'Alamat belum diisi',
+          originProvinceId: process.env.DEFAULT_STORE_PROVINCE_ID || '',
+          originProvinceName: process.env.DEFAULT_STORE_PROVINCE_NAME || '',
+          originCityId: process.env.DEFAULT_STORE_CITY_ID || '',
+          originCityName: process.env.DEFAULT_STORE_CITY_NAME || '',
+          originSubdistrictId: process.env.DEFAULT_STORE_SUBDISTRICT_ID || '',
+          originSubdistrictName: process.env.DEFAULT_STORE_SUBDISTRICT_NAME || '',
         },
       });
     }
