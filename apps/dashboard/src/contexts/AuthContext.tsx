@@ -22,7 +22,7 @@ interface AuthContextType {
   user: User | null;
   isAuthenticated: boolean;
   login: (email: string, password: string) => Promise<void>;
-  register: (email: string, password: string) => Promise<void>;
+  register: (email: string, password: string, extra?: Record<string, any>) => Promise<void>;
   completeProfile: (data: StoreFormData) => Promise<void>;
   updateUserProfile: (updates: Partial<Pick<User, 'storeName' | 'profilePhotoUrl'>>) => void;
   logout: () => void;
@@ -54,8 +54,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  const register = useCallback(async (email: string, password: string) => {
-    const res = await api.post('/auth/register', { email, password });
+  const register = useCallback(async (email: string, password: string, extra?: Record<string, any>) => {
+    const res = await api.post('/auth/register', { email, password, ...(extra || {}) });
     const data = res.data.data;
     saveUser({
       email,
