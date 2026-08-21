@@ -508,3 +508,98 @@ describe('UNIT4 — POST /select-shipping', () => {
   });
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// UNIT 5 — auto-reset ongkir kalau alamat tujuan (kecamatan) BERUBAH di /checkout.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('UNIT5 — checkout reset ongkir saat destination berubah', () => {
+  const U5 = 'unit5';
+  const SLUG5 = `${U5}-slug`;
+  let orderA: string; // untuk test "beda destination → reset"
+  let orderB: string; // untuk test "sama destination → tidak reset"
+
+  const checkout = (oid: string, destSub: string) =>
+    fetch(`${baseUrl}/api/pwa/${SLUG5}/checkout`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        uid: `${U5}-uid`, orderId: oid, address: 'Jl Test 1', paymentMethod: 'cod',
+        destinationProvinceId: '31', destinationProvinceName: 'DKI Jakarta',
+        destinationCityId: '174', destinationCityName: 'Jakarta Barat',
+        destinationSubdistrictId: destSub, destinationSubdistrictName: 'SUB',
+      }),
+    });
+
+  before(async () => {
+    await prisma.store.upsert({
+      where: { id: `${U5}-store` },
+      update: { slug: SLUG5, isActive: true, acceptsCod: true, originSubdistrictId: 'orig-1' },
+      create: {
+        id: `${U5}-store`, name: 'U5 Store', slug: SLUG5, isActive: true, acceptsCod: true,
+        phoneNumber: '+6281200000096', address: 'Jl U5',
+        originProvinceId: 'p', originProvinceName: 'P', originCityId: 'c', originCityName: 'C',
+        originSubdistrictId: 'orig-1', originSubdistrictName: 'O',
+      },
+    });
+    await prisma.customer.upsert({
+      where: { id: `${U5}-cust` },
+      update: { webUid: `${U5}-uid`, storeId: `${U5}-store` },
+      create: { id: `${U5}-cust`, storeId: `${U5}-store`, webUid: `${U5}-uid`, phone: null },
+    });
+    await prisma.conversation.upsert({
+      where: { id: `${U5}-conv` },
+      update: { storeId: `${U5}-store`, customerId: `${U5}-cust`, channel: 'web' },
+      create: { id: `${U5}-conv`, storeId: `${U5}-store`, customerId: `${U5}-cust`, channel: 'web', status: 'open' },
+    });
+    // Dua order dengan ongkir SUDAH terpilih + destination awal 'dest-1'.
+    const mk = async (id: string) => {
+      const o = await prisma.order.upsert({
+        where: { id },
+        update: {
+          storeId: `${U5}-store`, conversationId: `${U5}-conv`, customerId: `${U5}-cust`,
+          orderStatus: 'draft', paymentStatus: 'unpaid',
+          destinationSubdistrictId: 'dest-1', destinationSubdistrictName: 'SUB1',
+          shippingCost: 25000, selectedCourier: 'jne', selectedService: 'CTC', shippingEtd: '2-3',
+        },
+        create: {
+          id, storeId: `${U5}-store`, conversationId: `${U5}-conv`, customerId: `${U5}-cust`,
+          items: [], orderStatus: 'draft', paymentStatus: 'unpaid',
+          destinationSubdistrictId: 'dest-1', destinationSubdistrictName: 'SUB1',
+          shippingCost: 25000, selectedCourier: 'jne', selectedService: 'CTC', shippingEtd: '2-3',
+        },
+      });
+      return o.id;
+    };
+    orderA = await mk(`${U5}-orderA`);
+    orderB = await mk(`${U5}-orderB`);
+  });
+
+  after(async () => {
+    await prisma.order.deleteMany({ where: { id: { startsWith: U5 } } }).catch(() => {});
+    await prisma.conversation.deleteMany({ where: { id: { startsWith: U5 } } }).catch(() => {});
+    await prisma.customer.deleteMany({ where: { id: { startsWith: U5 } } }).catch(() => {});
+    await prisma.store.deleteMany({ where: { id: `${U5}-store` } }).catch(() => {});
+  });
+
+  test('destination BEDA → shippingCost dkk di-reset ke null', async () => {
+    const res = await checkout(orderA, 'dest-2'); // beda dari dest-1
+    assert.equal(res.status, 200);
+    const saved = await prisma.order.findUnique({ where: { id: orderA } });
+    assert.equal(saved?.shippingCost, null);
+    assert.equal(saved?.selectedCourier, null);
+    assert.equal(saved?.selectedService, null);
+    assert.equal(saved?.shippingEtd, null);
+    assert.equal(saved?.destinationSubdistrictId, 'dest-2');
+  });
+
+  test('destination SAMA persis → shippingCost TIDAK berubah (tetap terisi)', async () => {
+    const before = await prisma.order.findUnique({ where: { id: orderB } });
+    assert.equal(before?.shippingCost, 25000);
+    const res = await checkout(orderB, 'dest-1'); // sama persis
+    assert.equal(res.status, 200);
+    const saved = await prisma.order.findUnique({ where: { id: orderB } });
+    assert.equal(saved?.shippingCost, 25000); // tidak di-reset sia-sia
+    assert.equal(saved?.selectedCourier, 'jne');
+    assert.equal(saved?.destinationSubdistrictId, 'dest-1');
+  });
+});
+

@@ -907,7 +907,15 @@ router.post('/:storeSlug/checkout', async (req: Request, res: Response) => {
         conversationId: session.conversationId,
         deletedAt: null,
       },
-      select: { id: true, orderStatus: true, conversationId: true },
+      select: {
+        id: true,
+        orderStatus: true,
+        conversationId: true,
+        // Diperlukan untuk logika reset otomatis ongkir (UNIT 5): bandingkan
+        // destinationSubdistrictId LAMA vs BARU, dan cek apakah ongkir sudah terpilih.
+        shippingCost: true,
+        destinationSubdistrictId: true,
+      },
     });
     if (!order) return res.status(404).json({ error: 'Order tidak ditemukan' });
 
@@ -915,6 +923,17 @@ router.post('/:storeSlug/checkout', async (req: Request, res: Response) => {
     if (order.orderStatus === 'draft') {
       await cartAuthority.checkout(session.conversationId, session.storeId);
     }
+
+    // Auto-reset ongkir kalau alamat tujuan (kecamatan) BERUBAH.
+    // - oldSub KOSONG -> baru diisi (first-fill) = BUKAN "berubah" → TIDAK reset
+    //   (ongkir belum pernah dipilih saat destination masih kosong).
+    // - oldSub terisi & BEDA dari baru, DAN shippingCost sudah terisi → reset
+    //   (customer wajib pilih ulang kurir sebelum lanjut bayar).
+    const oldSub = order.destinationSubdistrictId ?? null;
+    const newSub = destinationSubdistrictId ?? null;
+    const subdistrictChanged = oldSub != null && oldSub !== newSub;
+    const resetShipping =
+      subdistrictChanged && order.shippingCost != null;
 
     // Set payment method + shipping address (idempotent untuk re-checkout).
     await prisma.order.update({
@@ -928,6 +947,15 @@ router.post('/:storeSlug/checkout', async (req: Request, res: Response) => {
         destinationCityName: destinationCityName ?? undefined,
         destinationSubdistrictId: destinationSubdistrictId ?? undefined,
         destinationSubdistrictName: destinationSubdistrictName ?? undefined,
+        // Reset ongkir ke null bila alamat berubah (dalam update yang SAMA).
+        ...(resetShipping
+          ? {
+              shippingCost: null,
+              selectedCourier: null,
+              selectedService: null,
+              shippingEtd: null,
+            }
+          : {}),
       },
     });
 
