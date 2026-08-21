@@ -53,6 +53,14 @@ before(async () => {
       acceptsTransfer: true,
       acceptsQris: true,
       acceptsCod: true,
+      phoneNumber: '+6281200000010',
+      address: 'Jl. Test No. 10',
+      originProvinceId: 'prov-test-10',
+      originProvinceName: 'Jawa Barat',
+      originCityId: 'city-test-10',
+      originCityName: 'Bandung',
+      originSubdistrictId: 'sub-test-10',
+      originSubdistrictName: 'Coblong',
     },
   });
   storeId = s.id;

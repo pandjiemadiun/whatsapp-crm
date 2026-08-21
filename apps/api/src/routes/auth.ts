@@ -22,6 +22,7 @@ function generateWebhookSecret(): string {
 router.post('/register', validateRequest(storeRegisterSchema, 'body'), storeAuthLimiter, async (req: Request, res: Response) => {
   try {
     const { email, password } = getValidated<{ email: string; password: string }>(req);
+    const reg = req.body as Record<string, any>;
 
     const existing = await prisma.store.findFirst({ where: { email } });
     if (existing) {
@@ -34,7 +35,14 @@ router.post('/register', validateRequest(storeRegisterSchema, 'body'), storeAuth
         id: storeId,
         name: email.split('@')[0],
         email,
-        phoneNumber: null,
+        phoneNumber: reg.phoneNumber ?? '',
+        address: reg.address ?? '',
+        originProvinceId: reg.originProvinceId ?? '',
+        originProvinceName: reg.originProvinceName ?? '',
+        originCityId: reg.originCityId ?? '',
+        originCityName: reg.originCityName ?? '',
+        originSubdistrictId: reg.originSubdistrictId ?? '',
+        originSubdistrictName: reg.originSubdistrictName ?? '',
         webhookSecret: generateWebhookSecret(),
       },
     });
@@ -99,43 +107,32 @@ router.post('/login', validateRequest(storeLoginSchema, 'body'), storeAuthLimite
     }
 
     if (!store) {
-      // Auto-register: create store + set password
-      const storeId = `store-${crypto.randomUUID().slice(0, 8)}`;
-      store = await prisma.store.create({
-        data: {
-          id: storeId,
-          name: email.split('@')[0],
-          email,
-          phoneNumber: null,
-          webhookSecret: generateWebhookSecret(),
-        },
+      // Registrasi terpisah via /register (wajib isi phone + address + lokasi).
+      // Tidak lagi auto-create Store di sini.
+      return res.status(401).json({
+        error: 'Email belum terdaftar. Silakan daftar terlebih dahulu.',
+        code: 'ERR_NOT_REGISTERED',
+        redirect: '/register',
       });
-      await prisma.storeSetting.create({
-        data: {
-          storeId: store.id,
-          key: 'auth_password',
-          value: await hashPassword(password),
-        },
-      });
-    } else {
-      // Verify password (mendukung hash lama SHA-256 + auto-upgrade ke bcrypt)
-      const setting = await prisma.storeSetting.findUnique({
+    }
+
+    // Verify password (mendukung hash lama SHA-256 + auto-upgrade ke bcrypt)
+    const setting = await prisma.storeSetting.findUnique({
+      where: { storeId_key: { storeId: store.id, key: 'auth_password' } },
+    });
+    if (!setting) {
+      return res.status(401).json({ error: 'Invalid email or password' });
+    }
+    const { valid, needsRehash } = await verifyPassword(password, setting.value);
+    if (!valid) {
+      return res.status(401).json({ error: 'Invalid email or password' });
+    }
+    if (needsRehash) {
+      const newHash = await hashPassword(password);
+      await prisma.storeSetting.update({
         where: { storeId_key: { storeId: store.id, key: 'auth_password' } },
+        data: { value: newHash },
       });
-      if (!setting) {
-        return res.status(401).json({ error: 'Invalid email or password' });
-      }
-      const { valid, needsRehash } = await verifyPassword(password, setting.value);
-      if (!valid) {
-        return res.status(401).json({ error: 'Invalid email or password' });
-      }
-      if (needsRehash) {
-        const newHash = await hashPassword(password);
-        await prisma.storeSetting.update({
-          where: { storeId_key: { storeId: store.id, key: 'auth_password' } },
-          data: { value: newHash },
-        });
-      }
     }
 
     const token = crypto.randomUUID();

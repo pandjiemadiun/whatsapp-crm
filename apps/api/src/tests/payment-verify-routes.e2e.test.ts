@@ -56,11 +56,37 @@ before(async () => {
   await cleanup();
 
   const s1 = await prisma.store.create({
-    data: { id: `${PREFIX}-store1`, name: 'G2F4 Store1', email: 'g2f4-1@garuda.test', slug: `${PREFIX}-s1` },
+    data: {
+      id: `${PREFIX}-store1`,
+      name: 'G2F4 Store1',
+      email: 'g2f4-1@garuda.test',
+      slug: `${PREFIX}-s1`,
+      phoneNumber: '+6281200000004',
+      address: 'Jl. Test No. 4',
+      originProvinceId: 'prov-test-4',
+      originProvinceName: 'Jawa Barat',
+      originCityId: 'city-test-4',
+      originCityName: 'Bandung',
+      originSubdistrictId: 'sub-test-4',
+      originSubdistrictName: 'Coblong',
+    },
   });
   storeId = s1.id;
   const s2 = await prisma.store.create({
-    data: { id: `${PREFIX}-store2`, name: 'G2F4 Store2', email: 'g2f4-2@garuda.test', slug: `${PREFIX}-s2` },
+    data: {
+      id: `${PREFIX}-store2`,
+      name: 'G2F4 Store2',
+      email: 'g2f4-2@garuda.test',
+      slug: `${PREFIX}-s2`,
+      phoneNumber: '+6281200000005',
+      address: 'Jl. Test No. 5',
+      originProvinceId: 'prov-test-5',
+      originProvinceName: 'DKI Jakarta',
+      originCityId: 'city-test-5',
+      originCityName: 'Jakarta Selatan',
+      originSubdistrictId: 'sub-test-5',
+      originSubdistrictName: 'Tebet',
+    },
   });
   store2Id = s2.id;
 

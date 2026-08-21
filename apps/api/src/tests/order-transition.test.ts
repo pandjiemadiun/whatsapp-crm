@@ -62,6 +62,14 @@ before(async () => {
       id: `${TEST_PREFIX}-store`,
       name: 'Test Transition Store',
       email: 'test-transition@garuda.test',
+      phoneNumber: '+6281200000012',
+      address: 'Jl. Test No. 12',
+      originProvinceId: 'prov-test-12',
+      originProvinceName: 'Jawa Barat',
+      originCityId: 'city-test-12',
+      originCityName: 'Bandung',
+      originSubdistrictId: 'sub-test-12',
+      originSubdistrictName: 'Coblong',
     },
   });
   storeId = store.id;

@@ -73,21 +73,18 @@ before(async () => {
       slug: PREFIX,
       phoneNumber: '6282147128277',
       isActive: true,
+      address: 'Jl. Contact Test No. 1',
+      originProvinceId: 'prov-contact-1',
+      originProvinceName: 'Jawa Barat',
+      originCityId: 'city-contact-1',
+      originCityName: 'Bandung',
+      originSubdistrictId: 'sub-contact-1',
+      originSubdistrictName: 'Coblong',
     },
   });
 
-  // Store WITHOUT a phoneNumber — contact must be null.
-  await prisma.store.upsert({
-    where: { id: `${PREFIX}-store-nophone` },
-    update: { phoneNumber: null, name: 'No Phone Store', slug: `${PREFIX}-nophone`, isActive: true },
-    create: {
-      id: `${PREFIX}-store-nophone`,
-      name: 'No Phone Store',
-      slug: `${PREFIX}-nophone`,
-      phoneNumber: null,
-      isActive: true,
-    },
-  });
+  // NOTE: phoneNumber is now mandatory (NOT NULL) at registration, so the
+  // "store without phoneNumber" scenario no longer exists by design.
 
   // Also test a number with a leading + (wa.me expects E.164 without +).
   await prisma.store.upsert({
@@ -99,6 +96,13 @@ before(async () => {
       slug: `${PREFIX}-plus`,
       phoneNumber: '+6281234567890',
       isActive: true,
+      address: 'Jl. Contact Test No. 2',
+      originProvinceId: 'prov-contact-2',
+      originProvinceName: 'DKI Jakarta',
+      originCityId: 'city-contact-2',
+      originCityName: 'Jakarta Selatan',
+      originSubdistrictId: 'sub-contact-2',
+      originSubdistrictName: 'Tebet',
     },
   });
 
@@ -148,15 +152,6 @@ describe('G2-B.5 — PWA init contact contract', () => {
     assert.ok(body.data.contact);
     assert.equal(body.data.contact.whatsappUrl, 'https://wa.me/6281234567890');
     assert.equal(body.data.contact.displayName, 'Plus Prefix Store');
-  });
-
-  test('store without phoneNumber returns contact: null', async () => {
-    const res = await fetch(`${baseUrl}/api/pwa/${PREFIX}-nophone/init`);
-    assert.equal(res.status, 200);
-    const body = await res.json();
-    assert.equal(body.data.contact, null, 'contact must be null when store has no phoneNumber');
-    assert.ok(body.data.store, 'store still present');
-    assert.equal(body.data.store.name, 'No Phone Store');
   });
 
   test('no PII / secrets leak — phoneNumber and internal fields excluded', async () => {
