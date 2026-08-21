@@ -19,6 +19,7 @@ import express from 'express';
 import http from 'http';
 import { prisma } from '../infrastructure/prisma.js';
 import pwaRouter from '../routes/pwa.js';
+import { getOrderWeightGrams } from '../services/shipping/order-weight.helper.js';
 
 const PREFIX = 'pwa-checkout-test';
 const SLUG = PREFIX;
@@ -222,5 +223,69 @@ describe('G2-F3 — PWA checkout endpoint', () => {
     assert.ok(Array.isArray(body.data.bankAccounts));
     assert.equal(body.data.bankAccounts.length, 1);
     assert.equal(body.data.bankAccounts[0].bankName, 'BCA');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// UNIT 2 — order-weight.helper: SUM(OrderItem.quantity * Product.weight).
+// ─────────────────────────────────────────────────────────────────────────────
+describe('UNIT2 — getOrderWeightGrams', () => {
+  const W = 'unit2';
+  let orderId: string;
+
+  before(async () => {
+    await prisma.store.upsert({
+      where: { id: `${W}-store` },
+      update: { slug: `${W}-slug`, isActive: true, acceptsCod: true },
+      create: {
+        id: `${W}-store`, name: 'U2 Store', slug: `${W}-slug`, isActive: true,
+        phoneNumber: '+6281200000099', address: 'Jl U2', acceptsCod: true,
+        originProvinceId: 'p', originProvinceName: 'P', originCityId: 'c',
+        originCityName: 'C', originSubdistrictId: 's', originSubdistrictName: 'S',
+      },
+    });
+    await prisma.customer.upsert({
+      where: { id: `${W}-cust` },
+      update: { webUid: `${W}-uid`, storeId: `${W}-store` },
+      create: { id: `${W}-cust`, storeId: `${W}-store`, webUid: `${W}-uid`, phone: null },
+    });
+    await prisma.conversation.upsert({
+      where: { id: `${W}-conv` },
+      update: { storeId: `${W}-store`, customerId: `${W}-cust`, channel: 'web' },
+      create: { id: `${W}-conv`, storeId: `${W}-store`, customerId: `${W}-cust`, channel: 'web', status: 'open' },
+    });
+    const prodA = await prisma.product.create({
+      data: { storeId: `${W}-store`, name: 'A', price: 1000, weight: 250, source: 'api' },
+    });
+    const prodB = await prisma.product.create({
+      data: { storeId: `${W}-store`, name: 'B', price: 2000, weight: 400, source: 'api' },
+    });
+    const order = await prisma.order.create({
+      data: {
+        id: `${W}-order`, storeId: `${W}-store`, conversationId: `${W}-conv`,
+        customerId: `${W}-cust`, items: [], orderStatus: 'draft', paymentStatus: 'unpaid',
+      },
+    });
+    orderId = order.id;
+    await prisma.orderItem.createMany({
+      data: [
+        { orderId, productId: prodA.id, productName: 'A', quantity: 2, unitPrice: 1000, subtotal: 2000 },
+        { orderId, productId: prodB.id, productName: 'B', quantity: 3, unitPrice: 2000, subtotal: 6000 },
+      ],
+    });
+  });
+
+  after(async () => {
+    await prisma.orderItem.deleteMany({ where: { orderId: { startsWith: W } } }).catch(() => {});
+    await prisma.order.deleteMany({ where: { id: { startsWith: W } } }).catch(() => {});
+    await prisma.product.deleteMany({ where: { storeId: `${W}-store` } }).catch(() => {});
+    await prisma.conversation.deleteMany({ where: { id: { startsWith: W } } }).catch(() => {});
+    await prisma.customer.deleteMany({ where: { id: { startsWith: W } } }).catch(() => {});
+    await prisma.store.deleteMany({ where: { id: `${W}-store` } }).catch(() => {});
+  });
+
+  test('2 item berat beda → hasil sum benar (2*250 + 3*400 = 1700g)', async () => {
+    const grams = await getOrderWeightGrams(orderId);
+    assert.equal(grams, 2 * 250 + 3 * 400);
   });
 });
