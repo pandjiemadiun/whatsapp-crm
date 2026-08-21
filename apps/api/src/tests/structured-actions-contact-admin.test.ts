@@ -74,14 +74,40 @@ before(async () => {
   const store = await prisma.store.upsert({
     where: { id: `${TEST_PREFIX}-store` },
     update: {},
-    create: { id: `${TEST_PREFIX}-store`, name: 'CA Store', slug: `${TEST_PREFIX}-store`, email: 'ca@garuda.test' },
+    create: {
+      id: `${TEST_PREFIX}-store`,
+      name: 'CA Store',
+      slug: `${TEST_PREFIX}-store`,
+      email: 'ca@garuda.test',
+      phoneNumber: '+6281200000090',
+      address: 'Jl. CA No. 1',
+      originProvinceId: 'prov-ca-1',
+      originProvinceName: 'Jawa Barat',
+      originCityId: 'city-ca-1',
+      originCityName: 'Bandung',
+      originSubdistrictId: 'sub-ca-1',
+      originSubdistrictName: 'Coblong',
+    },
   });
   storeId = store.id;
 
   const storeOther = await prisma.store.upsert({
     where: { id: `${TEST_PREFIX}-other` },
     update: {},
-    create: { id: `${TEST_PREFIX}-other`, name: 'CA Other', slug: `${TEST_PREFIX}-other`, email: 'cao@garuda.test' },
+    create: {
+      id: `${TEST_PREFIX}-other`,
+      name: 'CA Other',
+      slug: `${TEST_PREFIX}-other`,
+      email: 'cao@garuda.test',
+      phoneNumber: '+6281200000091',
+      address: 'Jl. CA Other No. 1',
+      originProvinceId: 'prov-cao-1',
+      originProvinceName: 'Jawa Barat',
+      originCityId: 'city-cao-1',
+      originCityName: 'Bandung',
+      originSubdistrictId: 'sub-cao-1',
+      originSubdistrictName: 'Coblong',
+    },
   });
   storeIdOther = storeOther.id;
 

@@ -89,6 +89,14 @@ async function setupFixtures() {
       name: 'P2 Catalog Store',
       slug: `${TEST_PREFIX}-store`,
       email: 'p2@garuda.test',
+      phoneNumber: '+6281200000097',
+      address: 'Jl. P2 No. 1',
+      originProvinceId: 'prov-p2-1',
+      originProvinceName: 'Jawa Barat',
+      originCityId: 'city-p2-1',
+      originCityName: 'Bandung',
+      originSubdistrictId: 'sub-p2-1',
+      originSubdistrictName: 'Coblong',
     },
   });
   storeId = store.id;
@@ -101,6 +109,14 @@ async function setupFixtures() {
       name: 'P2 Other Store',
       slug: `${TEST_PREFIX}-other`,
       email: 'p2-other@garuda.test',
+      phoneNumber: '+6281200000098',
+      address: 'Jl. P2 Other No. 1',
+      originProvinceId: 'prov-p2o-1',
+      originProvinceName: 'Jawa Barat',
+      originCityId: 'city-p2o-1',
+      originCityName: 'Bandung',
+      originSubdistrictId: 'sub-p2o-1',
+      originSubdistrictName: 'Coblong',
     },
   });
   storeIdOther = storeOther.id;

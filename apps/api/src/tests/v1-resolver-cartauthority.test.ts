@@ -52,7 +52,18 @@ async function setupStore(): Promise<void> {
   await prisma.store.upsert({
     where: { id: STORE_ID },
     update: { name: 'P9 v1 Resolver Test Store' },
-    create: { id: STORE_ID, name: 'P9 v1 Resolver Test Store' },
+    create: {
+      id: STORE_ID,
+      name: 'P9 v1 Resolver Test Store',
+      phoneNumber: '+6281200000097',
+      address: 'Jl. P9 No. 1',
+      originProvinceId: 'prov-p9-1',
+      originProvinceName: 'Jawa Barat',
+      originCityId: 'city-p9-1',
+      originCityName: 'Bandung',
+      originSubdistrictId: 'sub-p9-1',
+      originSubdistrictName: 'Coblong',
+    },
   });
   for (const p of PRODUCTS) {
     await prisma.product.upsert({

@@ -44,6 +44,14 @@ before(async () => {
       acceptsTransfer: true,
       acceptsQris: true,
       acceptsCod: true,
+      phoneNumber: '+6281200000096',
+      address: 'Jl. Checkout No. 1',
+      originProvinceId: 'prov-checkout-1',
+      originProvinceName: 'Jawa Barat',
+      originCityId: 'city-checkout-1',
+      originCityName: 'Bandung',
+      originSubdistrictId: 'sub-checkout-1',
+      originSubdistrictName: 'Coblong',
     },
   });
 

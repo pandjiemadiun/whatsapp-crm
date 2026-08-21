@@ -63,7 +63,20 @@ async function setupStore(): Promise<void> {
   await prisma.store.upsert({
     where: { id: STORE_ID },
     update: {},
-    create: { id: STORE_ID, name: 'P7 WA Idempotency Store', slug: STORE_ID, email: 'wa-idem@garuda.test' },
+    create: {
+      id: STORE_ID,
+      name: 'P7 WA Idempotency Store',
+      slug: STORE_ID,
+      email: 'wa-idem@garuda.test',
+      phoneNumber: '+6281200000096',
+      address: 'Jl. WA Idem No. 1',
+      originProvinceId: 'prov-wa-1',
+      originProvinceName: 'Jawa Barat',
+      originCityId: 'city-wa-1',
+      originCityName: 'Bandung',
+      originSubdistrictId: 'sub-wa-1',
+      originSubdistrictName: 'Coblong',
+    },
   });
   for (const p of PRODUCTS) {
     await prisma.product.upsert({

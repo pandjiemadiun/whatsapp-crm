@@ -44,7 +44,18 @@ before(async () => {
   await prisma.store.upsert({
     where: { id: STORE_ID },
     update: {},
-    create: { id: STORE_ID, name: 'Analytics Test Store' },
+    create: {
+      id: STORE_ID,
+      name: 'Analytics Test Store',
+      phoneNumber: '+6281200000092',
+      address: 'Jl. Analytics No. 1',
+      originProvinceId: 'prov-analytics-1',
+      originProvinceName: 'Jawa Barat',
+      originCityId: 'city-analytics-1',
+      originCityName: 'Bandung',
+      originSubdistrictId: 'sub-analytics-1',
+      originSubdistrictName: 'Coblong',
+    },
   });
 
   token = `${PREFIX}-token-${Date.now()}`;
