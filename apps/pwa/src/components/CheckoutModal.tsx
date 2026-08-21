@@ -40,6 +40,19 @@ export default function CheckoutModal({
   const [file, setFile] = useState<File | null>(null)
   const [proofUrl, setProofUrl] = useState<string | null>(null)
 
+  // ─── Destination location (cascading province → city → subdistrict) ───
+  // Mirrors dashboard ProfilePage origin cascade, but hits the PUBLIC endpoint
+  // /api/pwa-locations (no merchant auth). Free-text `address` stays for
+  // street/house detail; these selects only resolve the area for shipping cost.
+  const [provinces, setProvinces] = useState<{ id: string; name: string }[]>([])
+  const [cities, setCities] = useState<{ id: string; name: string }[]>([])
+  const [subdistricts, setSubdistricts] = useState<{ id: string; name: string }[]>([])
+  const [dest, setDest] = useState({
+    provinceId: '', provinceName: '',
+    cityId: '', cityName: '',
+    subdistrictId: '', subdistrictName: '',
+  })
+
   // Reset state tiap kali modal dibuka.
   useEffect(() => {
     if (open) {
@@ -51,6 +64,10 @@ export default function CheckoutModal({
       setPaymentInfo(null)
       setFile(null)
       setProofUrl(null)
+      setProvinces([])
+      setCities([])
+      setSubdistricts([])
+      setDest({ provinceId: '', provinceName: '', cityId: '', cityName: '', subdistrictId: '', subdistrictName: '' })
     }
   }, [open])
 
@@ -60,6 +77,46 @@ export default function CheckoutModal({
   if (accepts.transfer) availableMethods.push({ key: 'transfer', label: 'Transfer Bank' })
   if (accepts.qris) availableMethods.push({ key: 'qris', label: 'QRIS' })
   if (accepts.cod) availableMethods.push({ key: 'cod', label: 'Bayar di Tempat (COD)' })
+
+  // Load province list once when the form opens (public /api/pwa-locations).
+  useEffect(() => {
+    if (!open) return
+    api.get('/pwa-locations/provinces')
+      .then((res) => setProvinces(res.data?.data || []))
+      .catch(() => setProvinces([]))
+  }, [open])
+
+  const loadCities = async (provinceId: string) => {
+    if (!provinceId) { setCities([]); setSubdistricts([]); return }
+    try {
+      const res = await api.get(`/pwa-locations/cities?provinceId=${encodeURIComponent(provinceId)}`)
+      setCities(res.data?.data || [])
+    } catch { setCities([]) }
+  }
+  const loadSubdistricts = async (cityId: string) => {
+    if (!cityId) { setSubdistricts([]); return }
+    try {
+      const res = await api.get(`/pwa-locations/subdistricts?cityId=${encodeURIComponent(cityId)}`)
+      setSubdistricts(res.data?.data || [])
+    } catch { setSubdistricts([]) }
+  }
+
+  const onProvinceChange = (id: string) => {
+    const opt = provinces.find((p) => p.id === id)
+    setDest({ provinceId: id, provinceName: opt?.name || '', cityId: '', cityName: '', subdistrictId: '', subdistrictName: '' })
+    setCities([]); setSubdistricts([])
+    loadCities(id)
+  }
+  const onCityChange = (id: string) => {
+    const opt = cities.find((c) => c.id === id)
+    setDest((d) => ({ ...d, cityId: id, cityName: opt?.name || '', subdistrictId: '', subdistrictName: '' }))
+    setSubdistricts([])
+    loadSubdistricts(id)
+  }
+  const onSubdistrictChange = (id: string) => {
+    const opt = subdistricts.find((s) => s.id === id)
+    setDest((d) => ({ ...d, subdistrictId: id, subdistrictName: opt?.name || '' }))
+  }
 
   const submitCheckout = async () => {
     if (!uid) return setError('Sesi pelanggan tidak valid')
@@ -73,6 +130,12 @@ export default function CheckoutModal({
         orderId,
         address: address.trim(),
         paymentMethod: method,
+        destinationProvinceId: dest.provinceId || undefined,
+        destinationProvinceName: dest.provinceName || undefined,
+        destinationCityId: dest.cityId || undefined,
+        destinationCityName: dest.cityName || undefined,
+        destinationSubdistrictId: dest.subdistrictId || undefined,
+        destinationSubdistrictName: dest.subdistrictName || undefined,
       })
       const body = res.data
       if (!body?.success) throw new Error(body?.error || 'Checkout gagal')
@@ -157,6 +220,49 @@ export default function CheckoutModal({
                   onChange={(e) => setAddress(e.target.value)}
                   placeholder="Nama penerima, alamat lengkap, patokan..."
                 />
+              </div>
+
+              <div>
+                <p className="text-xs text-muted-foreground mb-2">
+                  Pilih wilayah tujuan (untuk menghitung ongkir). Alamat di atas tetap diisi untuk detail jalan/nomor rumah.
+                </p>
+                <div className="grid grid-cols-1 gap-2">
+                  <div>
+                    <label className="block text-xs font-medium mb-1">Provinsi</label>
+                    <select
+                      className="w-full border border-border rounded-xl px-3 py-2 text-sm outline-none focus:border-ring"
+                      value={dest.provinceId}
+                      onChange={(e) => onProvinceChange(e.target.value)}
+                    >
+                      <option value="">— Pilih Provinsi —</option>
+                      {provinces.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium mb-1">Kota / Kabupaten</label>
+                    <select
+                      className="w-full border border-border rounded-xl px-3 py-2 text-sm outline-none focus:border-ring disabled:opacity-50"
+                      value={dest.cityId}
+                      onChange={(e) => onCityChange(e.target.value)}
+                      disabled={!dest.provinceId}
+                    >
+                      <option value="">— Pilih Kota —</option>
+                      {cities.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium mb-1">Kecamatan</label>
+                    <select
+                      className="w-full border border-border rounded-xl px-3 py-2 text-sm outline-none focus:border-ring disabled:opacity-50"
+                      value={dest.subdistrictId}
+                      onChange={(e) => onSubdistrictChange(e.target.value)}
+                      disabled={!dest.cityId}
+                    >
+                      <option value="">— Pilih Kecamatan —</option>
+                      {subdistricts.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                    </select>
+                  </div>
+                </div>
               </div>
 
               <div>
