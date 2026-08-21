@@ -96,6 +96,7 @@ export declare class ProductService {
         product: Product | null;
         extractedEntities: Record<string, unknown>;
         warning: string[] | null;
+        needsWeightInput?: boolean;
     }>;
     /**
      * Magic Paste BATCH — proses banyak baris sekaligus (Phase 1.9.7).
@@ -171,6 +172,12 @@ export declare class ProductService {
      */
     private normalizePriceText;
     /**
+     * Ekstrak berat dari teks sumber → gram. HANYA jika ada angka + satuan berat
+     * eksplisit (gr/gram/g/kg/kilogram). kg → ×1000. Jika tidak ada, return null
+     * (JANGAN tebak — berat kosong = butuh input manual, bukan angka palsu).
+     */
+    private extractWeightGrams;
+    /**
      * Fuzzy match nama kategori terhadap kategori aktif milik store.
      * Skor = 1 (exact) · substring match ≥ 0.8 · ratio-based otherwise.
      * Threshold: >= 0.75.
@@ -196,6 +203,8 @@ export interface MagicPasteOverrides {
     name?: string;
     price?: number;
     stock?: number | null;
+    /** Berat (gram) — bisa diisi manual setelah preview needsWeightInput. */
+    weight?: number | null;
 }
 /** Pattern ekstraksi regex yang dikelola admin (Phase 1.9.8) */
 export interface MagicPastePattern {

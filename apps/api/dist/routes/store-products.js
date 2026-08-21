@@ -54,6 +54,7 @@ const magicPasteOwnerSchema = z.object({
         name: z.string().min(1).max(100).optional(),
         price: z.number().int().min(1).optional(),
         stock: z.number().int().min(0).nullable().optional(),
+        weight: z.number().int().min(1).optional(),
     })
         .optional(),
 });
@@ -173,10 +174,15 @@ router.post('/my/magic-paste', validateRequest(magicPasteOwnerSchema, 'body'), a
         const { text, overrides } = getValidated(req);
         const preview = req.query.preview === 'true';
         const result = await productService.magicPaste(storeId, text, { preview, source: 'store', overrides });
-        if (!preview) {
-            adapters.logger.info('Store magic paste completed', { productId: result.product?.id, storeId });
+        if (!preview && result.product) {
+            adapters.logger.info('Store magic paste completed', { productId: result.product.id, storeId });
             return res.status(201).json({ success: true, data: result });
         }
+        // preview mode, ATAU needsWeightInput (tidak ada produk ter-create) → 200
+        adapters.logger.info('Store magic paste no-create (preview / needs-weight)', {
+            storeId,
+            needsWeightInput: !!result.needsWeightInput,
+        });
         return res.status(200).json({ success: true, data: result });
     }
     catch (error) {

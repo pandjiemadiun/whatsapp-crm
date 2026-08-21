@@ -426,6 +426,7 @@ export class ProductService {
     product: Product | null;
     extractedEntities: Record<string, unknown>;
     warning: string[] | null;
+    needsWeightInput?: boolean;
   }> {
     // 1. Validasi store ada
     const store = await prisma.store.findFirst({ where: { id: storeId, deletedAt: null } });
@@ -442,6 +443,7 @@ export class ProductService {
       if (ov.name !== undefined) raw.name = ov.name;
       if (ov.price !== undefined) raw.price = ov.price;
       if (ov.stock !== undefined) raw.stock = ov.stock;
+      if (ov.weight !== undefined) raw.weight = ov.weight;
       adapters.logger.info('Magic paste overrides applied', { storeId, overrides: ov });
     }
 
@@ -563,7 +565,55 @@ export class ProductService {
       };
     }
 
-    // 8b. Generate SKU unik (dengan retry)
+    // 8b. Weight wajib untuk create (schema Product.weight NOT NULL, dan kita TIDAK
+    //     menyimpan angka palsu). Kalau ekstraksi tidak menemukan berat di teks
+    //     sumber → JANGAN insert; kembalikan sebagai preview dengan flag
+    //     needsWeightInput agar UI minta owner isi manual sebelum simpan.
+    if (raw.weight == null || raw.weight <= 0) {
+      const weightWarning = 'Berat (gram) tidak ditemukan di teks — lengkapi manual sebelum simpan';
+      adapters.logger.info('Magic paste needs weight input (no weight in source text)', {
+        storeId,
+        confidence: raw.confidence,
+      });
+      await this.recordMagicPasteRun({
+        storeId,
+        productId: null,
+        textLength: text.length,
+        confidence: raw.confidence ?? 0,
+        status: 'preview',
+        warnings: [...warnings, weightWarning],
+        extractedEntities: {
+          name: raw.name,
+          price: raw.price,
+          stock,
+          weight: null,
+          categoryHint: raw.categoryName ?? null,
+          categoryId,
+          description: raw.description ?? null,
+          unit: raw.unit ?? null,
+          confidence: raw.confidence ?? 0,
+        },
+        source: options.source ?? 'store',
+      });
+      return {
+        product: null,
+        extractedEntities: {
+          name: raw.name,
+          price: raw.price,
+          stock,
+          weight: null,
+          categoryHint: raw.categoryName ?? null,
+          categoryId,
+          description: raw.description ?? null,
+          unit: raw.unit ?? null,
+          confidence: raw.confidence ?? 0,
+        },
+        warning: [...warnings, weightWarning].slice(0, 3),
+        needsWeightInput: true,
+      };
+    }
+
+    // 8c. Generate SKU unik (dengan retry)
     const sku = await this.generateUniqueSKU(storeId);
 
     // 9. Buat produk
@@ -579,6 +629,7 @@ export class ProductService {
           currency: 'IDR',
           sku,
           stock,
+          weight: raw.weight,
           source: 'magic_paste',
         },
       });
@@ -606,6 +657,7 @@ export class ProductService {
         name: raw.name,
         price: raw.price,
         stock,
+        weight: raw.weight,
         categoryHint: raw.categoryName ?? null,
         categoryId,
         description: raw.description ?? null,
@@ -621,6 +673,7 @@ export class ProductService {
         name: raw.name,
         price: raw.price,
         stock,
+        weight: raw.weight,
         categoryHint: raw.categoryName ?? null,
         categoryId,
         description: raw.description ?? null,
@@ -774,6 +827,14 @@ private async extractWithLLM(text: string, storeId?: string): Promise<MagicPaste
       if (parsed.price != null && typeof parsed.price !== 'number') {
         parsed.price = null;
       }
+      // Normalisasi berat (gram). Jika LLM mengembalikan string, parse via regex.
+      // Jika tidak ada / bukan angka valid → null (JANGAN tebak).
+      if (typeof parsed.weight === 'string') {
+        parsed.weight = this.extractWeightGrams(parsed.weight);
+      }
+      if (parsed.weight != null && typeof parsed.weight !== 'number') {
+        parsed.weight = null;
+      }
       return parsed;
     } catch (error) {
       adapters.logger.warn('Magic paste LLM parse failed', { error: (error as Error).message });
@@ -921,6 +982,7 @@ private async extractWithLLM(text: string, storeId?: string): Promise<MagicPaste
           categoryName: null,
           unit: null,
           description: null,
+          weight: this.extractWeightGrams(text),
           confidence: pattern.confidence,
         };
 
@@ -990,6 +1052,9 @@ private async extractWithLLM(text: string, storeId?: string): Promise<MagicPaste
     const catMatch = normalized.match(/kategori\s+([a-z\s]+)/i);
     const categoryName = catMatch ? catMatch[1].trim() : null;
 
+    // Berat (gram) — HANYA jika ada satuan berat eksplisit di teks sumber
+    const weight = this.extractWeightGrams(normalized);
+
     // Harga
     let price: number | null = null;
     if (priceMatch) {
@@ -1004,6 +1069,7 @@ private async extractWithLLM(text: string, storeId?: string): Promise<MagicPaste
       stockUnit,
       categoryName,
       unit: stockUnit,
+      weight,
       description: null,
       priceDisplay: priceMatch ? priceMatch[0].trim() : undefined,
       confidence,
@@ -1033,6 +1099,21 @@ private async extractWithLLM(text: string, storeId?: string): Promise<MagicPaste
     const num = parseInt(s, 10);
     if (Number.isNaN(num)) return null;
     return num * multiplier;
+  }
+
+  /**
+   * Ekstrak berat dari teks sumber → gram. HANYA jika ada angka + satuan berat
+   * eksplisit (gr/gram/g/kg/kilogram). kg → ×1000. Jika tidak ada, return null
+   * (JANGAN tebak — berat kosong = butuh input manual, bukan angka palsu).
+   */
+  private extractWeightGrams(text: string): number | null {
+    if (!text) return null;
+    const m = text.match(/(\d+(?:[.,]\d+)?)\s*(kg|kilogram|gram|grams|gr|g)\b/i);
+    if (!m) return null;
+    const value = parseFloat(m[1].replace(',', '.'));
+    const unit = m[2].toLowerCase();
+    const grams = unit === 'kg' || unit === 'kilogram' ? value * 1000 : value;
+    return Number.isFinite(grams) && grams > 0 ? Math.round(grams) : null;
   }
 
   /**
@@ -1178,6 +1259,8 @@ interface MagicPasteExtraction {
   unit: string | null;
   description: string | null;
   priceDisplay?: string;
+  /** Berat dalam gram. undefined/null = TIDAK disebut di teks sumber (jangan nebak). */
+  weight?: number | null;
   confidence: number | null;
   error?: string;
 }
@@ -1187,6 +1270,8 @@ export interface MagicPasteOverrides {
   name?: string;
   price?: number;
   stock?: number | null;
+  /** Berat (gram) — bisa diisi manual setelah preview needsWeightInput. */
+  weight?: number | null;
 }
 
 /** Pattern ekstraksi regex yang dikelola admin (Phase 1.9.8) */
@@ -1243,10 +1328,17 @@ EXTRACTION RULES:
    - Extract unit of measurement if mentioned
    - Examples: "kg", "ikat", "pcs", "dus", "gram"
 
-6. DESCRIPTION (optional):
+6. WEIGHT (optional but IMPORTANT for shipping):
+   - Extract product weight in GRAMS if explicitly mentioned
+   - Examples: "200gr" → 200, "500 gram" → 500, "1kg" → 1000, "0.5 kg" → 500, "250 g" → 250
+   - Normalize ALL to grams: kg/kilogram = x 1000
+   - ONLY extract if a weight is explicitly stated with a weight unit (gr/gram/g/kg)
+   - If NO weight is mentioned in the text → set to null. NEVER invent or guess a weight.
+
+7. DESCRIPTION (optional):
    - Additional notes or attributes (max 100 chars)
 
-7. CONFIDENCE (required):
+8. CONFIDENCE (required):
    - Score 0-1 for extraction accuracy
    - 0.95-1.0: all fields clear
    - 0.8-0.94: most fields clear, small ambiguity
@@ -1255,7 +1347,7 @@ EXTRACTION RULES:
 
 RESPONSE FORMAT:
 Return ONLY valid JSON (no markdown, no explanation):
-{"name":"string","price":number,"stock":number|null,"categoryName":"string|null","unit":"string|null","description":"string|null","confidence":number}
+{"name":"string","price":number,"stock":number|null,"categoryName":"string|null","unit":"string|null","weight":number|null,"description":"string|null","confidence":number}
 
 ERROR RESPONSE (if cannot extract required fields):
 {"error":"Missing required fields: {field1}, {field2}","confidence":0.0,"rawText":"{original_text}"}`;

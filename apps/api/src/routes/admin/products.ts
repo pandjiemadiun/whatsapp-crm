@@ -83,16 +83,16 @@ router.post(
 
       const result = await productService.magicPaste(storeId, text, { preview, source: 'admin' });
 
-      if (!preview) {
+      if (!preview && result.product) {
         await logAction({
           storeId,
           action: 'product_magic_paste',
           entity: 'Product',
-          entityId: result.product!.id,
+          entityId: result.product.id,
           adminId: req.admin!.adminId,
           changes: {
-            name: result.product!.name,
-            sku: result.product!.sku,
+            name: result.product.name,
+            sku: result.product.sku,
             confidence: result.extractedEntities.confidence,
             warnings: result.warning,
           } as unknown as Prisma.InputJsonValue,
@@ -100,7 +100,7 @@ router.post(
         });
 
         adapters.logger.info('Magic paste completed', {
-          productId: result.product!.id,
+          productId: result.product.id,
           storeId,
           adminId: req.admin!.adminId,
         });
@@ -108,8 +108,12 @@ router.post(
         return res.status(201).json({ success: true, data: result });
       }
 
-      // Preview mode — 200 tanpa create
-      adapters.logger.info('Magic paste preview', { storeId, adminId: req.admin!.adminId });
+      // Preview mode, ATAU needsWeightInput (tidak ada produk ter-create) → 200
+      adapters.logger.info('Magic paste no-create (preview / needs-weight)', {
+        storeId,
+        adminId: req.admin!.adminId,
+        needsWeightInput: !!result.needsWeightInput,
+      });
       return res.status(200).json({ success: true, data: result });
     } catch (error: any) {
       if (error instanceof ApiError) {
