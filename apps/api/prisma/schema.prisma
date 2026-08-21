@@ -231,6 +231,15 @@ model Order {
   verifiedByAdminId     String?  // id admin/user (plain string; no relation — JANGAN buat model baru)
   paymentRejectReason   String?  // alasan TOLAK opsional (nullable; JANGAN wajibkan) untuk histori/audit
   shippingAddress       String?
+  // Destination address (customer shipping target) — additive, optional.
+  // Mirrors Store origin fields for naming consistency. Populated by checkout
+  // cascading dropdown; free-text `shippingAddress` above stays for street/house detail.
+  destinationProvinceId      String?
+  destinationProvinceName    String?
+  destinationCityId          String?
+  destinationCityName        String?
+  destinationSubdistrictId   String?
+  destinationSubdistrictName String?
   notes                 String?
   extractedAt           DateTime @default(now())
   confirmedAt           DateTime?

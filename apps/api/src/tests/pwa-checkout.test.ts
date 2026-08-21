@@ -182,6 +182,25 @@ describe('G2-F3 — PWA checkout endpoint', () => {
     assert.equal(body.data.next, 'upload_proof');
   });
 
+  test('destination fields opsional tersimpan kalau dikirim', async () => {
+    await prisma.order.update({ where: { id: `${PREFIX}-order` }, data: { orderStatus: 'draft', paymentMethod: null, paymentProofUrl: null, paymentStatus: 'unpaid', shippingAddress: null } });
+    const res = await checkout({
+      uid: `${PREFIX}-uid`, orderId: `${PREFIX}-order`, address: 'Jl. Dest 1', paymentMethod: 'cod',
+      destinationProvinceId: '31', destinationProvinceName: 'DKI Jakarta',
+      destinationCityId: '174', destinationCityName: 'Jakarta Barat',
+      destinationSubdistrictId: '17473', destinationSubdistrictName: 'GROGOL',
+    });
+    assert.equal(res.status, 200);
+    const order = await prisma.order.findUnique({ where: { id: `${PREFIX}-order` } });
+    assert.equal(order?.destinationProvinceId, '31');
+    assert.equal(order?.destinationProvinceName, 'DKI Jakarta');
+    assert.equal(order?.destinationCityId, '174');
+    assert.equal(order?.destinationCityName, 'Jakarta Barat');
+    assert.equal(order?.destinationSubdistrictId, '17473');
+    assert.equal(order?.destinationSubdistrictName, 'GROGOL');
+    assert.equal(order?.shippingAddress, 'Jl. Dest 1');
+  });
+
   test('GET /payment-info mengembalikan accepts* + bankAccounts (reuse BankAccount model)', async () => {
     await prisma.bankAccount.create({
       data: { storeId: `${PREFIX}-store`, bankName: 'BCA', accountNumber: '1234567890', accountName: 'Toko Test', isActive: true },
