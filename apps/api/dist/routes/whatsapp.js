@@ -171,7 +171,7 @@ router.post('/reset', async (req, res) => {
         await gowaFetch(cfg, `/devices/${did}`, { method: 'DELETE' }).catch(() => { });
         await prisma.store.update({
             where: { id: storeId },
-            data: { phoneNumber: null, whatsappPhoneId: null },
+            data: { whatsappPhoneId: null },
         });
         adapters.logger.info('GOWA device fully reset', { storeId, deviceId: did });
         res.json({

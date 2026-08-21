@@ -46,6 +46,17 @@ export declare const pwaProductsLimiter: import("express-rate-limit").RateLimitR
  */
 export declare const pwaLocationsLimiter: import("express-rate-limit").RateLimitRequestHandler;
 /**
+ * PWA SHIPPING-OPTIONS LIMITER
+ * Window: 15 minutes, Max 30 requests per IP
+ *
+ * Public, customer-facing shipping-cost quote (RajaOngkir Komerce). Same rationale
+ * as pwaLocationsLimiter: each hit can consume the EXTERNAL daily RajaOngkir
+ * quota (≈100/day, shared across all stores), so this must protect the shared
+ * quota from anonymous abuse — not just our own server load. Tighter than the
+ * general limiter on purpose.
+ */
+export declare const pwaShippingOptionsLimiter: import("express-rate-limit").RateLimitRequestHandler;
+/**
  * WEBHOOK LIMITER
  * Window: 1 minute, Max 100 requests per IP
  * Purpose: Throttle inbound webhook producers (Gowa/Fonnte)

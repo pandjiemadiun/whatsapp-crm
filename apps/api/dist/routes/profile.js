@@ -77,10 +77,16 @@ router.put('/', async (req, res) => {
             updateData.description = description || null;
         if (businessCategory !== undefined)
             updateData.businessCategory = businessCategory || null;
-        if (address !== undefined)
-            updateData.address = address || null;
-        if (phoneNumber !== undefined)
-            updateData.phoneNumber = phoneNumber || null;
+        if (address !== undefined) {
+            if (!address || !address.trim())
+                return res.status(400).json({ error: 'Alamat tidak boleh dikosongkan' });
+            updateData.address = address.trim();
+        }
+        if (phoneNumber !== undefined) {
+            if (!phoneNumber || !String(phoneNumber).trim())
+                return res.status(400).json({ error: 'Nomor HP tidak boleh dikosongkan' });
+            updateData.phoneNumber = String(phoneNumber).trim();
+        }
         if (timezone !== undefined)
             updateData.timezone = timezone;
         if (operatingHours !== undefined)
@@ -89,18 +95,36 @@ router.put('/', async (req, res) => {
         // No server-side hierarchy validation (provinsi↔kota↔kecamatan consistency)
         // on purpose: the cascading dropdown guarantees consistency client-side,
         // and over-validating here is scope creep for now.
-        if (originProvinceId !== undefined)
-            updateData.originProvinceId = originProvinceId || null;
-        if (originProvinceName !== undefined)
-            updateData.originProvinceName = originProvinceName || null;
-        if (originCityId !== undefined)
-            updateData.originCityId = originCityId || null;
-        if (originCityName !== undefined)
-            updateData.originCityName = originCityName || null;
-        if (originSubdistrictId !== undefined)
-            updateData.originSubdistrictId = originSubdistrictId || null;
-        if (originSubdistrictName !== undefined)
-            updateData.originSubdistrictName = originSubdistrictName || null;
+        if (originProvinceId !== undefined) {
+            if (!originProvinceId || !originProvinceId.trim())
+                return res.status(400).json({ error: 'Provinsi tidak boleh dikosongkan' });
+            updateData.originProvinceId = originProvinceId.trim();
+        }
+        if (originProvinceName !== undefined) {
+            if (!originProvinceName || !originProvinceName.trim())
+                return res.status(400).json({ error: 'Nama provinsi tidak boleh dikosongkan' });
+            updateData.originProvinceName = originProvinceName.trim();
+        }
+        if (originCityId !== undefined) {
+            if (!originCityId || !originCityId.trim())
+                return res.status(400).json({ error: 'Kota tidak boleh dikosongkan' });
+            updateData.originCityId = originCityId.trim();
+        }
+        if (originCityName !== undefined) {
+            if (!originCityName || !originCityName.trim())
+                return res.status(400).json({ error: 'Nama kota tidak boleh dikosongkan' });
+            updateData.originCityName = originCityName.trim();
+        }
+        if (originSubdistrictId !== undefined) {
+            if (!originSubdistrictId || !originSubdistrictId.trim())
+                return res.status(400).json({ error: 'Kecamatan tidak boleh dikosongkan' });
+            updateData.originSubdistrictId = originSubdistrictId.trim();
+        }
+        if (originSubdistrictName !== undefined) {
+            if (!originSubdistrictName || !originSubdistrictName.trim())
+                return res.status(400).json({ error: 'Nama kecamatan tidak boleh dikosongkan' });
+            updateData.originSubdistrictName = originSubdistrictName.trim();
+        }
         // Slug: hanya update bila dikirim berupa value nonempty. Empty/null/undefined
         // → biarkan slug lama (merchant bisa mengupdate field lain tanpa sentuh slug).
         if (slug !== undefined && slug !== null && String(slug).trim() !== '') {
