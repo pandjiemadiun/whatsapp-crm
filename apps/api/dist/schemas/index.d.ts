@@ -17,6 +17,14 @@ export type StoreLoginInput = z.infer<typeof storeLoginSchema>;
 export declare const storeRegisterSchema: z.ZodObject<{
     email: z.ZodString;
     password: z.ZodString;
+    phoneNumber: z.ZodString;
+    address: z.ZodString;
+    originProvinceId: z.ZodString;
+    originProvinceName: z.ZodString;
+    originCityId: z.ZodString;
+    originCityName: z.ZodString;
+    originSubdistrictId: z.ZodString;
+    originSubdistrictName: z.ZodString;
 }, z.core.$strip>;
 export type StoreRegisterInput = z.infer<typeof storeRegisterSchema>;
 export declare const queryStoresSchema: z.ZodObject<{

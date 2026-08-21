@@ -187,6 +187,10 @@ export interface OrderWithItems {
     verifiedByAdminId: string | null;
     paymentRejectReason: string | null;
     shippingAddress: string | null;
+    shippingCost?: number | null;
+    selectedCourier?: string | null;
+    selectedService?: string | null;
+    shippingEtd?: string | null;
     notes: string | null;
     confirmedAt: Date | null;
     createdAt: Date;

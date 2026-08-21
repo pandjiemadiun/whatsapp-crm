@@ -18,6 +18,18 @@ export const storeLoginSchema = z.object({
 export const storeRegisterSchema = z.object({
     email: z.string().regex(/^[^\s@]+@[^\s@]+\.[^\s@]+$/, 'Invalid email format'),
     password: z.string().min(6, 'Password must be at least 6 characters'),
+    // Wajib diisi saat daftar toko (NOT NULL di DB).
+    phoneNumber: z
+        .string()
+        .trim()
+        .regex(/^(\+62|0)8[1-9][0-9]{6,11}$/, 'Nomor HP Indonesia tidak valid (contoh: 0812xxxxxxx atau +62812xxxxxxx)'),
+    address: z.string().trim().min(1, 'Alamat wajib diisi').max(500, 'Alamat terlalu panjang'),
+    originProvinceId: z.string().trim().min(1, 'Provinsi wajib dipilih'),
+    originProvinceName: z.string().trim().min(1, 'Nama provinsi wajib diisi'),
+    originCityId: z.string().trim().min(1, 'Kota wajib dipilih'),
+    originCityName: z.string().trim().min(1, 'Nama kota wajib diisi'),
+    originSubdistrictId: z.string().trim().min(1, 'Kecamatan wajib dipilih'),
+    originSubdistrictName: z.string().trim().min(1, 'Nama kecamatan wajib diisi'),
 });
 // ─── STORE SCHEMAS ───
 export const queryStoresSchema = z.object({
