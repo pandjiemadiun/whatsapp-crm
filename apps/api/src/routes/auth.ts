@@ -21,8 +21,29 @@ function generateWebhookSecret(): string {
 // POST /api/auth/register — Register with email + password
 router.post('/register', validateRequest(storeRegisterSchema, 'body'), storeAuthLimiter, async (req: Request, res: Response) => {
   try {
-    const { email, password } = getValidated<{ email: string; password: string }>(req);
-    const reg = req.body as Record<string, any>;
+    const {
+      email,
+      password,
+      phoneNumber,
+      address,
+      originProvinceId,
+      originProvinceName,
+      originCityId,
+      originCityName,
+      originSubdistrictId,
+      originSubdistrictName,
+    } = getValidated<{
+      email: string;
+      password: string;
+      phoneNumber: string;
+      address: string;
+      originProvinceId: string;
+      originProvinceName: string;
+      originCityId: string;
+      originCityName: string;
+      originSubdistrictId: string;
+      originSubdistrictName: string;
+    }>(req);
 
     const existing = await prisma.store.findFirst({ where: { email } });
     if (existing) {
@@ -35,14 +56,14 @@ router.post('/register', validateRequest(storeRegisterSchema, 'body'), storeAuth
         id: storeId,
         name: email.split('@')[0],
         email,
-        phoneNumber: reg.phoneNumber ?? '',
-        address: reg.address ?? '',
-        originProvinceId: reg.originProvinceId ?? '',
-        originProvinceName: reg.originProvinceName ?? '',
-        originCityId: reg.originCityId ?? '',
-        originCityName: reg.originCityName ?? '',
-        originSubdistrictId: reg.originSubdistrictId ?? '',
-        originSubdistrictName: reg.originSubdistrictName ?? '',
+        phoneNumber,
+        address,
+        originProvinceId,
+        originProvinceName,
+        originCityId,
+        originCityName,
+        originSubdistrictId,
+        originSubdistrictName,
         webhookSecret: generateWebhookSecret(),
       },
     });
