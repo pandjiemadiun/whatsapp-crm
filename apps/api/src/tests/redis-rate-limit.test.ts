@@ -28,6 +28,7 @@ import {
   pwaProductsLimiter,
   webhookLimiter,
   orderMutationLimiter,
+  pwaLocationsLimiter,
 } from '../middleware/rate-limiters.js';
 import * as fs from 'node:fs';
 
@@ -172,6 +173,7 @@ describe('Production rate-limiter Redis wiring', () => {
     assert.ok(source.includes("store: new RedisRateLimitStore('rl:pwa-products'"), 'pwaProductsLimiter uses Redis store');
     assert.ok(source.includes("store: new RedisRateLimitStore('rl:webhook'"), 'webhookLimiter uses Redis store');
     assert.ok(source.includes("store: new RedisRateLimitStore('rl:order-mutation'"), 'orderMutationLimiter uses Redis store');
+    assert.ok(source.includes("store: new RedisRateLimitStore('rl:pwa-locations'"), 'pwaLocationsLimiter uses Redis store');
   });
 
   test('runtime: conversationLimiter writes rate-limit state to Redis', async () => {
@@ -222,6 +224,31 @@ describe('Production rate-limiter Redis wiring', () => {
     );
     // All eight limiters must have a store option with RedisRateLimitStore
     const storeCount = (src.match(/store: new RedisRateLimitStore/g) || []).length;
-    assert.equal(storeCount, 8, 'all 8 limiters must use RedisRateLimitStore');
+    assert.equal(storeCount, 9, 'all 9 limiters must use RedisRateLimitStore');
+  });
+
+  test('runtime: pwaLocationsLimiter writes to Redis and blocks after 30 hits', async () => {
+    const testApp = express();
+    testApp.get('/rl-pwa-loc', pwaLocationsLimiter, (_req, res) => res.json({ ok: true }));
+    const server = testApp.listen(0);
+    const port = (server.address() as any).port;
+    const base = `http://127.0.0.1:${port}`;
+    try {
+      await redis.del('rl:pwa-locations:127.0.0.1');
+      await redis.del('rl:pwa-locations:::1');
+      const statuses: number[] = [];
+      for (let i = 0; i < 31; i++) {
+        const r = await fetch(`${base}/rl-pwa-loc`);
+        statuses.push(r.status);
+      }
+      assert.equal(statuses.slice(0, 30).every((s) => s === 200), true, 'first 30 requests pass');
+      assert.equal(statuses[30], 429, '31st request is rate-limited');
+      const keys = await redis.keys('rl:pwa-locations:*');
+      assert.ok(keys.length > 0, 'pwaLocationsLimiter created a Redis key');
+    } finally {
+      await redis.del('rl:pwa-locations:127.0.0.1');
+      await redis.del('rl:pwa-locations:::1');
+      server.close();
+    }
   });
 });

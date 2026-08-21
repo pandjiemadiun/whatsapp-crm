@@ -42,6 +42,7 @@ import actionsRouter from './routes/actions.js';
 import { adminAuthMiddleware } from './middleware/adminAuth.js';
 import { authMiddleware } from './middleware/auth.js';
 import { requireAdminRole } from './middleware/adminAuthGuard.js';
+import { pwaLocationsLimiter } from './middleware/rate-limiters.js';
 import { initializeDefaultConfigs } from './bootstrap/initializeConfig.js';
 import { maintenanceModeMiddleware } from './middleware/maintenanceMode.js';
 import healthRouter from './routes/health.js';
@@ -127,6 +128,10 @@ app.use('/api/admin/locations', adminAuthMiddleware, locationRouter);
 // Merchant-facing mirror of the location reference endpoints (same router,
 // store-owner auth) for the dashboard's cascading address dropdown.
 app.use('/api/store/locations', authMiddleware, locationRouter);
+// Public, customer-facing mirror of the location reference endpoints (same router,
+// NO auth — used by the PWA checkout cascading address dropdown). Rate-limited
+// tightly because each hit also consumes the shared external RajaOngkir quota.
+app.use('/api/pwa-locations', pwaLocationsLimiter, locationRouter);
 app.use('/api/admin', adminProductsRoutes);
 // Store-owner product routes (auth) — mounted BEFORE public catalog
 app.use('/api/products', storeProductsRouter);
