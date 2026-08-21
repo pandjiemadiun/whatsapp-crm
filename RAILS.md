@@ -95,10 +95,34 @@ riwayat chat 9 Agu untuk detail file:line):
 
 ## 3. STATUS TERKINI — RINGKAS (baca ini dulu tiap sesi baru)
 
-**Commit terakhir diketahui:** `ffd00df` (TASK B4.5, final tier P1)
+**Commit terakhir diketahui:** `2e64c0a` (shipping UNIT6 — PWA checkout UI ongkir + receipt)
 **Cek selalu:** `git log --oneline -5` dan `git status` di awal sesi —
 JANGAN percaya angka commit di file ini kalau belum di-cross-check live,
 bisa saja sudah ada sesi lain sesudah file ini terakhir ditulis.
+
+> **Stream kerja sesi 21 Agu 2026 (range `2a93924..2e64c0a`, BELUM dilaporkan
+> real-time — lihat §6 entri "21 Agu 2026" + DOCS-SYNC ini). Tiga stream besar,
+> masing-masing sudah di-commit per-unit (RAILS §1.9) tapi DOKUMEN belum
+> disinkron sampai sekarang:**
+> 1. **Monitoring / observability (G2-G):** `dd20696` (baseline audit G2-G,
+>    `AUDIT-BASELINE-G2-G.md`) + `b18b6d5` (endpoint `GET /api/admin/metrics/system`
+>    — memory/latency/error-rate, in-memory rolling window, single-instance).
+> 2. **Shipping-cost full-stack (RajaOngkir Komerce):** `490e853` (foundation cost
+>    adapter + Redis cache 7d + quota guard) → `3d501dc` (location reference service
+>    provinces/cities/subdistricts, 30d cache) → `a6c62ec`/`d7c57aa` (store origin
+>    location fields + dashboard cascading dropdown) → `1f3452d`/`a2c6665` (migrasi
+>    adapter ke Komerce v2, subdistrict-native) → `270e4ba`/`7130b4a`/`99b119c`
+>    (Product.weight gram NOT NULL + magic-paste + form) → `2f27779`/`3aa78fd`/
+>    `2d9a1a3` (public `/api/pwa-locations` + order destination fields + PWA
+>    cascading dropdown) → `75344b5`..`2e64c0a` (shipping UNIT1–UNIT6: schema +
+>    order-weight helper + `GET /shipping-options` + `POST /select-shipping` +
+>    auto-reset ongkir + PWA checkout UI + receipt).
+> 3. **Store NOT NULL registration (pre-launch hardening):** `03bce76` (schema
+>    phoneNumber/address/origin* NOT NULL) → `a8b3928` (storeRegisterSchema wajib +
+>    handler wiring) → `525e271` (dashboard form registrasi cascading) → `b5f50fc`
+>    (dummy valid store di 13 test upsert) → `d3c7855` (tolak field wajib kosong di
+>    PUT profile, bukan null-write/crash).
+> Detail status teknis lengkap di PROJECT-STATE-REPORT.md §4.4–§4.6.
 
 ### PRINSIP KANAL: WA vs PWA (LOCKED, 19 Agu 2026) — ATURAN MUTLAK SETINGKAT §1
 
@@ -1178,3 +1202,99 @@ dari laporan sesi sebelumnya.
 - **Keputusan:** G2-F5 SELESAI & VERIFIED — tsc 0, test:payment 30/30, full CI sequence hijau,
   mutation ×5 proven. Commit `e293040`. TIDAK ada perubahan logic `payment.service.ts`/
   `order-transition.ts`/`payment-verify` (hanya test + CI).
+
+---
+
+## 6.x LOG POST-HOC — cluster G2-G monitoring + shipping-cost full-stack + Store NOT NULL (DOCS-SYNC 21 Agu 2026)
+
+> **⚠️ PENTING — jangan disamarkan sebagai laporan tepat waktu.** Entri di bawah
+> dicatat RETROAKTIF lewat TASK DOCS-SYNC (21 Agu 2026), BUKAN saat commit
+> aslinya dikerjakan. Commit asli (range `2a93924..2e64c0a`) SUDAH di-push di
+> sesi SEBELUMNYA tanpa bukti RAILS §1.2 real-time — pola SAMA dengan insiden
+> P6 / III-1-B lama. Setiap entri wajib marker:
+> **[LOG POST-HOC — commit asli dikerjakan & di-push tanpa laporan real-time
+> dengan bukti RAILS §1.2, ditutup post-hoc via TASK DOCS-SYNC 21 Agu 2026].**
+> Bukti RAILS §5 (tsc 0 / `npm run build` / test) ada di pesan commit masing-masing;
+> doc ini mensinkronkan STATE, bukan mengulang bukti mentah.
+
+### [POST-HOC] 21 Agu 2026 — G2-G baseline audit + monitoring (system metrics)
+**[LOG POST-HOC — commit asli dikerjakan & di-push tanpa laporan real-time dengan bukti RAILS §1.2, ditutup post-hoc via TASK DOCS-SYNC 21 Agu 2026]**
+- Commit: `dd20696` (`docs: save G2-G realtime/scale baseline audit`) +
+  `b18b6d5` (`feat: basic system metrics endpoint`).
+- Isi: (1) `AUDIT-BASELINE-G2-G.md` — pemetaan kondisi realtime/scale SEKARANG
+  (Socket.IO in-memory adapter, Redis usage, pm2 config, health/monitoring,
+  gap kritis multi-instance). READ-ONLY, belum ada implementasi. (2) Endpoint
+  `GET /api/admin/metrics/system` (di bawah `adminAuthMiddleware`) mengembalikan
+  `memory` (rss/heap/external), `uptime`, `requests` (snapshot rolling window
+  in-memory dari `metrics.middleware.ts`). **Sengaja dipisah dari `/api/health`**
+  (LB probe tetap SELECT 1 ringan). In-memory → **single-instance only**, belum
+  ada agregasi lintas pm2 instance.
+- Keputusan: G2-G RESMI masuk fase "baseline terpetakan", breakdown sub-fase
+  (realtime hardening / scale) BELUM diputuskan. Monitoring dasar tersedia untuk
+  diagnostik manual. Siapa yang setuju: owner (Panji), Claude.
+
+### [POST-HOC] 21 Agu 2026 — Shipping-cost full-stack (RajaOngkir Komerce)
+**[LOG POST-HOC — commit asli dikerjakan & di-push tanpa laporan real-time dengan bukti RAILS §1.2, ditutup post-hoc via TASK DOCS-SYNC 21 Agu 2026]**
+- Range: `490e853`..`2e64c0a` (foundation → UNIT1–UNIT6), dengan dependency
+  `3d501dc`/`a6c62ec`/`d7c57aa`/`1f3452d`/`a2c6665`/`270e4ba`/`7130b4a`/
+  `99b119c`/`2f27779`/`3aa78fd`/`2d9a1a3`.
+- Isi (provider-agnostic, interface di `shipping-cost-provider.interface.ts`):
+  - **Foundation (`490e853`):** `RajaOngkirStarterAdapter` + `CachedShippingCostService`
+    (Redis cache 7d) + quota guard harian. Saat itu BELUM di-wire ke checkout.
+  - **Location reference (`3d501dc`):** `RajaOngkirLocationAdapter` — search
+    province/city/subdistrict via RajaOngkir, 30d cache. Endpoint admin/merchant
+    `.../locations/provinces|/cities|/subdistricts`.
+  - **Store origin (`a6c62ec`/`d7c57aa`):** `Store.originProvinceId/Name`,
+    `originCityId/Name`, `originSubdistrictId/Name` (RajaOngkir IDs); profile
+    GET/PUT extend; dashboard cascading dropdown origin.
+  - **Komerce v2 migration (`1f3452d`/`a2c6665`):** adapter diarahkan ke
+    **RajaOngkir Komerce API** (search-based province/city/subdistrict) + cost
+    adapter migrasi ke **Komerce v2** (subdistrict-native, flat response parser).
+    Ini yang MENGKOREKSI keputusan COD: owner mengevaluasi RajaOngkir sbg
+    kandidat Opsi (B) fulfillment → TERNYATA RajaOngkir = kalkulator ongkir,
+    BUKAN pelacak status kirim (lihat DECISION-COD-SETTLEMENT-DEFERRED.md,
+    bagian "Opsi (B) RESMI DITUTUP", commit `09b257a`).
+  - **Product weight (`270e4ba`/`7130b4a`/`99b119c`):** `Product.weight` (gram,
+    **NOT NULL default 0 placeholder**), API-required untuk produk baru;
+    magic-paste ekstrak weight + flag `needsWeightInput`; dashboard form wajib
+    Berat + warning.
+  - **Public locations + order destination (`2f27779`/`3aa78fd`/`2d9a1a3`):** mount
+    **PUBLIC** `GET /api/pwa-locations/*` (tanpa auth, `pwaLocationsLimiter`
+    30 req/15m untuk lindungi quota harian) + Order destination fields
+    (province/city/subdistrict, nullable, backward-compatible) + PWA checkout
+    cascading dropdown.
+  - **UNIT1–UNIT6 (`75344b5`..`2e64c0a`):** (1) nullable `Order.shippingCost` +
+    `shippingService` (schema+migration+types); (2) `getOrderWeightGrams` read-only
+    helper (sum weight produk × qty) + test; (3) `GET /api/pwa/:slug/shipping-options`
+    read-only + limiter + tests; (4) `POST /api/pwa/:slug/select-shipping`
+    server-recomputed cost (pakai origin store + destination + berat order) + tests;
+    (5) auto-reset ongkir saat destination berubah di checkout + tests; (6) PWA
+    checkout UI cek ongkir + tampil di receipt (kwitansi).
+- Keputusan: shipping-cost SELESAI ter-wiring end-to-end ke checkout PWA
+  (origin store + destination customer + berat order → pilihan kurir → simpan
+  `shippingCost`/`shippingService` di Order). RajaOngkir/Komerce tetap
+  **cost calculator**, BUKAN tracking; Opsi (B) COD ditutup. Risiko disengaja
+  diterima owner: caching hasil cost bisa membawa ban dari RajaOngkir (interface
+  swap-able). Siapa yang setuju: owner (Panji), Claude.
+
+### [POST-HOC] 21 Agu 2026 — Store NOT NULL registration (pre-launch hardening)
+**[LOG POST-HOC — commit asli dikerjakan & di-push tanpa laporan real-time dengan bukti RAILS §1.2, ditutup post-hoc via TASK DOCS-SYNC 21 Agu 2026]**
+- Range: `03bce76` → `a8b3928` → `525e271` → `b5f50fc` → `d3c7855`.
+- Isi: (1) **Schema NOT NULL (`03bce76`):** `Store.phoneNumber`, `address`,
+  `originProvinceId/Name`, `originCityId/Name`, `originSubdistrictId/Name` → NOT
+  NULL. Migration isi placeholder empty-string untuk row dev/test nullable lalu
+  ALTER SET NOT NULL (aman di prod baru = 0 row). (2) **Register schema
+  (`a8b3928`):** `storeRegisterSchema` wajib phoneNumber (format HP ID), address,
+  origin* (string wajib, `.trim()` tolak whitespace-only → 400); `/register`
+  kirim field tervalidasi ke `store.create`; `/login` auto-create dihapus
+  (redirect ke `/register`). (3) **Dashboard form (`525e271`):** `RegisterSaaS.tsx`
+  tambah No. HP + Alamat + 3 dropdown kaskade (fetch `/api/pwa-locations/*`
+  PUBLIC) — tombol Daftar disabled sampai lengkap & valid. (4) **Test data
+  (`b5f50fc`):** 13 file test upsert tambah dummy valid NOT NULL store. (5)
+  **Null-write fix (`d3c7855`):** `PUT /api/auth/profile` + `PUT /api/profile`
+  ganti pola `field = value || null` → kalau field DIKIRIM tapi kosong → 400
+  "tidak boleh dikosongkan"; field TIDAK dikirim (undefined) → skip. Field
+  nullable lain (description, businessCategory) tetap `|| null`.
+- Keputusan: registrasi toko SEKARANG wajib phone+address+lokasi (asal & tujuan
+  checkout), pre-launch data hygiene. Tidak ada customer terdampak (belum rilis).
+  Siapa yang setuju: owner (Panji), Claude.

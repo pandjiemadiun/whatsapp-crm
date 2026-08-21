@@ -1,4 +1,4 @@
-# BUG TERBUKA — indeks temuan belum dibereskan (update 10 Agu 2026 16:45 UTC)
+# BUG TERBUKA — indeks temuan belum dibereskan (update 10 Agu 2026 16:45 UTC; REVISI 21 Agu 2026: +§VI shipping/Store NOT NULL/monitoring)
 
 > Daftar **temuan / bug / risiko yang belum dibereskan** sepanjang sesi
 > (P0–P4). Semua referensi ke `STATUS-V2.md`, `RAILS.md`, atau file:src:line
@@ -113,3 +113,38 @@
 > Catatan: daftar ini **tidak** memasukkan `extractAndSaveOrder` (sudah dibereskan
 > P4.1) ataupun T1–T4 P3 / eskalasi C1 / multi-add FLAGSHIP / truth-boundary P2
 > (semua sudah resolved & ter-commit, lihat STATUS-V2.md).
+
+---
+
+## VI. SESSION 21 AGU 2026 — shipping full-stack / Store NOT NULL / monitoring
+
+> Cluster `2a93924..2e64c0a` dikerjakan & di-push TANPA laporan real-time (insiden
+> DOCS-SYNC, lihat PROJECT-STATE-REPORT §10.2 + RAILS §6.x POST-HOC). Di bawah ini
+> ringkasan bug/finding per kategori. Bukti RAILS §5 ada di pesan commit masing-masing.
+
+### VI-A. RESOLVED (shipping-cost full-stack, RajaOngkir Komerce) — `490e853..2e64c0a`
+- Origin store (`Store.originProvinceId/Name`, `originCityId/Name`, `originSubdistrictId/Name`) + dashboard cascading dropdown ✅.
+- `RajaOngkirLocationAdapter` (province/city/subdistrict, 30d cache) + **PUBLIC** `GET /api/pwa-locations/*` + `pwaLocationsLimiter` (30 req/15m) ✅.
+- `Product.weight` (gram, NOT NULL default 0) + magic-paste + dashboard form wajib Berat ✅.
+- `Order` destination fields (nullable, backward-compatible) + PWA cascading dropdown ✅.
+- UNIT1–UNIT6: `Order.shippingCost`/`shippingService` + `getOrderWeightGrams` + `GET /shipping-options` + `POST /select-shipping` (server-recomputed) + auto-reset ongkir + PWA checkout UI + receipt ✅.
+- **Konteks COD:** ini yang memicu evaluasi RajaOngkir sbg kandidat Opsi (B) fulfillment → TERNYATA kalkulator ongkir, BUKAN tracking → Opsi (B) RESMI DITUTUP (`09b257a`, DECISION-COD-SETTLEMENT-DEFERRED.md).
+
+### VI-B. RESOLVED (Store NOT NULL registration, pre-launch) — `03bce76..d3c7855`
+- `Store.phoneNumber`/`address`/`origin*` NOT NULL (migration isi placeholder, prod baru 0 row) ✅.
+- `storeRegisterSchema` wajib phone (format HP ID)/address/origin* (`.trim()` tolak whitespace → 400); `/login` auto-create dihapus ✅.
+- Dashboard `RegisterSaaS.tsx` wajib No. HP + Alamat + 3 dropdown kaskade ✅.
+- 13 file test `store.upsert` tambah dummy valid NOT NULL store ✅.
+- **Null-write fix (`d3c7855`):** `PUT /api/auth/profile` + `PUT /api/profile` — field wajib DIKIRIM tapi kosong → 400 "tidak boleh dikosongkan"; tidak dikirim (undefined) → skip (bukan `|| null` crash). ✅ RESOLVED.
+
+### VI-C. RESOLVED (monitoring dasar, G2-G) — `dd20696`/`b18b6d5`
+- `AUDIT-BASELINE-G2-G.md` (realtime/scale baseline) ✅.
+- `GET /api/admin/metrics/system` (admin-auth): memory/uptime/requests (in-memory rolling window), dipisah dari `/api/health` ✅.
+
+### VI-D. OPEN / KNOWN (tidak blocking, task terpisah)
+| ID | Item | Severity | Note |
+|----|------|----------|------|
+| VI-1 | **SHIPPING-CI-GAP**: test suite shipping (`shipping*.test.ts`, `order-weight.helper`, `shipping-options`/`select-shipping` e2e) TIDAK ter-cover CI (tidak masuk test:chat/golden/structured/payment). | High (CI gap) | Jalankan manual: `tsx --test --test-force-exit "src/tests/shipping*.test.ts" "src/services/shipping/**/*.test.ts"`. Butuh script `test:shipping` + step CI (pola II-6/II-7). |
+| VI-2 | **Monitoring single-instance**: `/api/admin/metrics/system` in-memory → TIDAK akurat di multi-instance pm2. | Low–Med | Gap diketahui; aman untuk single-instance saat ini. |
+| VI-3 | **RajaOngkir/Komerce dependency risk**: caching hasil cost (Redis 7d) + quota guard — risiko ban disengaja diterima owner; interface swap-able. | Low (owner-accepted) | Tidak ada follow-up wajib. |
+| VI-4 | **DIST dirty (III-1 berulang)**: source cluster `2a93924..2e64c0a` ter-commit tapi `dist/` belum di-rebuild → working tree berisi dist modified. | High (infra, MITIGASI) | Sebelum deploy: `cd apps/api && npm run build` lalu commit `dist/`. |
