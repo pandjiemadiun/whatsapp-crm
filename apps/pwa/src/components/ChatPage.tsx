@@ -9,7 +9,7 @@ import NotificationPrompt from './NotificationPrompt'
 import MessageList from './MessageList'
 import ProductDetailSheet from './ProductDetailSheet'
 import CheckoutModal from './CheckoutModal'
-import type { ChatMessage, ChatProduct, StructuredMessageType, ProductPayload } from '../types/chat'
+import type { ChatMessage, ChatProduct, StructuredMessageType, ProductPayload, CartItem } from '../types/chat'
 
 type Store = {
   name?: string | null
@@ -96,6 +96,8 @@ export default function ChatPage() {
   const [showPWAStatus, setShowPWAStatus] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   const [toastMsg, setToastMsg] = useState<string | null>(null)
+  // G2-F3 / UNIT6: latest cart snapshot (items + total) used by checkout receipt.
+  const [cartSnapshot, setCartSnapshot] = useState<{ items: CartItem[]; total: number | null } | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const installTriggeredRef = useRef(false)
 
@@ -445,6 +447,7 @@ export default function ChatPage() {
         const cart = (data?.result?.cart ?? data?.result) as any
         if (cart?.items) {
           appendAssistant({ type: 'cart', content: 'Isi keranjangmu:', payload: { items: cart.items, total: cart.total ?? null, orderId: cart.orderId } })
+          setCartSnapshot({ items: cart.items as CartItem[], total: (cart.total ?? null) as number | null })
         }
         break
       }
@@ -885,6 +888,8 @@ export default function ChatPage() {
           qris: !!store?.acceptsQris,
           cod: !!store?.acceptsCod,
         }}
+        cartItems={cartSnapshot?.items ?? []}
+        cartSubtotal={cartSnapshot?.total ?? undefined}
         onDone={(msg) => showToast(msg)}
       />
 
