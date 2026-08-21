@@ -144,6 +144,7 @@ export function useMagicPaste() {
         categoryId: data.extractedEntities?.categoryId ?? null,
         categoryHint: data.extractedEntities?.categoryHint ?? null,
         confidence: data.extractedEntities?.confidence ?? 0,
+        needsWeightInput: data.needsWeightInput ?? false,
       };
       setExtracted(extractedData);
       return { success: true, data: extractedData, error: null, timestamp };

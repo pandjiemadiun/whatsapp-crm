@@ -108,6 +108,10 @@ export function MagicPastePanel({ token, onProductCreated }: MagicPastePanelProp
   /** Create produk (dari modal konfirmasi). */
   const handleConfirmCreate = async () => {
     if (!mp.extracted || creating) return;
+    if (mp.extracted.needsWeightInput) {
+      showFeedback('error', 'Berat produk belum diisi — lengkapi berat (gram) sebelum membuat produk.');
+      return;
+    }
     setCreating(true);
     setFeedback(null);
     try {
@@ -257,6 +261,20 @@ export function MagicPastePanel({ token, onProductCreated }: MagicPastePanelProp
           confidence={mp.extracted.confidence}
           hasCategory={!!mp.extracted.categoryId}
         />
+      )}
+
+      {/* Berat belum diisi → produk tidak bisa dibuat, minta input manual */}
+      {mp.extracted?.needsWeightInput && !mp.loading && (
+        <div
+          role="alert"
+          className="mt-4 flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-800"
+        >
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+          <span>
+            Berat produk <strong>belum terdeteksi</strong> dari teks. Isi berat (gram) secara manual
+            lewat form produk sebelum menyimpan — produk tidak dapat dibuat tanpa berat.
+          </span>
+        </div>
       )}
 
       {/* Preview */}
