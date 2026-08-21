@@ -203,6 +203,12 @@ export interface OrderWithItems {
   verifiedByAdminId: string | null;
   paymentRejectReason: string | null;
   shippingAddress: string | null;
+  // Actual shipping cost — ALWAYS server-computed via CachedShippingCostService,
+  // never trusted from a client body (I13 truth boundary).
+  shippingCost?: number | null;
+  selectedCourier?: string | null;
+  selectedService?: string | null;
+  shippingEtd?: string | null;
   notes: string | null;
   confirmedAt: Date | null;
   createdAt: Date;

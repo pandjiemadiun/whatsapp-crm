@@ -74,7 +74,18 @@ before(async () => {
   await prisma.store.upsert({
     where: { id: STORE_ID },
     update: {},
-    create: { id: STORE_ID, name: 'Batch Store' },
+    create: {
+      id: STORE_ID,
+      name: 'Batch Store',
+      phoneNumber: '+6281200000103',
+      address: 'Jl. Batch No. 1',
+      originProvinceId: 'prov-batch-1',
+      originProvinceName: 'Jawa Barat',
+      originCityId: 'city-batch-1',
+      originCityName: 'Bandung',
+      originSubdistrictId: 'sub-batch-1',
+      originSubdistrictName: 'Coblong',
+    },
   });
   token = `${PREFIX}-token-${Date.now()}`;
   const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();

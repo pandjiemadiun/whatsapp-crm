@@ -37,11 +37,37 @@ async function makeOrder(customerId, sId, opts = {}) {
 before(async () => {
     await cleanup();
     const s1 = await prisma.store.create({
-        data: { id: `${PREFIX}-store1`, name: 'G2F2 Store1', email: 'g2f2-1@garuda.test', slug: `${PREFIX}-s1` },
+        data: {
+            id: `${PREFIX}-store1`,
+            name: 'G2F2 Store1',
+            email: 'g2f2-1@garuda.test',
+            slug: `${PREFIX}-s1`,
+            phoneNumber: '+6281200000001',
+            address: 'Jl. Test No. 1',
+            originProvinceId: 'prov-test-1',
+            originProvinceName: 'Jawa Barat',
+            originCityId: 'city-test-1',
+            originCityName: 'Bandung',
+            originSubdistrictId: 'sub-test-1',
+            originSubdistrictName: 'Coblong',
+        },
     });
     storeId = s1.id;
     const s2 = await prisma.store.create({
-        data: { id: `${PREFIX}-store2`, name: 'G2F2 Store2', email: 'g2f2-2@garuda.test', slug: `${PREFIX}-s2` },
+        data: {
+            id: `${PREFIX}-store2`,
+            name: 'G2F2 Store2',
+            email: 'g2f2-2@garuda.test',
+            slug: `${PREFIX}-s2`,
+            phoneNumber: '+6281200000002',
+            address: 'Jl. Test No. 2',
+            originProvinceId: 'prov-test-2',
+            originProvinceName: 'DKI Jakarta',
+            originCityId: 'city-test-2',
+            originCityName: 'Jakarta Selatan',
+            originSubdistrictId: 'sub-test-2',
+            originSubdistrictName: 'Tebet',
+        },
     });
     store2Id = s2.id;
     const cat = await prisma.productCategory.create({ data: { storeId, name: 'Minuman', displayOrder: 1 } });

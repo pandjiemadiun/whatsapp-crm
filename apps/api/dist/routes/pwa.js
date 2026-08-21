@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import multer from 'multer';
 import { prisma } from '../infrastructure/prisma.js';
-import { conversationLimiter, pwaInitLimiter, pwaProductsLimiter } from '../middleware/rate-limiters.js';
+import { conversationLimiter, pwaInitLimiter, pwaProductsLimiter, pwaShippingOptionsLimiter, } from '../middleware/rate-limiters.js';
 import { adapters } from '../adapters/container.js';
 import { conversationDeliveryService } from '../services/conversation-delivery.service.js';
 import { eventBus } from '../services/event-bus.service.js';
@@ -12,6 +12,9 @@ import { ErrorCodes } from '../constants/errorCodes.js';
 import { ResponseSource } from '../domain/types.js';
 import { executeHandoff } from '../services/handoff.service.js';
 import { paymentService } from '../business/payment.service.js';
+import { cachedShippingCostService } from '../services/shipping/cached-shipping-cost.service.js';
+import { getOrderWeightGrams } from '../services/shipping/order-weight.helper.js';
+import { RAJAONGKIR_STARTER_COURIERS } from '../services/shipping/rajaongkir.adapter.js';
 const router = Router();
 /**
  * Web Adapter (P-PWA.8) — endpoint publik untuk PWA Web Customer.
@@ -580,6 +583,14 @@ router.post('/:storeSlug/unsubscribe', async (req, res) => {
         res.status(500).json({ error: 'Failed to clear subscription' });
     }
 });
+// Test seam: override the shipping-cost service (e.g. with a stub) so the
+// shipping endpoints can be exercised without hitting the real RajaOngkir API
+// or consuming the daily quota. Defaults to the production cached service;
+// only replaced by tests via __setShippingServiceForTest.
+let _shippingService = cachedShippingCostService;
+export function __setShippingServiceForTest(svc) {
+    _shippingService = svc;
+}
 async function resolveWebSession(storeSlug, uid, convId) {
     const store = await prisma.store.findUnique({
         where: { slug: storeSlug, deletedAt: null },
@@ -784,7 +795,15 @@ router.post('/:storeSlug/checkout', async (req, res) => {
                 conversationId: session.conversationId,
                 deletedAt: null,
             },
-            select: { id: true, orderStatus: true, conversationId: true },
+            select: {
+                id: true,
+                orderStatus: true,
+                conversationId: true,
+                // Diperlukan untuk logika reset otomatis ongkir (UNIT 5): bandingkan
+                // destinationSubdistrictId LAMA vs BARU, dan cek apakah ongkir sudah terpilih.
+                shippingCost: true,
+                destinationSubdistrictId: true,
+            },
         });
         if (!order)
             return res.status(404).json({ error: 'Order tidak ditemukan' });
@@ -792,6 +811,15 @@ router.post('/:storeSlug/checkout', async (req, res) => {
         if (order.orderStatus === 'draft') {
             await cartAuthority.checkout(session.conversationId, session.storeId);
         }
+        // Auto-reset ongkir kalau alamat tujuan (kecamatan) BERUBAH.
+        // - oldSub KOSONG -> baru diisi (first-fill) = BUKAN "berubah" → TIDAK reset
+        //   (ongkir belum pernah dipilih saat destination masih kosong).
+        // - oldSub terisi & BEDA dari baru, DAN shippingCost sudah terisi → reset
+        //   (customer wajib pilih ulang kurir sebelum lanjut bayar).
+        const oldSub = order.destinationSubdistrictId ?? null;
+        const newSub = destinationSubdistrictId ?? null;
+        const subdistrictChanged = oldSub != null && oldSub !== newSub;
+        const resetShipping = subdistrictChanged && order.shippingCost != null;
         // Set payment method + shipping address (idempotent untuk re-checkout).
         await prisma.order.update({
             where: { id: order.id },
@@ -804,6 +832,15 @@ router.post('/:storeSlug/checkout', async (req, res) => {
                 destinationCityName: destinationCityName ?? undefined,
                 destinationSubdistrictId: destinationSubdistrictId ?? undefined,
                 destinationSubdistrictName: destinationSubdistrictName ?? undefined,
+                // Reset ongkir ke null bila alamat berubah (dalam update yang SAMA).
+                ...(resetShipping
+                    ? {
+                        shippingCost: null,
+                        selectedCourier: null,
+                        selectedService: null,
+                        shippingEtd: null,
+                    }
+                    : {}),
             },
         });
         if (paymentMethod === 'cod') {
@@ -830,6 +867,236 @@ router.post('/:storeSlug/checkout', async (req, res) => {
             return res.status(err.statusCode || 500).json({ error: err.message });
         adapters.logger.error('PWA checkout error', err);
         res.status(500).json({ error: 'Failed to checkout' });
+    }
+});
+// GET /api/pwa/:storeSlug/shipping-options — daftar opsi ongkir (READ-ONLY, TIDAK mutasi Order).
+// Query: ?uid=&orderId=. Baliknya pakai CachedShippingCostService (cache + quota-guard),
+// dihitung ulang server-side — TIDAK PERNAH percaya `cost` dari client (I13 truth boundary).
+// Limiter 30/15m/IP (pola pwaLocationsLimiter) karena baliknya konsumsi quota RajaOngkir eksternal.
+router.get('/:storeSlug/shipping-options', pwaShippingOptionsLimiter, async (req, res) => {
+    try {
+        const { storeSlug } = req.params;
+        const uid = req.query.uid || undefined;
+        const orderId = req.query.orderId || undefined;
+        if (!uid || !orderId) {
+            return res.status(400).json({ error: 'uid dan orderId wajib' });
+        }
+        // Resolve session + ownership (storeId + conversationId) — pola sama /checkout.
+        const session = await resolveWebSession(storeSlug, uid);
+        if (!session) {
+            const store = await prisma.store.findUnique({
+                where: { slug: storeSlug, deletedAt: null },
+                select: { id: true },
+            });
+            if (!store)
+                return res.status(404).json({ error: 'Store not found' });
+            return res.status(401).json({ error: 'Unauthorized customer' });
+        }
+        const order = await prisma.order.findFirst({
+            where: {
+                id: orderId,
+                storeId: session.storeId,
+                conversationId: session.conversationId,
+                deletedAt: null,
+            },
+            select: {
+                id: true,
+                destinationSubdistrictId: true,
+                shippingCost: true,
+                selectedCourier: true,
+                selectedService: true,
+                shippingEtd: true,
+            },
+        });
+        if (!order)
+            return res.status(404).json({ error: 'Order tidak ditemukan' });
+        // Validasi 1: alamat tujuan (kecamatan) wajib — JANGAN tebak/default.
+        if (!order.destinationSubdistrictId) {
+            return res.status(400).json({ error: 'Pilih alamat tujuan (kecamatan) terlebih dahulu' });
+        }
+        // Validasi 2: lokasi asal toko — defensive (NOT NULL sejak registrasi, seharusnya
+        // tidak pernah kosong untuk toko baru; jangan crash kalau somehow terjadi).
+        const store = await prisma.store.findUnique({
+            where: { id: session.storeId },
+            select: { originSubdistrictId: true },
+        });
+        if (!store?.originSubdistrictId) {
+            return res.status(400).json({ error: 'Toko belum mengatur lokasi asal pengiriman' });
+        }
+        // Validasi 3: keranjang tidak kosong (berat 0 = tidak ada OrderItem).
+        const weightGrams = await getOrderWeightGrams(order.id);
+        if (weightGrams <= 0) {
+            return res.status(400).json({ error: 'Keranjang kosong, tidak bisa menghitung ongkir' });
+        }
+        // Hitung ongkir via CachedShippingCostService untuk SETIAP kurir di allowlist Starter
+        // (REUSE RAJAONGKIR_STARTER_COURIERS — JANGAN hardcode ulang daftar kurir).
+        const options = [];
+        const failedCouriers = [];
+        let allQuotaExceeded = true;
+        let anySuccess = false;
+        for (const courier of RAJAONGKIR_STARTER_COURIERS) {
+            const result = await _shippingService.getCost(store.originSubdistrictId, order.destinationSubdistrictId, weightGrams, courier);
+            if (result === 'QUOTA_EXCEEDED') {
+                failedCouriers.push(courier);
+                continue;
+            }
+            if (result === 'PROVIDER_ERROR' || result === 'INVALID_LOCATION' || !Array.isArray(result)) {
+                // Error individual (bukan quota) — jangan gagalkan semua respons.
+                failedCouriers.push(courier);
+                allQuotaExceeded = false;
+                continue;
+            }
+            anySuccess = true;
+            allQuotaExceeded = false;
+            for (const svc of result) {
+                options.push({ courier: svc.courier, service: svc.service, cost: svc.cost, etd: svc.etd });
+            }
+        }
+        if (!anySuccess) {
+            if (allQuotaExceeded) {
+                // SEMUA kurir quota exceeded → pesan EKSPLISIT, BEDA dari "tidak ada kurir".
+                return res.status(200).json({
+                    success: false,
+                    error: 'QUOTA_EXCEEDED',
+                    message: 'Kuota pencarian ongkir harian habis. Coba lagi nanti atau hubungi toko.',
+                });
+            }
+            // Semua kurir error individu (bukan quota) → tidak bisa tampilkan opsi.
+            adapters.logger.error('PWA shipping-options: all couriers failed', { failedCouriers });
+            return res.status(200).json({
+                success: false,
+                error: 'PROVIDER_ERROR',
+                message: 'Gagal mengambil ongkir dari kurir. Coba lagi nanti.',
+            });
+        }
+        if (failedCouriers.length > 0) {
+            adapters.logger.warn('PWA shipping-options: partial courier failure', { failedCouriers });
+        }
+        // Urutkan termurah dulu.
+        options.sort((a, b) => a.cost - b.cost);
+        return res.json({
+            success: true,
+            data: options,
+            // Jika order sudah punya pilihan ongkir (reload state), sertakan agar UI
+            // bisa mengembalikan selection tanpa wajib pilih ulang.
+            current: order.shippingCost != null
+                ? {
+                    shippingCost: order.shippingCost,
+                    selectedCourier: order.selectedCourier,
+                    selectedService: order.selectedService,
+                    shippingEtd: order.shippingEtd,
+                }
+                : null,
+        });
+    }
+    catch (err) {
+        adapters.logger.error('PWA shipping-options error', err);
+        res.status(500).json({ error: 'Failed to get shipping options' });
+    }
+});
+// POST /api/pwa/:storeSlug/select-shipping — kunci pilihan ongkir ke Order (MUTASI).
+// Body: { uid, orderId, courier, service }. TIDAK membaca `cost` dari body (I13
+// truth boundary): server HITUNG ULANG via CachedShippingCostService dan pakai
+// angka ITU. Status order TIDAK berubah (tidak panggil transitionOrder()).
+// Limiter 30/15m/IP sama seperti shipping-options (quota RajaOngkir eksternal).
+router.post('/:storeSlug/select-shipping', pwaShippingOptionsLimiter, async (req, res) => {
+    try {
+        const { storeSlug } = req.params;
+        const { uid, orderId, courier, service, } = req.body;
+        // NOTE: `cost` sengaja TIDAK di-destructure dari body — tidak boleh dipercaya.
+        if (!uid || !orderId || !courier || !service) {
+            return res.status(400).json({ error: 'uid, orderId, courier, dan service wajib' });
+        }
+        const session = await resolveWebSession(storeSlug, uid);
+        if (!session) {
+            const store = await prisma.store.findUnique({
+                where: { slug: storeSlug, deletedAt: null },
+                select: { id: true },
+            });
+            if (!store)
+                return res.status(404).json({ error: 'Store not found' });
+            return res.status(401).json({ error: 'Unauthorized customer' });
+        }
+        const order = await prisma.order.findFirst({
+            where: {
+                id: orderId,
+                storeId: session.storeId,
+                conversationId: session.conversationId,
+                deletedAt: null,
+            },
+            select: { id: true, destinationSubdistrictId: true },
+        });
+        if (!order)
+            return res.status(404).json({ error: 'Order tidak ditemukan' });
+        // Guard: alamat tujuan wajib ada sebelum ongkir bisa dipilih.
+        if (!order.destinationSubdistrictId) {
+            return res.status(400).json({ error: 'Pilih alamat tujuan (kecamatan) terlebih dahulu' });
+        }
+        const store = await prisma.store.findUnique({
+            where: { id: session.storeId },
+            select: { originSubdistrictId: true },
+        });
+        if (!store?.originSubdistrictId) {
+            return res.status(400).json({ error: 'Toko belum mengatur lokasi asal pengiriman' });
+        }
+        const weightGrams = await getOrderWeightGrams(order.id);
+        if (weightGrams <= 0) {
+            return res.status(400).json({ error: 'Keranjang kosong, tidak bisa memilih ongkir' });
+        }
+        // Hitung ulang server-side. Akan HIT cache kalau baru saja di-fetch UNIT 3,
+        // sehingga tidak makan quota tambahan.
+        const result = await _shippingService.getCost(store.originSubdistrictId, order.destinationSubdistrictId, weightGrams, courier);
+        if (result === 'QUOTA_EXCEEDED') {
+            return res.status(200).json({
+                success: false,
+                error: 'QUOTA_EXCEEDED',
+                message: 'Kuota pencarian ongkir harian habis. Coba lagi nanti atau hubungi toko.',
+            });
+        }
+        if (result === 'PROVIDER_ERROR' || result === 'INVALID_LOCATION' || !Array.isArray(result)) {
+            return res.status(502).json({
+                success: false,
+                error: 'PROVIDER_ERROR',
+                message: 'Gagal mengambil ongkir dari kurir. Coba lagi nanti.',
+            });
+        }
+        // Kombinasi courier/service harus benar-benar ada di hasil (bukan data client).
+        const match = result.find((s) => s.courier === courier && s.service === service);
+        if (!match) {
+            return res.status(400).json({ error: 'Kombinasi kurir/layanan tidak tersedia' });
+        }
+        // Simpan — TANPA transitionOrder(), status order tidak berubah.
+        const updated = await prisma.order.update({
+            where: { id: order.id },
+            data: {
+                shippingCost: match.cost,
+                selectedCourier: match.courier,
+                selectedService: match.service,
+                shippingEtd: match.etd,
+            },
+            select: {
+                id: true,
+                shippingCost: true,
+                selectedCourier: true,
+                selectedService: true,
+                shippingEtd: true,
+                orderStatus: true,
+            },
+        });
+        return res.json({
+            success: true,
+            data: {
+                shippingCost: updated.shippingCost,
+                selectedCourier: updated.selectedCourier,
+                selectedService: updated.selectedService,
+                shippingEtd: updated.shippingEtd,
+                orderStatus: updated.orderStatus,
+            },
+        });
+    }
+    catch (err) {
+        adapters.logger.error('PWA select-shipping error', err);
+        res.status(500).json({ error: 'Failed to select shipping' });
     }
 });
 // GET /api/pwa/:storeSlug/payment-info — info pembayaran toko (reuse BankAccount model + Store).

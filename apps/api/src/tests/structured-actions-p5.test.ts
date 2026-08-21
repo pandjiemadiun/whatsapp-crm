@@ -87,6 +87,14 @@ async function setupFixtures() {
       name: 'P5 Order Store',
       slug: `${TEST_PREFIX}-store`,
       email: 'p5@garuda.test',
+      phoneNumber: '+6281200000094',
+      address: 'Jl. P5 No. 1',
+      originProvinceId: 'prov-p5-1',
+      originProvinceName: 'Jawa Barat',
+      originCityId: 'city-p5-1',
+      originCityName: 'Bandung',
+      originSubdistrictId: 'sub-p5-1',
+      originSubdistrictName: 'Coblong',
     },
   });
   storeId = store.id;
@@ -99,6 +107,14 @@ async function setupFixtures() {
       name: 'P5 Other Store',
       slug: `${TEST_PREFIX}-other`,
       email: 'p5-other@garuda.test',
+      phoneNumber: '+6281200000095',
+      address: 'Jl. P5 Other No. 1',
+      originProvinceId: 'prov-p5o-1',
+      originProvinceName: 'Jawa Barat',
+      originCityId: 'city-p5o-1',
+      originCityName: 'Bandung',
+      originSubdistrictId: 'sub-p5o-1',
+      originSubdistrictName: 'Coblong',
     },
   });
   storeIdOther = storeOther.id;

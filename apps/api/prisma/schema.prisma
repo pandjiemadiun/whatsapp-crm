@@ -240,6 +240,14 @@ model Order {
   destinationCityName        String?
   destinationSubdistrictId   String?
   destinationSubdistrictName String?
+  // Actual shipping cost (RajaOngkir Komerce, subdistrict-native). Additive &
+  // NULLABLE: legacy orders without a shipping selection stay valid. These are
+  // ALWAYS written by the server via CachedShippingCostService — NEVER trusted
+  // from a client request body (I13 truth boundary / owner invariant).
+  shippingCost        Float?
+  selectedCourier     String?
+  selectedService     String?
+  shippingEtd         String?
   notes                 String?
   extractedAt           DateTime @default(now())
   confirmedAt           DateTime?

@@ -107,6 +107,25 @@ export const pwaLocationsLimiter = rateLimit({
     store: new RedisRateLimitStore('rl:pwa-locations', 15 * 60 * 1000),
 });
 /**
+ * PWA SHIPPING-OPTIONS LIMITER
+ * Window: 15 minutes, Max 30 requests per IP
+ *
+ * Public, customer-facing shipping-cost quote (RajaOngkir Komerce). Same rationale
+ * as pwaLocationsLimiter: each hit can consume the EXTERNAL daily RajaOngkir
+ * quota (≈100/day, shared across all stores), so this must protect the shared
+ * quota from anonymous abuse — not just our own server load. Tighter than the
+ * general limiter on purpose.
+ */
+export const pwaShippingOptionsLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 30,
+    message: { error: 'Too many requests, please slow down' },
+    standardHeaders: true,
+    legacyHeaders: false,
+    skip: skipInTest,
+    store: new RedisRateLimitStore('rl:pwa-shipping-options', 15 * 60 * 1000),
+});
+/**
  * WEBHOOK LIMITER
  * Window: 1 minute, Max 100 requests per IP
  * Purpose: Throttle inbound webhook producers (Gowa/Fonnte)
