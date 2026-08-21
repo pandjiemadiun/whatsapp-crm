@@ -838,11 +838,28 @@ router.post('/:storeSlug/payment-report', async (req: Request, res: Response) =>
 router.post('/:storeSlug/checkout', async (req: Request, res: Response) => {
   try {
     const { storeSlug } = req.params;
-    const { uid, orderId, address, paymentMethod } = req.body as {
+    const {
+      uid,
+      orderId,
+      address,
+      paymentMethod,
+      destinationProvinceId,
+      destinationProvinceName,
+      destinationCityId,
+      destinationCityName,
+      destinationSubdistrictId,
+      destinationSubdistrictName,
+    } = req.body as {
       uid?: string;
       orderId?: string;
       address?: string;
       paymentMethod?: string;
+      destinationProvinceId?: string;
+      destinationProvinceName?: string;
+      destinationCityId?: string;
+      destinationCityName?: string;
+      destinationSubdistrictId?: string;
+      destinationSubdistrictName?: string;
     };
 
     if (!uid || !orderId) {
@@ -885,7 +902,16 @@ router.post('/:storeSlug/checkout', async (req: Request, res: Response) => {
     // Set payment method + shipping address (idempotent untuk re-checkout).
     await prisma.order.update({
       where: { id: order.id },
-      data: { paymentMethod, shippingAddress: String(address).trim() },
+      data: {
+        paymentMethod,
+        shippingAddress: String(address).trim(),
+        destinationProvinceId: destinationProvinceId ?? undefined,
+        destinationProvinceName: destinationProvinceName ?? undefined,
+        destinationCityId: destinationCityId ?? undefined,
+        destinationCityName: destinationCityName ?? undefined,
+        destinationSubdistrictId: destinationSubdistrictId ?? undefined,
+        destinationSubdistrictName: destinationSubdistrictName ?? undefined,
+      },
     });
 
     if (paymentMethod === 'cod') {

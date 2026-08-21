@@ -756,7 +756,7 @@ router.post('/:storeSlug/payment-report', async (req, res) => {
 router.post('/:storeSlug/checkout', async (req, res) => {
     try {
         const { storeSlug } = req.params;
-        const { uid, orderId, address, paymentMethod } = req.body;
+        const { uid, orderId, address, paymentMethod, destinationProvinceId, destinationProvinceName, destinationCityId, destinationCityName, destinationSubdistrictId, destinationSubdistrictName, } = req.body;
         if (!uid || !orderId) {
             return res.status(400).json({ error: 'uid dan orderId wajib' });
         }
@@ -795,7 +795,16 @@ router.post('/:storeSlug/checkout', async (req, res) => {
         // Set payment method + shipping address (idempotent untuk re-checkout).
         await prisma.order.update({
             where: { id: order.id },
-            data: { paymentMethod, shippingAddress: String(address).trim() },
+            data: {
+                paymentMethod,
+                shippingAddress: String(address).trim(),
+                destinationProvinceId: destinationProvinceId ?? undefined,
+                destinationProvinceName: destinationProvinceName ?? undefined,
+                destinationCityId: destinationCityId ?? undefined,
+                destinationCityName: destinationCityName ?? undefined,
+                destinationSubdistrictId: destinationSubdistrictId ?? undefined,
+                destinationSubdistrictName: destinationSubdistrictName ?? undefined,
+            },
         });
         if (paymentMethod === 'cod') {
             // COD: SELESAI. Order tetap di waiting_address, TIDAK ada payment-report.
