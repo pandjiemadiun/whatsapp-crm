@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import api from '../services/api'
-import type { PaymentInfo } from '../types/chat'
+import type { PaymentInfo, CartItem } from '../types/chat'
 
 interface CheckoutModalProps {
   open: boolean
@@ -10,7 +10,17 @@ interface CheckoutModalProps {
   orderId: string
   /** Store-accepted methods (dari Store.accepts*). JANGAN hardcode. */
   accepts: { transfer: boolean; qris: boolean; cod: boolean }
+  /** Latest cart snapshot (items + total) untuk ringkasan ala kwitansi. */
+  cartItems?: CartItem[]
+  cartSubtotal?: number
   onDone: (msg: string) => void
+}
+
+interface ShippingOption {
+  courier: string
+  service: string
+  cost: number
+  etd: string
 }
 
 type Step = 'form' | 'proof' | 'done'
@@ -29,6 +39,8 @@ export default function CheckoutModal({
   uid,
   orderId,
   accepts,
+  cartItems,
+  cartSubtotal,
   onDone,
 }: CheckoutModalProps) {
   const [address, setAddress] = useState('')
@@ -39,6 +51,17 @@ export default function CheckoutModal({
   const [paymentInfo, setPaymentInfo] = useState<PaymentInfo | null>(null)
   const [file, setFile] = useState<File | null>(null)
   const [proofUrl, setProofUrl] = useState<string | null>(null)
+
+  // ─── UNIT 6: shipping cost (RajaOngkir Komerce, subdistrict-native) ───
+  const [shipLoading, setShipLoading] = useState(false)
+  const [shipOptions, setShipOptions] = useState<ShippingOption[]>([])
+  const [selectedShip, setSelectedShip] = useState<ShippingOption | null>(null)
+  const [shipError, setShipError] = useState<string | null>(null)
+  const [quotaExceeded, setQuotaExceeded] = useState(false)
+  // Fallback kalau QUOTA_EXCEEDED: customer bisa lanjut tanpa ongkir otomatis
+  // (admin akan konfirmasi ongkir manual). PILIHAN DOC: block submit penuh
+  // ditolak agar customer tidak terblokir total saat kuota habis.
+  const [skipShipping, setSkipShipping] = useState(false)
 
   // ─── Destination location (cascading province → city → subdistrict) ───
   // Mirrors dashboard ProfilePage origin cascade, but hits the PUBLIC endpoint
@@ -61,9 +84,14 @@ export default function CheckoutModal({
       setStep('form')
       setError(null)
       setLoading(false)
-      setPaymentInfo(null)
+       setPaymentInfo(null)
       setFile(null)
       setProofUrl(null)
+      setShipOptions([])
+      setSelectedShip(null)
+      setShipError(null)
+      setQuotaExceeded(false)
+      setSkipShipping(false)
       setProvinces([])
       setCities([])
       setSubdistricts([])
@@ -116,12 +144,83 @@ export default function CheckoutModal({
   const onSubdistrictChange = (id: string) => {
     const opt = subdistricts.find((s) => s.id === id)
     setDest((d) => ({ ...d, subdistrictId: id, subdistrictName: opt?.name || '' }))
+    // Ubah kecamatan → ongkir harus dipilih ulang (server juga reset kalau sudah
+    // terpilih). Clear selection agar tidak pakai ongkir alamat lama.
+    setSelectedShip(null)
+    setShipOptions([])
+    setShipError(null)
+    setQuotaExceeded(false)
+    setSkipShipping(false)
+  }
+
+  // ─── UNIT 6: Cek Ongkir (GET /shipping-options) ───
+  const fetchShippingOptions = async () => {
+    if (!uid || !orderId) return setShipError('Sesi tidak valid')
+    if (!dest.subdistrictId) return setShipError('Pilih kecamatan tujuan dulu')
+    setShipLoading(true)
+    setShipError(null)
+    setQuotaExceeded(false)
+    setSelectedShip(null)
+    setSkipShipping(false)
+    try {
+      const res = await api.get(
+        `/pwa/${storeSlug}/shipping-options?uid=${encodeURIComponent(uid)}&orderId=${encodeURIComponent(orderId)}`,
+      )
+      const body = res.data
+      if (body?.success === false && body?.error === 'QUOTA_EXCEEDED') {
+        setQuotaExceeded(true)
+        setShipError(body.message || 'Kuota pencarian ongkir harian habis')
+        return
+      }
+      if (!body?.success || !Array.isArray(body?.data)) {
+        setShipError(body?.error || 'Gagal mengambil opsi ongkir')
+        return
+      }
+      setShipOptions(body.data as ShippingOption[])
+      // Reload state: kalau order sudah punya pilihan sebelumnya, prefill.
+      if (body.current?.selectedCourier && body.current?.selectedService) {
+        const cur = (body.data as ShippingOption[]).find(
+          (o) => o.courier === body.current.selectedCourier && o.service === body.current.selectedService,
+        )
+        if (cur) setSelectedShip(cur)
+      }
+    } catch (e: any) {
+      setShipError(e?.response?.data?.error || e?.message || 'Gagal mengambil opsi ongkir')
+    } finally {
+      setShipLoading(false)
+    }
+  }
+
+  // ─── UNIT 6: Pilih kurir (POST /select-shipping) — server hitung ulang ongkir ───
+  const chooseShipping = async (opt: ShippingOption) => {
+    if (!uid || !orderId) return setShipError('Sesi tidak valid')
+    setShipLoading(true)
+    setShipError(null)
+    try {
+      const res = await api.post(`/pwa/${storeSlug}/select-shipping`, {
+        uid,
+        orderId,
+        courier: opt.courier,
+        service: opt.service,
+      })
+      const body = res.data
+      if (!body?.success) throw new Error(body?.error || 'Gagal memilih kurir')
+      setSelectedShip(opt)
+    } catch (e: any) {
+      setShipError(e?.response?.data?.error || e?.message || 'Gagal memilih kurir')
+    } finally {
+      setShipLoading(false)
+    }
   }
 
   const submitCheckout = async () => {
     if (!uid) return setError('Sesi pelanggan tidak valid')
     if (!address.trim()) return setError('Alamat pengiriman wajib diisi')
     if (!method) return setError('Pilih metode pembayaran')
+    // UNIT 6: ongkir wajib dipilih (atau lanjut tanpa ongkir bila kuota habis).
+    if (!selectedShip && !skipShipping) {
+      return setError('Pilih kurir pengiriman terlebih dahulu')
+    }
     setLoading(true)
     setError(null)
     try {
@@ -263,6 +362,101 @@ export default function CheckoutModal({
                     </select>
                   </div>
                 </div>
+              </div>
+
+              {/* UNIT 6 — pilih kurir (Cek Ongkir) + ringkasan ala kwitansi */}
+              <div>
+                <p className="text-xs text-muted-foreground mb-2">
+                  Cek ongkir pengiriman ke kecamatan tujuan.
+                </p>
+                <button
+                  type="button"
+                  onClick={fetchShippingOptions}
+                  disabled={!dest.subdistrictId || shipLoading}
+                  className="w-full rounded-full py-2.5 text-sm font-semibold text-white disabled:opacity-50"
+                  style={{ background: 'var(--forest)' }}
+                >
+                  {shipLoading ? 'Menghitung...' : 'Cek Ongkir'}
+                </button>
+
+                {shipError && !quotaExceeded && (
+                  <div className="text-destructive text-sm p-2 mt-2 bg-red-50 rounded-md">{shipError}</div>
+                )}
+
+                {quotaExceeded && (
+                  <div className="text-sm p-2 mt-2 bg-amber-50 text-amber-800 rounded-md">
+                    {shipError || 'Ongkir sementara tidak bisa dihitung otomatis.'} Anda dapat lanjut dan
+                    admin akan mengonfirmasi ongkir secara manual.
+                    <button
+                      type="button"
+                      onClick={() => setSkipShipping(true)}
+                      className="block mt-2 text-xs font-semibold underline"
+                    >
+                      Lanjut tanpa ongkir otomatis (akan dikonfirmasi admin)
+                    </button>
+                  </div>
+                )}
+
+                {shipOptions.length > 0 && !quotaExceeded && (
+                  <div className="flex flex-col gap-2 mt-2">
+                    {shipOptions.map((o) => (
+                      <label
+                        key={`${o.courier}-${o.service}`}
+                        className={`flex items-center justify-between px-3 py-2.5 rounded-xl border text-sm ${
+                          selectedShip?.courier === o.courier && selectedShip?.service === o.service
+                            ? 'border-primary bg-primary/10'
+                            : 'border-border'
+                        }`}
+                      >
+                        <span className="flex items-center gap-2">
+                          <input
+                            type="radio"
+                            name="shipping"
+                            checked={selectedShip?.courier === o.courier && selectedShip?.service === o.service}
+                            onChange={() => chooseShipping(o)}
+                            disabled={shipLoading}
+                          />
+                          <span>
+                            <b>{o.courier.toUpperCase()}</b> {o.service}
+                            <span className="block text-xs text-muted-foreground">Estimasi {o.etd}</span>
+                          </span>
+                        </span>
+                        <span className="font-semibold">Rp {o.cost.toLocaleString('id-ID')}</span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+
+                {/* Kwitansi ringkas — dihitung on-the-fly (subtotal + ongkir), bukan kolom tersimpan. */}
+                {(selectedShip || skipShipping) && (
+                  <div className="mt-3 rounded-xl border border-border p-3 text-sm">
+                    <p className="font-semibold mb-2">Rincian Pesanan</p>
+                    {(cartItems ?? []).map((it, i) => (
+                      <div key={i} className="flex justify-between py-0.5">
+                        <span className="text-muted-foreground truncate max-w-[70%]">
+                          {it.productName} × {it.quantity}
+                        </span>
+                        <span>Rp {it.subtotal.toLocaleString('id-ID')}</span>
+                      </div>
+                    ))}
+                    <div className="border-t border-border my-2" />
+                    <div className="flex justify-between">
+                      <span>Subtotal</span>
+                      <span>Rp {(cartSubtotal ?? 0).toLocaleString('id-ID')}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>
+                        Ongkir ({selectedShip ? `${selectedShip.courier.toUpperCase()} ${selectedShip.service}` : 'menyusul'})
+                      </span>
+                      <span>{selectedShip ? `Rp ${selectedShip.cost.toLocaleString('id-ID')}` : '—'}</span>
+                    </div>
+                    <div className="border-t border-border my-2" />
+                    <div className="flex justify-between font-bold">
+                      <span>Total</span>
+                      <span>Rp {((cartSubtotal ?? 0) + (selectedShip?.cost ?? 0)).toLocaleString('id-ID')}</span>
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div>

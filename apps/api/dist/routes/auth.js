@@ -18,7 +18,7 @@ function generateWebhookSecret() {
 // POST /api/auth/register — Register with email + password
 router.post('/register', validateRequest(storeRegisterSchema, 'body'), storeAuthLimiter, async (req, res) => {
     try {
-        const { email, password } = getValidated(req);
+        const { email, password, phoneNumber, address, originProvinceId, originProvinceName, originCityId, originCityName, originSubdistrictId, originSubdistrictName, } = getValidated(req);
         const existing = await prisma.store.findFirst({ where: { email } });
         if (existing) {
             return res.status(409).json({ error: 'Email already registered' });
@@ -29,7 +29,14 @@ router.post('/register', validateRequest(storeRegisterSchema, 'body'), storeAuth
                 id: storeId,
                 name: email.split('@')[0],
                 email,
-                phoneNumber: null,
+                phoneNumber,
+                address,
+                originProvinceId,
+                originProvinceName,
+                originCityId,
+                originCityName,
+                originSubdistrictId,
+                originSubdistrictName,
                 webhookSecret: generateWebhookSecret(),
             },
         });
@@ -86,44 +93,31 @@ router.post('/login', validateRequest(storeLoginSchema, 'body'), storeAuthLimite
             return res.status(403).json({ error: 'Akun Anda telah dinonaktifkan. Silakan hubungi admin.' });
         }
         if (!store) {
-            // Auto-register: create store + set password
-            const storeId = `store-${crypto.randomUUID().slice(0, 8)}`;
-            store = await prisma.store.create({
-                data: {
-                    id: storeId,
-                    name: email.split('@')[0],
-                    email,
-                    phoneNumber: null,
-                    webhookSecret: generateWebhookSecret(),
-                },
-            });
-            await prisma.storeSetting.create({
-                data: {
-                    storeId: store.id,
-                    key: 'auth_password',
-                    value: await hashPassword(password),
-                },
+            // Registrasi terpisah via /register (wajib isi phone + address + lokasi).
+            // Tidak lagi auto-create Store di sini.
+            return res.status(401).json({
+                error: 'Email belum terdaftar. Silakan daftar terlebih dahulu.',
+                code: 'ERR_NOT_REGISTERED',
+                redirect: '/register',
             });
         }
-        else {
-            // Verify password (mendukung hash lama SHA-256 + auto-upgrade ke bcrypt)
-            const setting = await prisma.storeSetting.findUnique({
+        // Verify password (mendukung hash lama SHA-256 + auto-upgrade ke bcrypt)
+        const setting = await prisma.storeSetting.findUnique({
+            where: { storeId_key: { storeId: store.id, key: 'auth_password' } },
+        });
+        if (!setting) {
+            return res.status(401).json({ error: 'Invalid email or password' });
+        }
+        const { valid, needsRehash } = await verifyPassword(password, setting.value);
+        if (!valid) {
+            return res.status(401).json({ error: 'Invalid email or password' });
+        }
+        if (needsRehash) {
+            const newHash = await hashPassword(password);
+            await prisma.storeSetting.update({
                 where: { storeId_key: { storeId: store.id, key: 'auth_password' } },
+                data: { value: newHash },
             });
-            if (!setting) {
-                return res.status(401).json({ error: 'Invalid email or password' });
-            }
-            const { valid, needsRehash } = await verifyPassword(password, setting.value);
-            if (!valid) {
-                return res.status(401).json({ error: 'Invalid email or password' });
-            }
-            if (needsRehash) {
-                const newHash = await hashPassword(password);
-                await prisma.storeSetting.update({
-                    where: { storeId_key: { storeId: store.id, key: 'auth_password' } },
-                    data: { value: newHash },
-                });
-            }
         }
         const token = crypto.randomUUID();
         // Persist token for session validation
@@ -177,8 +171,11 @@ router.put('/profile', authMiddleware, validateRequest(updateProfileSchema, 'bod
             updateData.name = sanitize(name.trim());
         if (timezone)
             updateData.timezone = timezone;
-        if (phoneNumber !== undefined)
-            updateData.phoneNumber = phoneNumber || null;
+        if (phoneNumber !== undefined) {
+            if (!phoneNumber || !String(phoneNumber).trim())
+                return res.status(400).json({ error: 'Nomor HP tidak boleh dikosongkan' });
+            updateData.phoneNumber = String(phoneNumber).trim();
+        }
         if (fonnteToken !== undefined)
             updateData.fonnteToken = fonnteToken === '' ? null : fonnteToken;
         if (fonnteNumber !== undefined)

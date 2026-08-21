@@ -157,6 +157,14 @@ before(async () => {
       name: 'Test Action Store',
       slug: `${TEST_PREFIX}-store`,
       email: 'test-action@garuda.test',
+      phoneNumber: '+6281200000104',
+      address: 'Jl. SA No. 1',
+      originProvinceId: 'prov-sa-1',
+      originProvinceName: 'Jawa Barat',
+      originCityId: 'city-sa-1',
+      originCityName: 'Bandung',
+      originSubdistrictId: 'sub-sa-1',
+      originSubdistrictName: 'Coblong',
     },
   });
   storeId = store.id;
@@ -169,6 +177,14 @@ before(async () => {
       name: 'Other Store',
       slug: `${TEST_PREFIX}-other`,
       email: 'other-action@garuda.test',
+      phoneNumber: '+6281200000105',
+      address: 'Jl. SA Other No. 1',
+      originProvinceId: 'prov-sao-1',
+      originProvinceName: 'Jawa Barat',
+      originCityId: 'city-sao-1',
+      originCityName: 'Bandung',
+      originSubdistrictId: 'sub-sao-1',
+      originSubdistrictName: 'Coblong',
     },
   });
   storeIdOther = storeOther.id;

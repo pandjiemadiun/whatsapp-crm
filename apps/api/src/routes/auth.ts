@@ -212,7 +212,10 @@ router.put('/profile', authMiddleware, validateRequest(updateProfileSchema, 'bod
     const updateData: Record<string, any> = {};
     if (name?.trim()) updateData.name = sanitize(name.trim());
     if (timezone) updateData.timezone = timezone;
-    if (phoneNumber !== undefined) updateData.phoneNumber = phoneNumber || null;
+    if (phoneNumber !== undefined) {
+      if (!phoneNumber || !String(phoneNumber).trim()) return res.status(400).json({ error: 'Nomor HP tidak boleh dikosongkan' });
+      updateData.phoneNumber = String(phoneNumber).trim();
+    }
     if (fonnteToken !== undefined) updateData.fonnteToken = fonnteToken === '' ? null : fonnteToken;
     if (fonnteNumber !== undefined) updateData.fonnteNumber = fonnteNumber === '' ? null : fonnteNumber;
     if (acceptsTransfer !== undefined) updateData.acceptsTransfer = acceptsTransfer;

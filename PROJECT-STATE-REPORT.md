@@ -2,7 +2,7 @@
 
 > **Dokumen ini dibuat untuk onboarding ke project baru (Claude/AI coding agent).**
 > Semua klaim status di bawah diverifikasi terhadap **source code, test, dan git log aktual**
-> di working tree `/home/ubuntu/garuda` pada **2026-08-20** (HEAD `50d4d25`). Tidak ada klaim
+> di working tree `/home/ubuntu/garuda` pada **2026-08-21** (HEAD `2e64c0a`). Tidak ada klaim
 > yang diambil mentah dari roadmap/STATUS lama tanpa cross-check ke kode.
 >
 > **ATURAN RAILS.md BERLAKU:** tidak ada kode yang diubah dalam pembuatan dokumen ini
@@ -11,8 +11,12 @@
 > **⚠️ INSIDEN PROSES (baca §10):** cluster besar (P6-1/P6-2/P6-3, P4-2/P4-3, P8-1/P8-2,
 > P6.4/P6.5, III-1-B hook, III-2-A/B purge, P8-CI-FIX) sudah di-kerjakan & di-push di sesi
 > SEBELUMNYA TANPA dilaporkan real-time dengan bukti RAILS §1.2. Dokumen ini menutup gap
-> tersebut pasca TASK VERIFY-CLUSTER + DOCS-SYNC 19 Agu 2026. Working tree saat ini BERSIH
-> (semua ter-commit & ter-push ke `origin/main`).
+> tersebut pasca TASK VERIFY-CLUSTER + DOCS-SYNC 19 Agu 2026. **INSIDEN SERUPA BERULANG di
+> sesi 21 Agu 2026** (cluster G2-G monitoring + shipping-cost full-stack + Store NOT NULL,
+> range `2a93924..2e64c0a`) — dikerjakan & di-push TANPA laporan real-time, ditutup post-hoc
+> via TASK DOCS-SYNC 21 Agu 2026 (lihat RAILS.md §6.x POST-HOC + §10 revisi). Working tree
+> saat ini BERISIKAN perubahan DIST yang belum di-rebuild sejak source ter-commit (pola III-1,
+> lihat §9.7) — source SELESAI & ter-push, `dist/` perlu `npm run build` sebelum deploy.
 
 ---
 
@@ -183,8 +187,52 @@ pelajaran (jangan biarkan pekerjaan besar menggantung uncommitted) tidak hilang.
 | **G2-D** | Conversation State Refactor | `workspace_v2` ✅ (P3) |
 | **G2-E** | Storefront UI/UX | banyak done (PWA deploy `qlobot.web.id`, realtime+push FASE 1-4) |
 | **G2-F** | Checkout/Order/Payment | **SELESAI TOTAL (F1–F6)** — F1 (schema+bugfix) SELESAI, F2 (payment-report/verify) SELESAI, F3 (PWA checkout) SELESAI, F4 (dashboard payment verification UI + `GET /orders/:id/valid-next-states`) SELESAI, F5 (CI coverage audit + golden dataset checkout/payment, mutation-tested) SELESAI, F6 (F6a: paymentRejectReason opsional di payment-verify + UI reject dialog; F6b: endpoint `cod-settle` + halaman dashboard COD terpisah) SELESAI (commit `50d4d25`). F6a/F6b ditemukan sebagai penutup item minor setelah F5 (reject-reason untuk audit + visibilitas COD). COD settlement ke `orderStatus`/fulfillment TETAP DEFERRED (lihat DECISION-COD-SETTLEMENT-DEFERRED.md) |
-| **G2-G** | Realtime + Scale Hardening | **AUDIT BASELINE SELESAI** (lihat `AUDIT-BASELINE-G2-G.md`); breakdown sub-fase BELUM diputuskan |
+| **G2-G** | Realtime + Scale Hardening | **AUDIT BASELINE SELESAI** (`AUDIT-BASELINE-G2-G.md`, `dd20696`); **monitoring dasar SELESAI** (`GET /api/admin/metrics/system`, `b18b6d5`, in-memory single-instance); breakdown sub-fase hardening BELUM diputuskan |
 | **G2-H** | Release Readiness | **BELUM** — gate terakhir |
+
+---
+
+### 4.5 Shipping-cost full-stack (RajaOngkir Komerce) — **SELESAI, TER-WIRE KE CHECKOUT**
+
+| Fase | Scope | Commit | Status (21 Agu 2026) |
+|------|-------|--------|----------------------|
+| Foundation | Cost adapter + Redis cache 7d + quota guard (provider-agnostic interface) | `490e853` | **SELESAI, TER-PUSH** (awalnya BELUM di-wire ke checkout) |
+| Location ref | `RajaOngkirLocationAdapter` (province/city/subdistrict, 30d cache) + endpoint admin/merchant | `3d501dc` | **SELESAI, TER-PUSH** |
+| Store origin | `Store.originProvinceId/Name`, `originCityId/Name`, `originSubdistrictId/Name` + profile GET/PUT | `a6c62ec` | **SELESAI, TER-PUSH** |
+| Dashboard origin | Cascading province→city→subdistrict dropdown (origin store) | `d7c57aa` | **SELESAI, TER-PUSH** |
+| Komerce v2 | Adapter → RajaOngkir **Komerce** API (search-based) + cost migrasi Komerce v2 (subdistrict-native) | `1f3452d`, `a2c6665` | **SELESAI, TER-PUSH** |
+| Product weight | `Product.weight` (gram, NOT NULL default 0) + API-required; magic-paste ekstrak + `needsWeightInput`; dashboard form wajib Berat | `270e4ba`, `7130b4a`, `99b119c` | **SELESAI, TER-PUSH** |
+| Public locations | **PUBLIC** `GET /api/pwa-locations/*` (tanpa auth) + `pwaLocationsLimiter` 30 req/15m (lindungi quota) | `2f27779` | **SELESAI, TER-PUSH** |
+| Order destination | `Order` destination fields (province/city/subdistrict, nullable, backward-compatible) + checkout persist | `3aa78fd` | **SELESAI, TER-PUSH** |
+| PWA destination | Cascading dropdown destination di checkout PWA (fetch `/api/pwa-locations`) | `2d9a1a3` | **SELESAI, TER-PUSH** |
+| UNIT1 | `Order.shippingCost` (Float?) + `shippingService` (String?) — schema+migration+types | `75344b5` | **SELESAI, TER-PUSH** |
+| UNIT2 | `getOrderWeightGrams` read-only helper (Σ weight×qty) + test | `da18010` | **SELESAI, TER-PUSH** |
+| UNIT3 | `GET /api/pwa/:slug/shipping-options` read-only + limiter + tests | `5b1c5d2` | **SELESAI, TER-PUSH** |
+| UNIT4 | `POST /api/pwa/:slug/select-shipping` server-recomputed cost (origin store + destination + berat order) + tests | `a8f0260` | **SELESAI, TER-PUSH** |
+| UNIT5 | Auto-reset ongkir saat destination berubah di checkout + tests | `6517137` | **SELESAI, TER-PUSH** |
+| UNIT6 | PWA checkout UI cek ongkir + tampil di receipt (kwitansi) | `2e64c0a` | **SELESAI, TER-PUSH** |
+
+**Alur ongkir (terverifikasi):** store origin (RajaOngkir ID) → customer pilih
+destination via cascading dropdown (public `/api/pwa-locations/*`) → `select-shipping`
+hitung berat order (`getOrderWeightGrams`) × origin→destination via Komerce → simpan
+`Order.shippingCost` + `shippingService`. Semua mutable via `tx` + guard. Test per-UNIT
+hijau (lihat commit masing-masing). **RajaOngkir = kalkulator ongkir, BUKAN tracking** —
+ini yang menutup Opsi (B) COD (DECISION-COD-SETTLEMENT-DEFERRED.md, `09b257a`). Risiko
+disengaja diterima owner: caching hasil cost bisa memicu ban RajaOngkir (interface
+swap-able).
+
+### 4.6 Store NOT NULL registration (pre-launch hardening) — **SELESAI**
+
+| Fase | Scope | Commit | Status (21 Agu 2026) |
+|------|-------|--------|----------------------|
+| Schema NOT NULL | `Store.phoneNumber`, `address`, `origin*Id/Name` → NOT NULL (migration isi placeholder, ALTER SET NOT NULL; prod baru 0 row) | `03bce76` | **SELESAI, TER-PUSH** |
+| Register schema | `storeRegisterSchema` wajib phone (format HP ID)/address/origin* (`.trim()` tolak whitespace → 400); `/register` kirim field tervalidasi; `/login` auto-create dihapus | `a8b3928` | **SELESAI, TER-PUSH** |
+| Dashboard form | `RegisterSaaS.tsx` tambah No. HP + Alamat + 3 dropdown kaskade (fetch public `/api/pwa-locations/*`); tombol Daftar disabled sampai lengkap | `525e271` | **SELESAI, TER-PUSH** |
+| Test data | 13 file test `store.upsert` tambah dummy valid NOT NULL store | `b5f50fc` | **SELESAI, TER-PUSH** |
+| Null-write fix | `PUT /api/auth/profile` + `PUT /api/profile`: field wajib DIKIRIM tapi kosong → 400; tidak dikirim → skip (bukan `|| null` crash) | `d3c7855` | **SELESAI, TER-PUSH** |
+
+Registrasi toko SEKARANG wajib phone + address + lokasi asal (dan lokasi tujuan checkout
+lewat §4.5). Pre-launch data hygiene; belum ada customer terdampak (website belum rilis).
 
 ---
 
@@ -221,6 +269,25 @@ foundation (`2c604cc`).
 ### 5.8 P7 — WA cart mutation convergence ke idempotency lock (`0e6a5fa..22caa82`)
 4 situs mutasi WA — v1 LLM `:673`, v1 resolver EXECUTE `:511`, v2 resolved EXECUTE `:238`, v2 plannedActs `:321` — di-converge ke 1 adapter `executeWaCartMutation` (`action-registry.ts`) yang **reuse** `claimAction`/`executeClaimedAction` (FOR UPDATE + re-check + SAVEPOINT, identik dengan PWA). `actionType` baru `WA_CART_MUTATION`; `actionId` deterministik `wa:${conversationId}:${messageId}` (idempotensi level PESAN). `CartAuthority`/`interpreter`/`reasoning` TIDAK disentuh; ROLLBACK `:548` tetap legacy. Bukti: test idempotensi WA baru 6/6, test:chat 267/267, test:golden 26/26, test:structured 115/115. **SELESAI** (RAILS.md §3).
 
+### 5.9 G2-G baseline audit + monitoring dasar (`dd20696`/`b18b6d5`)
+`AUDIT-BASELINE-G2-G.md` petakan kondisi realtime/scale (Socket.IO in-memory adapter,
+Redis, pm2, health, gap multi-instance). Endpoint `GET /api/admin/metrics/system`
+(admin-auth) balik `memory`/`uptime`/`requests` (rolling window in-memory dari
+`metrics.middleware.ts`), **dipisah dari `/api/health`** (LB probe tetap SELECT 1).
+**Single-instance only** — belum ada agregasi lintas pm2 instance. G2-G breakdown
+sub-fase hardening BELUM diputuskan.
+
+### 5.10 Shipping-cost full-stack (RajaOngkir Komerce) — SELESAI (`490e853..2e64c0a`)
+Lihat §4.5. Origin store + destination customer + berat order (`Product.weight`) →
+pilihan kurir via Komerce → `Order.shippingCost`/`shippingService`. Provider-agnostic
+interface (`shipping-cost-provider.interface.ts`) + Redis cache 7d + quota guard. RajaOngkir
+= kalkulator ongkir (BUKAN tracking) → menutup Opsi (B) COD (DECISION-COD-SETTLEMENT-DEFERRED.md `09b257a`).
+
+### 5.11 Store NOT NULL registration + null-write fix (`03bce76..d3c7855`)
+Lihat §4.6. `Store.phoneNumber`/`address`/`origin*` NOT NULL; register wajib
+phone/address/lokasi; `/login` auto-create dihapus; `PUT profile` tolak field wajib
+kosong (400) bukan null-write/crash. Pre-launch data hygiene.
+
 ---
 
 ## 6. MASALAH YANG DIKETAHUI BELUM SELESAI
@@ -247,7 +314,10 @@ P8-CI-FIX (`c6be2d8`) masukkan `test:structured` (115 test) ke CI → gate lengk
 - `logs/*.log`: **RESOLVED** (III-2-A/B, `bcddfcd`) — di-exclude + di-purge dari history
   (backup bundle `garuda-backup-20260819.bundle`).
 - `dist/`: **MITIGASI** (III-1-B) — post-merge auto-build hook terpasang; dist MASIH ter-track,
-  untrack ditunda sampai hook terbukti di deploy nyata.
+  untrack ditunda sampai hook terbukti di deploy nyata. **⚠️ UPDATE 21 Agu 2026:** cluster
+  `2a93924..2e64c0a` (G2-G monitoring + shipping + Store NOT NULL) di-commit SOURCE-nya
+  TAPI `dist/` belum di-rebuild/commit → working tree saat ini BERISIKAN dist modified
+  (pola III-1 berulang). Sebelum deploy: `cd apps/api && npm run build` lalu commit `dist/`.
 
 ### 6.7 🟡 Lainnya (dari BUG-BELUM-DIBERESKAN.md)
 - **I-1** Qty 0 di receipt ("Brambang (0x)") — Medium, kosmetik.
@@ -255,6 +325,18 @@ P8-CI-FIX (`c6be2d8`) masukkan `test:structured` (115 test) ke CI → gate lengk
 - **III-4/III-5** T5 fallback overlap + `appendMessage` race — belum diklasifikasi.
 - **III-7/III-8** I11/I12 normalizer — typo lolos / guard belum diverifikasi.
 - **Kata `'mau'` di `ORDER_INTENT_KEYWORDS`** (`fast-path.ts`) bisa short-circuit sebelum `trySop`.
+- **🟡 SHIPPING-CI-GAP (21 Agu 2026):** test suite shipping (`shipping-*.test.ts`,
+  `order-weight.helper` test, `shipping-options`/`select-shipping` e2e) **TIDAK ter-cover
+  CI** — tidak masuk `test:chat` (jest, hanya `src/services/chat/**`), tidak masuk
+  `test:golden`/`test:structured`/`test:payment`. Jalankan manual via
+  `tsx --test --test-force-exit "src/tests/shipping*.test.ts" "src/services/shipping/**/*.test.ts"`.
+  Pola sama persis II-6/II-7 — butuh script `test:shipping` + step CI (task terpisah).
+- **🟡 Monitoring single-instance (`b18b6d5`):** `GET /api/admin/metrics/system` pakai
+  in-memory rolling window → **TIDAK akurat di multi-instance pm2**. Gap diketahui,
+  belum ada agregasi; aman untuk single-instance saat ini.
+- **🟡 RajaOngkir/Komerce dependency risk (`490e853`):** caching hasil cost (Redis 7d) +
+  quota guard disengaja — owner terima risiko ban dari RajaOngkir. Interface
+  `shipping-cost-provider.interface.ts` swap-able kalau perlu ganti provider.
 
 ### 6.8 ✅ Prisma version — AUDITED (resolved = 5.22.0, match kontrak §6A.12)
 Kontrak §6A.12 mengunci **Prisma 5.22.0**; `package.json` `^5.10.0`. Audit read-only
@@ -317,8 +399,9 @@ natural-language via Conversation Engine. Opsi belum diputuskan:
 
 ## 9. CARA VERIFIKASI (untuk siapapun yang lanjutkan)
 
-> Working tree BERSIH (semua ter-commit & ter-push ke `origin/main`, HEAD `50d4d25`).
-> Tidak ada lagi peringatan "jangan git reset --hard" karena file menggantung uncommitted.
+> Working tree BERISIKAN dist modified (sumber `2a93924..2e64c0a` SUDAH ter-commit &
+> ter-push ke `origin/main`, HEAD `2e64c0a`, tapi `dist/` belum di-rebuild — pola III-1,
+> lihat §6.6). Sebelum deploy: `cd apps/api && npm run build` lalu commit `dist/`.
 
 ### 9.1 Build & typecheck (dari `apps/api`)
 ```bash
@@ -336,6 +419,8 @@ npm run test:structured   # node:test structured-actions*: 115 tests / 7 suites 
 npm run test:payment      # node:test G2-F suites: 37 tests / 4 files pass (G2-F6, commit `50d4d25`)
 #   - payment.test.ts (F2, ~13) + pwa-checkout.test.ts (F3, 8) + payment-verify-routes.e2e.test.ts (F1/F4 + F6a/F6b, ~16)
 #     + golden-payment.e2e.test.ts (G2-F5 golden checkout/payment, 5, mutation-tested)
+# Shipping suites (BELUM ada script npm, lihat §6.7 SHIPPING-CI-GAP) — jalankan manual:
+#   npx tsx --test --test-force-exit "src/tests/shipping*.test.ts" "src/services/shipping/**/*.test.ts"
 ```
 
 ### 9.3 Restart & log (produksi VPS `root@vps3541799`, repo `/home/ubuntu/garuda`)
@@ -355,14 +440,20 @@ npx prisma studio
 
 ### 9.5 Git state
 ```bash
-git status --short | head   # diharapkan KOSONG (clean)
-git log --oneline -3        # HEAD: 50d4d25
+git status --short | head   # EXPECT dist/ modified (belum rebuild, §6.6) + P7-AUDIT-FINDINGS.md untracked
+git log --oneline -3        # HEAD: 2e64c0a
 ```
 
 ### 9.6 Verifikasi klaim
 - `grep -n Idempotency apps/api/prisma/schema.prisma` → >0 (model ada).
 - `grep -n "ADD_TO_CART\|REMOVE_FROM_CART\|UPDATE_CART_QUANTITY\|CANCEL_ORDER\|CONTACT_ADMIN" apps/api/src/business/action-registry.ts` → 5 entri mutation + CONTACT_ADMIN.
 - `grep -n "executeClaimedAction\|FOR UPDATE" apps/api/src/business/action-registry.ts` → ADD/REMOVE/UPDATE/CANCEL pakai pola sama (CONTACT_ADMIN via status-guard, by design).
+- `grep -n "originProvinceId\|originCityId\|originSubdistrictId" apps/api/prisma/schema.prisma` → >0 (Store origin location, §4.6).
+- `grep -n "weight" apps/api/prisma/schema.prisma` → `Product.weight` (gram, NOT NULL, §4.5).
+- `grep -rn "RajaOngkirKomerce\|rajaongkir.adapter\|shipping-cost-provider.interface" apps/api/src/services/shipping/` → modul shipping ada (foundation `490e853`).
+- `grep -n "metrics/system\|metricsStore" apps/api/src/routes/admin/system-metrics.ts apps/api/src/middleware/metrics.middleware.ts` → endpoint monitoring ada (`b18b6d5`).
+- `curl -H "Authorization: Bearer $ADMIN_TOKEN" localhost:PORT/api/admin/metrics/system` → JSON memory/uptime/requests.
+- `curl localhost:PORT/api/pwa/:slug/pwa-locations/provinces` → list provinsi (PUBLIC, tanpa auth, §4.5).
 
 ---
 
@@ -392,6 +483,24 @@ BUG-BELUM-DIBERESKAN, RAILS §6) jadi kadaluarsa / kontradiktif. Audit jadi butu
 
 ---
 
+## 10.2 Known unreported-work gap (21 Agu 2026) — INSIDEN PROSES BERULANG
+
+**Apa yang terjadi:** cluster `2a93924..2e64c0a` (G2-G monitoring `dd20696`/`b18b6d5`,
+shipping-cost full-stack `490e853`..`2e64c0a`, Store NOT NULL `03bce76`..`d3c7855`) di-kerjakan
+& di-push di sesi SEBELUMNYA TANPA dilaporkan real-time dengan bukti RAILS §1.2 — **persis
+pola insiden §10 (19 Agu)** yang diklaim sudah dipelajari. Ditemukan lagi saat DOCS-SYNC ini.
+
+**Ditutup post-hoc via TASK DOCS-SYNC 21 Agu 2026** (RAILS.md §6.x POST-HOC + update §4.4–§4.6/
+§5.9–§5.11/§6.6–§6.7/§9 ini). Bukti RAILS §5 ada di pesan commit masing-masing; doc ini
+mensinkronkan STATE.
+
+**Pelajaran (sama persis dengan §10, belum dijalankan):** commit + push SEGERA setelah 1 unit
+verified, jangan tahan laporan. Catatan TAMBAHAN: source cluster ini SUDAH ter-commit tapi
+`dist/` BELUM di-rebuild (pola III-1) → working tree berisi dist modified; sebelum deploy
+wajib `npm run build` + commit `dist/`.
+
+---
+
 ## APPENDIX A — Daftar file kunci (`apps/api/src`)
 
 | Peran | File |
@@ -411,7 +520,11 @@ BUG-BELUM-DIBERESKAN, RAILS §6) jadi kadaluarsa / kontradiktif. Audit jadi butu
 | Migrasi ActionIdempotency | `prisma/migrations/20260816000000_*` + `...00100_*` (rantai prerequisite) |
 | Order state machine | `business/order-transition.ts`, `business/order.service.ts` |
 | Order payment verification | `routes/orders.ts` — `POST /:id/payment-verify` (G2-F2) + `GET /:id/valid-next-states` (read-only, reuse `getAllowedTransitions`, G2-F4) |
-| CI | `.github/workflows/test.yml` (test:chat + test:golden + test:structured) |
+| Shipping cost | `services/shipping/` — `rajaongkir.adapter.ts` (Komerce v2), `rajaongkir-location.adapter.ts`, `cached-shipping-cost.service.ts`, `shipping-cost-provider.interface.ts`, `order-weight.helper.ts` |
+| Shipping routes | `routes/pwa.ts` — `GET /:slug/shipping-options`, `POST /:slug/select-shipping`; `routes/pwa-locations.ts` (PUBLIC provinces/cities/subdistricts) |
+| Monitoring | `routes/admin/system-metrics.ts` + `middleware/metrics.middleware.ts` |
+| Store profile | `routes/profile.ts`, `routes/auth.ts` (register wajib phone/address/origin; null-write guard) |
+| CI | `.github/workflows/test.yml` (test:chat + test:golden + test:structured + test:payment) |
 
 ## APPENDIX B — Kontrak terkunci (jangan dilanggar tanpa persetujuan owner)
 1. `RAILS.md` §1 (bukti mentah wajib, scope terkunci, mulai sesi dengan git status).
@@ -423,6 +536,6 @@ BUG-BELUM-DIBERESKAN, RAILS §6) jadi kadaluarsa / kontradiktif. Audit jadi butu
 ---
 
 *Laporan dibuat read-only (tidak ada kode diubah). Semua klaim diverifikasi ke source/test/git
-log working tree `/home/ubuntu/garuda` per 2026-08-20 (HEAD `50d4d25`). Klaim yang tidak bisa
+log working tree `/home/ubuntu/garuda` per 2026-08-21 (HEAD `2e64c0a`). Klaim yang tidak bisa
 diverifikasi mandiri ditandai [DUGAAN] atau "belum diverifikasi". INSIDEN unreported-work gap
-ada di §10.*
+ada di §10 (19 Agu) dan §10.2 (21 Agu).*
