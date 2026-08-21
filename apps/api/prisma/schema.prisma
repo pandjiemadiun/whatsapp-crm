@@ -299,6 +299,8 @@ model Product {
   currency              String   @default("IDR")
   sku                   String?
   stock                 Int?
+  // Berat produk dalam gram. 0 = placeholder migration (belum diisi); wajib > 0 di API untuk produk baru.
+  weight                Int      @default(0)
   images                Json?
   primaryImageUrl       String?
   isActive              Boolean  @default(true)

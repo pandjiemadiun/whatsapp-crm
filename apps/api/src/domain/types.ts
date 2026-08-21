@@ -156,6 +156,8 @@ export interface Product {
   sku: string | null;
   /** null = stok tidak terbatas */
   stock: number | null;
+  /** Berat produk dalam gram. 0 = placeholder (belum diisi). */
+  weight: number;
   images: ProductImage[] | null;
   primaryImageUrl: string | null;
   isActive: boolean;

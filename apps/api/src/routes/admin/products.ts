@@ -182,6 +182,7 @@ router.post(
         description: body.description ?? undefined,
         sku: body.sku,
         stock: body.stock ?? undefined,
+        weight: body.weight,
         images,
       });
 
@@ -242,6 +243,7 @@ router.patch(
         ...(body.description !== undefined ? { description: body.description } : {}),
         ...(body.price !== undefined ? { price: body.price } : {}),
         ...(body.stock !== undefined ? { stock: body.stock } : {}),
+        ...(body.weight !== undefined ? { weight: body.weight } : {}),
         ...(body.categoryId !== undefined ? { categoryId: body.categoryId } : {}),
         ...(body.currency !== undefined ? { currency: body.currency } : {}),
         ...(body.isActive !== undefined ? { isActive: body.isActive } : {}),
