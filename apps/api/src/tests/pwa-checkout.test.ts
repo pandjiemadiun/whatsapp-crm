@@ -399,3 +399,112 @@ describe('UNIT3 — GET /shipping-options', () => {
   });
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// UNIT 4 — POST /api/pwa/:storeSlug/select-shipping (mutasi, kunci ongkir).
+// INVARIAN I13: `cost` dari body TIDAK dipakai — server hitung ulang via stub.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('UNIT4 — POST /select-shipping', () => {
+  const U4 = 'unit4';
+  const SLUG4 = `${U4}-slug`;
+  let orderId: string;
+
+  const select = (body: unknown) =>
+    fetch(`${baseUrl}/api/pwa/${SLUG4}/select-shipping`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+  before(async () => {
+    await prisma.store.upsert({
+      where: { id: `${U4}-store` },
+      update: { slug: SLUG4, isActive: true, acceptsCod: true, originSubdistrictId: 'orig-1' },
+      create: {
+        id: `${U4}-store`, name: 'U4 Store', slug: SLUG4, isActive: true, acceptsCod: true,
+        phoneNumber: '+6281200000097', address: 'Jl U4',
+        originProvinceId: 'p', originProvinceName: 'P', originCityId: 'c', originCityName: 'C',
+        originSubdistrictId: 'orig-1', originSubdistrictName: 'O',
+      },
+    });
+    await prisma.customer.upsert({
+      where: { id: `${U4}-cust` },
+      update: { webUid: `${U4}-uid`, storeId: `${U4}-store` },
+      create: { id: `${U4}-cust`, storeId: `${U4}-store`, webUid: `${U4}-uid`, phone: null },
+    });
+    await prisma.conversation.upsert({
+      where: { id: `${U4}-conv` },
+      update: { storeId: `${U4}-store`, customerId: `${U4}-cust`, channel: 'web' },
+      create: { id: `${U4}-conv`, storeId: `${U4}-store`, customerId: `${U4}-cust`, channel: 'web', status: 'open' },
+    });
+    const prodA = await prisma.product.create({
+      data: { storeId: `${U4}-store`, name: 'A4', price: 1000, weight: 250, source: 'api' },
+    });
+    const order = await prisma.order.upsert({
+      where: { id: `${U4}-order` },
+      update: {
+        storeId: `${U4}-store`, conversationId: `${U4}-conv`, customerId: `${U4}-cust`,
+        orderStatus: 'draft', paymentStatus: 'unpaid',
+        destinationSubdistrictId: 'dest-1', destinationSubdistrictName: 'D',
+      },
+      create: {
+        id: `${U4}-order`, storeId: `${U4}-store`, conversationId: `${U4}-conv`,
+        customerId: `${U4}-cust`, items: [], orderStatus: 'draft', paymentStatus: 'unpaid',
+        destinationSubdistrictId: 'dest-1', destinationSubdistrictName: 'D',
+      },
+    });
+    orderId = order.id;
+    await prisma.orderItem.create({
+      data: { orderId, productId: prodA.id, productName: 'A4', quantity: 2, unitPrice: 1000, subtotal: 2000 },
+    });
+  });
+
+  afterEach(() => __setShippingServiceForTest(cachedShippingCostService));
+
+  after(async () => {
+    await prisma.orderItem.deleteMany({ where: { orderId: { startsWith: U4 } } }).catch(() => {});
+    await prisma.order.deleteMany({ where: { id: { startsWith: U4 } } }).catch(() => {});
+    await prisma.product.deleteMany({ where: { storeId: `${U4}-store` } }).catch(() => {});
+    await prisma.conversation.deleteMany({ where: { id: { startsWith: U4 } } }).catch(() => {});
+    await prisma.customer.deleteMany({ where: { id: { startsWith: U4 } } }).catch(() => {});
+    await prisma.store.deleteMany({ where: { id: `${U4}-store` } }).catch(() => {});
+    __setShippingServiceForTest(cachedShippingCostService);
+  });
+
+  test('pilih kurir valid → tersimpan DENGAN cost dari server (bukan cost:1 dari body)', async () => {
+    __setShippingServiceForTest({
+      getCost: async (o: string, d: string, w: number, c: string) =>
+        c === 'jne'
+          ? [{ courier: 'jne', service: 'CTC', cost: 25000, etd: '2-3' }]
+          : [{ courier: 'tiki', service: 'REG', cost: 15000, etd: '3-4' }],
+    } as any);
+
+    // Body sengaja kirim cost:1 — HARUS diabaikan.
+    const res = await select({ uid: `${U4}-uid`, orderId, courier: 'jne', service: 'CTC', cost: 1 });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.success, true);
+    assert.equal(body.data.shippingCost, 25000); // dari service, BUKAN 1
+    assert.equal(body.data.selectedCourier, 'jne');
+    assert.equal(body.data.selectedService, 'CTC');
+
+    // Verifikasi DB: tersimpan 25000, bukan 1.
+    const saved = await prisma.order.findUnique({ where: { id: orderId } });
+    assert.equal(saved?.shippingCost, 25000);
+    assert.equal(saved?.selectedCourier, 'jne');
+    assert.equal(saved?.selectedService, 'CTC');
+    assert.equal(saved?.orderStatus, 'draft'); // status TIDAK berubah
+  });
+
+  test('kombinasi kurir/service tidak ada di hasil → 400', async () => {
+    __setShippingServiceForTest({
+      getCost: async (o: string, d: string, w: number, c: string) =>
+        c === 'jne'
+          ? [{ courier: 'jne', service: 'CTC', cost: 25000, etd: '2-3' }]
+          : [{ courier: 'tiki', service: 'REG', cost: 15000, etd: '3-4' }],
+    } as any);
+
+    const res = await select({ uid: `${U4}-uid`, orderId, courier: 'jne', service: 'XXXX' });
+    assert.equal(res.status, 400);
+  });
+});
+
