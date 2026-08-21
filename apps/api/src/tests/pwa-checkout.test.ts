@@ -13,12 +13,13 @@
  *    next='upload_proof', paymentProofUrl null (menunggu payment-report terpisah)
  *  - qris -> sama dengan transfer
  */
-import { test, describe, before, after } from 'node:test';
+import { test, describe, before, after, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import http from 'http';
 import { prisma } from '../infrastructure/prisma.js';
-import pwaRouter from '../routes/pwa.js';
+import pwaRouter, { __setShippingServiceForTest } from '../routes/pwa.js';
+import { cachedShippingCostService } from '../services/shipping/cached-shipping-cost.service.js';
 import { getOrderWeightGrams } from '../services/shipping/order-weight.helper.js';
 
 const PREFIX = 'pwa-checkout-test';
@@ -289,3 +290,112 @@ describe('UNIT2 — getOrderWeightGrams', () => {
     assert.equal(grams, 2 * 250 + 3 * 400);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// UNIT 3 — GET /api/pwa/:storeSlug/shipping-options (read-only).
+// Shipping service di-inject via __setShippingServiceForTest (stub) — JANGAN
+// panggil RajaOngkir asli / habiskan quota di test.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('UNIT3 — GET /shipping-options', () => {
+  const U3 = 'unit3';
+  const SLUG3 = `${U3}-slug`;
+  let orderId: string;
+
+  const optsUrl = (oid: string) =>
+    `${baseUrl}/api/pwa/${SLUG3}/shipping-options?uid=${U3}-uid&orderId=${oid}`;
+
+  before(async () => {
+    await prisma.store.upsert({
+      where: { id: `${U3}-store` },
+      update: { slug: SLUG3, isActive: true, acceptsCod: true, originSubdistrictId: 'orig-1' },
+      create: {
+        id: `${U3}-store`, name: 'U3 Store', slug: SLUG3, isActive: true, acceptsCod: true,
+        phoneNumber: '+6281200000098', address: 'Jl U3',
+        originProvinceId: 'p', originProvinceName: 'P', originCityId: 'c', originCityName: 'C',
+        originSubdistrictId: 'orig-1', originSubdistrictName: 'O',
+      },
+    });
+    await prisma.customer.upsert({
+      where: { id: `${U3}-cust` },
+      update: { webUid: `${U3}-uid`, storeId: `${U3}-store` },
+      create: { id: `${U3}-cust`, storeId: `${U3}-store`, webUid: `${U3}-uid`, phone: null },
+    });
+    await prisma.conversation.upsert({
+      where: { id: `${U3}-conv` },
+      update: { storeId: `${U3}-store`, customerId: `${U3}-cust`, channel: 'web' },
+      create: { id: `${U3}-conv`, storeId: `${U3}-store`, customerId: `${U3}-cust`, channel: 'web', status: 'open' },
+    });
+    const prodA = await prisma.product.create({
+      data: { storeId: `${U3}-store`, name: 'A3', price: 1000, weight: 250, source: 'api' },
+    });
+    const prodB = await prisma.product.create({
+      data: { storeId: `${U3}-store`, name: 'B3', price: 2000, weight: 400, source: 'api' },
+    });
+    const order = await prisma.order.upsert({
+      where: { id: `${U3}-order` },
+      update: {
+        storeId: `${U3}-store`, conversationId: `${U3}-conv`, customerId: `${U3}-cust`,
+        orderStatus: 'draft', paymentStatus: 'unpaid',
+        destinationSubdistrictId: 'dest-1', destinationSubdistrictName: 'D',
+      },
+      create: {
+        id: `${U3}-order`, storeId: `${U3}-store`, conversationId: `${U3}-conv`,
+        customerId: `${U3}-cust`, items: [], orderStatus: 'draft', paymentStatus: 'unpaid',
+        destinationSubdistrictId: 'dest-1', destinationSubdistrictName: 'D',
+      },
+    });
+    orderId = order.id;
+    await prisma.orderItem.createMany({
+      data: [
+        { orderId, productId: prodA.id, productName: 'A3', quantity: 2, unitPrice: 1000, subtotal: 2000 },
+        { orderId, productId: prodB.id, productName: 'B3', quantity: 3, unitPrice: 2000, subtotal: 6000 },
+      ],
+    });
+  });
+
+  afterEach(() => __setShippingServiceForTest(cachedShippingCostService));
+
+  after(async () => {
+    await prisma.orderItem.deleteMany({ where: { orderId: { startsWith: U3 } } }).catch(() => {});
+    await prisma.order.deleteMany({ where: { id: { startsWith: U3 } } }).catch(() => {});
+    await prisma.product.deleteMany({ where: { storeId: `${U3}-store` } }).catch(() => {});
+    await prisma.conversation.deleteMany({ where: { id: { startsWith: U3 } } }).catch(() => {});
+    await prisma.customer.deleteMany({ where: { id: { startsWith: U3 } } }).catch(() => {});
+    await prisma.store.deleteMany({ where: { id: `${U3}-store` } }).catch(() => {});
+    __setShippingServiceForTest(cachedShippingCostService);
+  });
+
+  test('destination kosong → 400 "pilih alamat tujuan dulu"', async () => {
+    await prisma.order.update({ where: { id: orderId }, data: { destinationSubdistrictId: null } });
+    const res = await fetch(optsUrl(orderId));
+    assert.equal(res.status, 400);
+    await prisma.order.update({ where: { id: orderId }, data: { destinationSubdistrictId: 'dest-1' } });
+  });
+
+  test('semua kurir QUOTA_EXCEEDED → success:false error QUOTA_EXCEEDED', async () => {
+    __setShippingServiceForTest({ getCost: async () => 'QUOTA_EXCEEDED' } as any);
+    const res = await fetch(optsUrl(orderId));
+    const body = await res.json();
+    assert.equal(res.status, 200);
+    assert.equal(body.success, false);
+    assert.equal(body.error, 'QUOTA_EXCEEDED');
+  });
+
+  test('2 kurir sukses → array terurut termurah dulu', async () => {
+    __setShippingServiceForTest({
+      getCost: async (o: string, d: string, w: number, c: string) =>
+        c === 'jne'
+          ? [{ courier: 'jne', service: 'CTC', cost: 20000, etd: '2-3' }]
+          : [{ courier: 'tiki', service: 'REG', cost: 15000, etd: '3-4' }],
+    } as any);
+    const res = await fetch(optsUrl(orderId));
+    const body = await res.json();
+    assert.equal(body.success, true);
+    assert.equal(body.data.length, 2);
+    assert.equal(body.data[0].courier, 'tiki'); // 15000 < 20000
+    assert.equal(body.data[0].cost, 15000);
+    assert.equal(body.data[1].courier, 'jne');
+    assert.equal(body.data[1].cost, 20000);
+  });
+});
+
