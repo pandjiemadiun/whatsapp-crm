@@ -43,6 +43,7 @@ export declare class ProductService {
         description?: string;
         sku?: string;
         stock?: number;
+        weight: number;
         images?: ProductImage[];
     }): Promise<Product>;
     /**

@@ -100,6 +100,7 @@ export declare const createProductSchema: z.ZodObject<{
     description: z.ZodNullable<z.ZodOptional<z.ZodString>>;
     price: z.ZodCoercedNumber<unknown>;
     stock: z.ZodNullable<z.ZodOptional<z.ZodCoercedNumber<unknown>>>;
+    weight: z.ZodCoercedNumber<unknown>;
     sku: z.ZodString;
     categoryId: z.ZodNullable<z.ZodOptional<z.ZodString>>;
     currency: z.ZodDefault<z.ZodOptional<z.ZodString>>;
@@ -114,6 +115,7 @@ export declare const updateProductSchema: z.ZodObject<{
     description: z.ZodNullable<z.ZodOptional<z.ZodString>>;
     price: z.ZodOptional<z.ZodCoercedNumber<unknown>>;
     stock: z.ZodNullable<z.ZodOptional<z.ZodCoercedNumber<unknown>>>;
+    weight: z.ZodOptional<z.ZodCoercedNumber<unknown>>;
     categoryId: z.ZodNullable<z.ZodOptional<z.ZodString>>;
     currency: z.ZodOptional<z.ZodString>;
     images: z.ZodOptional<z.ZodArray<z.ZodObject<{

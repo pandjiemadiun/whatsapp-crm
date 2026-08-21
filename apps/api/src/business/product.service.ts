@@ -213,6 +213,7 @@ export class ProductService {
       description?: string;
       sku?: string;
       stock?: number;
+      weight: number;
       images?: ProductImage[];
     }
   ): Promise<Product> {
@@ -246,6 +247,7 @@ export class ProductService {
           currency: data.currency ?? 'IDR',
           sku: data.sku ?? null,
           stock: data.stock ?? null,
+          weight: data.weight,
           images: images.length ? (images as unknown as Prisma.InputJsonValue) : undefined,
           primaryImageUrl,
         },
@@ -273,6 +275,7 @@ export class ProductService {
           currency: data.currency ?? undefined,
           sku: data.sku ?? undefined,
           stock: data.stock ?? undefined,
+          weight: data.weight ?? undefined,
           isActive: data.isActive ?? undefined,
           categoryId: data.categoryId ?? undefined,
           images: data.images ? (data.images as unknown as Prisma.InputJsonValue) : undefined,
@@ -386,6 +389,7 @@ export class ProductService {
       currency: raw.currency,
       sku: raw.sku,
       stock: raw.stock,
+      weight: raw.weight,
       images: Array.isArray(raw.images) ? (raw.images as ProductImage[]) : null,
       primaryImageUrl: raw.primaryImageUrl,
       isActive: raw.isActive,

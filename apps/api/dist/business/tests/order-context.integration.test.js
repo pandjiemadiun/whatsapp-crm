@@ -123,6 +123,7 @@ test('5. Create product via ProductService', async () => {
         price: 15000,
         sku: 'KOPI-1',
         stock: 5,
+        weight: 500,
     });
     assert.ok(product.id);
     assert.equal(product.name, 'Kopi Susu');
