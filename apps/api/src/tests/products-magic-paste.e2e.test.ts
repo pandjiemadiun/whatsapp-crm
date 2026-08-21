@@ -79,7 +79,19 @@ before(async () => {
   const store = await prisma.store.upsert({
     where: { id: STORE_UUID },
     update: {},
-    create: { id: STORE_UUID, name: 'MP Store', email: `${PREFIX}@store.test` },
+    create: {
+      id: STORE_UUID,
+      name: 'MP Store',
+      email: `${PREFIX}@store.test`,
+      phoneNumber: '+6281200000093',
+      address: 'Jl. MP No. 1',
+      originProvinceId: 'prov-mp-1',
+      originProvinceName: 'Jawa Barat',
+      originCityId: 'city-mp-1',
+      originCityName: 'Bandung',
+      originSubdistrictId: 'sub-mp-1',
+      originSubdistrictName: 'Coblong',
+    },
   });
   storeId = store.id;
 

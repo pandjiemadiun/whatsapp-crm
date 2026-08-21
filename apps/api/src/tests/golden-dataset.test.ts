@@ -105,7 +105,18 @@ async function setupStore(): Promise<void> {
   await prisma.store.upsert({
     where: { id: STORE_ID },
     update: { name: 'Golden Dataset Test Store' },
-    create: { id: STORE_ID, name: 'Golden Dataset Test Store' },
+    create: {
+      id: STORE_ID,
+      name: 'Golden Dataset Test Store',
+      phoneNumber: '+6281200000098',
+      address: 'Jl. Golden No. 1',
+      originProvinceId: 'prov-golden-1',
+      originProvinceName: 'Jawa Barat',
+      originCityId: 'city-golden-1',
+      originCityName: 'Bandung',
+      originSubdistrictId: 'sub-golden-1',
+      originSubdistrictName: 'Coblong',
+    },
   });
   for (const p of BASE_PRODUCTS) {
     await prisma.product.upsert({

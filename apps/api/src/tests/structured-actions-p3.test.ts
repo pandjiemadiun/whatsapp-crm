@@ -102,6 +102,14 @@ async function setupFixtures() {
       name: 'P3 Cart Store',
       slug: `${TEST_PREFIX}-store`,
       email: 'p3@garuda.test',
+      phoneNumber: '+6281200000099',
+      address: 'Jl. P3 No. 1',
+      originProvinceId: 'prov-p3-1',
+      originProvinceName: 'Jawa Barat',
+      originCityId: 'city-p3-1',
+      originCityName: 'Bandung',
+      originSubdistrictId: 'sub-p3-1',
+      originSubdistrictName: 'Coblong',
     },
   });
   storeId = store.id;
@@ -114,6 +122,14 @@ async function setupFixtures() {
       name: 'P3 Other Store',
       slug: `${TEST_PREFIX}-other`,
       email: 'p3-other@garuda.test',
+      phoneNumber: '+6281200000100',
+      address: 'Jl. P3 Other No. 1',
+      originProvinceId: 'prov-p3o-1',
+      originProvinceName: 'Jawa Barat',
+      originCityId: 'city-p3o-1',
+      originCityName: 'Bandung',
+      originSubdistrictId: 'sub-p3o-1',
+      originSubdistrictName: 'Coblong',
     },
   });
   storeIdOther = storeOther.id;
