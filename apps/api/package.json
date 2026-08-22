@@ -17,6 +17,7 @@
     "test:golden": "tsx --env-file=../../.env --test --test-force-exit src/tests/golden-dataset.test.ts src/tests/v1-resolver-cartauthority.test.ts",
     "test:structured": "tsx --env-file=../../.env --test --test-force-exit \"src/tests/structured-actions*.test.ts\"",
     "test:payment": "tsx --env-file=../../.env --test --test-force-exit src/business/tests/payment.test.ts src/tests/pwa-checkout.test.ts src/tests/payment-verify-routes.e2e.test.ts src/tests/golden-payment.e2e.test.ts",
+    "test:shipping": "tsx --env-file=../../.env --test --test-force-exit src/tests/shipping-cost.test.ts",
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate dev",
     "db:studio": "prisma studio",

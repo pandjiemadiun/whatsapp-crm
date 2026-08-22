@@ -20,7 +20,7 @@ function weightBucket(weightGrams) {
     // acceptable accuracy loss.
     return Math.ceil(weightGrams / WEIGHT_BUCKET_GRAMS) * WEIGHT_BUCKET_GRAMS;
 }
-function wibDateKey(d = new Date()) {
+export function wibDateKey(d = new Date()) {
     return new Intl.DateTimeFormat('en-CA', {
         timeZone: 'Asia/Jakarta',
         year: 'numeric',

@@ -35,7 +35,7 @@ function weightBucket(weightGrams: number): number {
   return Math.ceil(weightGrams / WEIGHT_BUCKET_GRAMS) * WEIGHT_BUCKET_GRAMS;
 }
 
-function wibDateKey(d = new Date()): string {
+export function wibDateKey(d = new Date()): string {
   return new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Asia/Jakarta',
     year: 'numeric',
