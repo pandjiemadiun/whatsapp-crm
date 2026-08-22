@@ -1298,3 +1298,41 @@ dari laporan sesi sebelumnya.
 - Keputusan: registrasi toko SEKARANG wajib phone+address+lokasi (asal & tujuan
   checkout), pre-launch data hygiene. Tidak ada customer terdampak (belum rilis).
   Siapa yang setuju: owner (Panji), Claude.
+
+### 22 Agu 2026 — INSIDEN KEAMANAN: `.env` ter-track di git history + purge + recovery
+**[LOG — diverifikasi INDEPENDEN via git + filesystem, 22 Agu 2026, lihat BUG-BELUM-DIBERESKAN §VII]**
+
+- **Temuan:** `git check-ignore .env` KOSONG (tidak di-ignore), `git ls-files | grep -x .env`
+  mengembalikan `.env` (TER-TRACK), dan `git log --all --oneline -- .env` menunjukkan
+  `.env` pernah di-commit sekali di `a417632` ("Webhook secret validation + migrasi VPS 7
+  Agustus"). `a417632` ADALAH ancestor `origin/main` → snapshot `.env` (berisi secret asli:
+  `DATABASE_URL`, `GROQ_API_KEYS`, `GEMINI_API_KEY`, `CLOUDINARY_*`, `R2_*`,
+  `FIELD_ENCRYPTION_KEY`, `CLOUDFLARE_WORKER_*`, `WEBHOOK_SECRET`, `BACKUP_ENCRYPTION_KEY`,
+  dll) SUDAH ter-push ke GitHub `pandjiemadiun/whatsapp-crm`. Exposure sudah keluar dari
+  server lokal.
+- **Purge (III-2-B pola sama):** `git bundle create
+  /home/ubuntu/backups/garuda-backup-pre-env-purge-20260821.bundle --all` (verified OK)
+  lalu `git filter-repo --path .env --invert-paths --force`. WARNING: `git filter-repo`
+  menghapus file `.env` ASLI dari disk (checkout tree baru tanpa `.env`) — efek samping
+  yang harus di-recovery.
+- **Force-push:** `git remote add origin ...` (filter-repo hapus remote otomatis) lalu
+  `git push origin --force --all` → `6385322...3d86fe2 main -> main (forced update)` +
+  branch `task-pwa-shipping` baru di-push. Verifikasi remote BERSIH: clone fresh
+  `/tmp/verify-clean`, `git log --all -- .env` KOSONG, `.env` tidak tracked di remote.
+- **Merge:** `git checkout main && git merge task-pwa-shipping --no-ff` → merge commit
+  **`ea1f0c2`** (HEAD `main` SEKARANG, terverifikasi `git log origin/main -3`). Pre-purge
+  local `main` = `525e271`; post-purge `main` = `3d86fe2`; final merge = `ea1f0c2`.
+- **Recovery `.env` dari proses hidup:** `pm2 pid api` = `1032975` (masih jalan).
+  `sudo cat /proc/1032975/environ | tr '\0' '\n' > /tmp/env-recovered-raw.txt` (136 baris)
+  lalu filter 25 variabel aplikasi → `/home/ubuntu/garuda/.env`. Dua variabel
+  (`RAJAONGKIR_API_KEY`, `RAJAONGKIR_DAILY_QUOTA`) TIDAK ada di env proses (belum pernah
+  di-inject ke pm2) → owner tambahkan manual kemudian (`RAJAONGKIR_DAILY_QUOTA=100` +
+  `RAJAONGKIR_API_KEY` dari owner). Backup di LUAR git:
+  `/home/ubuntu/backups/env-recovered-20260821.env` (chmod 600).
+- **Proteksi:** `.env` SUDAH ada di `.gitignore` (baris 2); `.env.example` (placeholder,
+  tanpa nilai asli) dibuat & ter-track (`8ba77c9`). `.env` asli TIDAK boleh di-commit lagi.
+- **Keputusan:** server `api` restart sukses (online, pid berganti), full regresi hijau
+  (test:chat 270/270, test:golden 26/26, test:structured 115/115, test:payment 46/46).
+  **ROTATE semua secret DITUNDA sampai sebelum GO-LIVE** per keputusan owner (rotate
+  seluruh secret kecuali `RAJAONGKIR_API_KEY` yang tidak pernah ter-expose).
+- Siapa yang setuju: owner (Panji), Claude — diverifikasi independen 22 Agu 2026.

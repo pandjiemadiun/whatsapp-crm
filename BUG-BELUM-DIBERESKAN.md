@@ -148,3 +148,42 @@
 | VI-2 | **Monitoring single-instance**: `/api/admin/metrics/system` in-memory → TIDAK akurat di multi-instance pm2. | Low–Med | Gap diketahui; aman untuk single-instance saat ini. |
 | VI-3 | **RajaOngkir/Komerce dependency risk**: caching hasil cost (Redis 7d) + quota guard — risiko ban disengaja diterima owner; interface swap-able. | Low (owner-accepted) | Tidak ada follow-up wajib. |
 | VI-4 | **DIST dirty (III-1 berulang)**: source cluster `2a93924..2e64c0a` ter-commit tapi `dist/` belum di-rebuild → working tree berisi dist modified. | High (infra, MITIGASI) | Sebelum deploy: `cd apps/api && npm run build` lalu commit `dist/`. |
+
+---
+
+## VII. INSIDEN KEAMANAN `.env` TER-TRACK DI GIT HISTORY (22 Agu 2026)
+
+> Diverifikasi INDEPENDEN via `git` + filesystem (bukan narasi). Bukti:
+> `git log --all --oneline -- .env` SEKARANG **KOSONG** (purge sukses);
+> `git ls-files | grep -x .env` **KOSONG** (tidak tracked); `.gitignore` berisi `.env`;
+> `git log origin/main -3` = `ea1f0c2` (merge) → `8ba77c9` → `da1b2e1`.
+> History lama: `.env` pernah di-commit di `a417632` ("Webhook secret validation + migrasi
+> VPS 7 Agustus"), yang ADALAH ancestor `origin/main` → secret TER-PUSH ke GitHub.
+> Purge via `git filter-repo --path .env --invert-paths --force` + force-push
+> (`6385322...3d86fe2 main -> main forced update`); remote clone-fresh verified BERSIH.
+> `.env` asli di-recovery dari `/proc/<pid>/environ` proses `api` yang masih hidup, lalu
+> backup ke `/home/ubuntu/backups/env-recovered-20260821.env` (chmod 600, LUAR git).
+> Detail lengkap di RAILS.md §6 (entri 22 Agu 2026).
+
+### VII-A. OPEN — Rotate seluruh secret (DITUNDA sampai sebelum GO-LIVE)
+- **Item:** Semua secret yang pernah ada di `.env` `a417632` (ter-expose ke GitHub history
+  lama) WAJIB di-rotate: `DATABASE_URL`, `REDIS_URL`, `GEMINI_API_KEY`, `GROQ_API_KEYS`,
+  `GOWA_BASIC_AUTH_*`, `CLOUDINARY_*`, `BACKUP_ENCRYPTION_KEY`, `WEBHOOK_SECRET`,
+  `STORAGE_PROVIDER`/`R2_*`, `FIELD_ENCRYPTION_KEY`, `CLOUDFLARE_WORKER_*`, `PUBLIC_API_URL`.
+- **Kecuali:** `RAJAONGKIR_API_KEY` — **TIDAK PERNAH ter-expose** (tidak ada di `a417632`,
+  dan tidak ada di env proses hidup saat recovery; baru ditambahkan owner ke `.env` SETELAH
+  purge). Tidak perlu di-rotate karena tidak pernah masuk git history.
+- **Status:** 🟡 **OPEN / DITUNDA** — per keputusan owner, rotate ditunda sampai SEBELUM
+  GO-LIVE (website belum rilis, belum ada trafik nyata). BUKAN diabaikan — wajib sebelum
+  produksi bener-bener live. Risk: secret masih valid di GitHub history lama (sudah di-purge
+  dari working tree & remote SEKARANG, tapi snapshot lama sudah pernah keluar).
+
+### VII-B. OPEN — RAJAONGKIR_* hilang dari pm2 env, perlu owner tambahkan manual
+- **Item:** Saat recovery `.env` dari `/proc/<pid>/environ`, variabel `RAJAONGKIR_API_KEY`
+  dan `RAJAONGKIR_DAILY_QUOTA` **TIDAK ADA** di env proses hidup (belum pernah di-inject ke
+  pm2 env; modul ongkir belum pernah jalan di produksi).
+- **Status:** ✅ **SUDAH diatasi manual** — owner menambahkan `RAJAONGKIR_API_KEY` ke
+  `/home/ubuntu/garuda/.env` (dan `RAJAONGKIR_DAILY_QUOTA=100`), `.env` sekarang 27 baris
+  lengkap. CATATAN: `pm2 restart` tanpa `--update-env` mempertahankan env lama di memory —
+  kalau pm2 di-restart penuh / server reboot, pastikan `.env` (atau `ecosystem.config.js`)
+  menyuplai `RAJAONGKIR_*` supaya modul ongkir produksi punya kredensial.
