@@ -80,8 +80,8 @@ const cleanupFixtures = async () => {
 };
 
 await cleanupFixtures();
-await prisma.store.upsert({ where: { id: S1 }, update: { slug: 'f4-1', name: 'F4-1', fonnteToken: 'fake-f4' }, create: { id: S1, slug: 'f4-1', name: 'F4-1', fonnteToken: 'fake-f4' } });
-await prisma.store.upsert({ where: { id: S2 }, update: { slug: 'f4-2', name: 'F4-2' }, create: { id: S2, slug: 'f4-2', name: 'F4-2' } });
+await prisma.store.upsert({ where: { id: S1 }, update: { slug: 'f4-1', name: 'F4-1', fonnteToken: 'fake-f4' }, create: { id: S1, slug: 'f4-1', name: 'F4-1', fonnteToken: 'fake-f4', phoneNumber: '+6281200000094', address: 'Jl. F4-1 No. 1', originProvinceId: 'prov-f4-1', originProvinceName: 'Jawa Barat', originCityId: 'city-f4-1', originCityName: 'Bandung', originSubdistrictId: 'sub-f4-1', originSubdistrictName: 'Coblong' } });
+await prisma.store.upsert({ where: { id: S2 }, update: { slug: 'f4-2', name: 'F4-2' }, create: { id: S2, slug: 'f4-2', name: 'F4-2', phoneNumber: '+6281200000095', address: 'Jl. F4-2 No. 1', originProvinceId: 'prov-f4-2', originProvinceName: 'Jawa Barat', originCityId: 'city-f4-2', originCityName: 'Bandung', originSubdistrictId: 'sub-f4-2', originSubdistrictName: 'Coblong' } });
 await prisma.storeSetting.createMany({
   data: [
     { storeId: S1, key: 'auth_token', value: ADMIN_TOKEN_1 },
