@@ -173,12 +173,29 @@ export class BackupService {
             const dbPass = dbUrl.password;
             const killCmd = `PGPASSWORD="${dbPass}" psql -h ${dbHost} -p ${dbPort} -U ${dbUser} -d ${dbName} -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='${dbName}' AND pid <> pg_backend_pid();" 2>/dev/null || true`;
             await execShell(killCmd, 30000);
-            const restoreCmd = `gunzip -c "${gzPath}" | PGPASSWORD="${dbPass}" psql -h ${dbHost} -p ${dbPort} -U ${dbUser} -d ${dbName} 2>&1`;
+            // Restore the (custom-format) dump with pg_restore, NOT psql — psql
+            // cannot read pg_dump --format=custom output. --clean/--if-exists keep
+            // it idempotent over both empty and already-populated target DBs.
+            const restoreCmd = `gunzip -c "${gzPath}" | PGPASSWORD="${dbPass}" pg_restore -h ${dbHost} -p ${dbPort} -U ${dbUser} -d ${dbName} --clean --if-exists 2>&1`;
             await execShell(restoreCmd, backupConfig.backupTimeout);
             await fs.unlink(gzPath);
-            await prisma.backupManifest.update({
+            // Record the restore. The manifest row for THIS backup is created
+            // AFTER the pg_dump snapshot, so it is NOT present in the restored DB —
+            // use upsert (create-if-missing) instead of update to avoid failing the
+            // whole restore over a bookkeeping row.
+            await prisma.backupManifest.upsert({
                 where: { filename },
-                data: { restoredAt: new Date(), restoredBy: 'system' },
+                update: { restoredAt: new Date(), restoredBy: 'system' },
+                create: {
+                    filename,
+                    type: 'manual',
+                    size: BigInt(data.length),
+                    checksum: crypto.createHash('sha256').update(data).digest('hex'),
+                    encrypted: true,
+                    status: 'completed',
+                    restoredAt: new Date(),
+                    restoredBy: 'system',
+                },
             });
             adapters.logger.info(`[RESTORE] Database restored successfully from ${filename}`);
         }
