@@ -345,12 +345,25 @@ Kontrak §6A.12 mengunci **Prisma 5.22.0**; `package.json` `^5.10.0`. Audit read
 sudah resolve benar ke 5.22.0. `FOR UPDATE` via `$queryRaw` (action-registry) berjalan di
 versi ini. **Tidak ada tindakan diperlukan** (LOW, closed).
 
-### 6.9 🔴 P7 — WA convergence ke action contract — **OPEN (BELUM DIPUTUSKAN SCOPE)**
-`routes/webhooks.ts` (WA) memanggil `messageProcessorService.processMessage()` — **TIDAK**
-pakai `actionRegistry`/`executeAction`. WA masih text-only lewat Conversation Engine (interpreter
-→ acts → `CartAuthority.executeOps` via nama). PWA/web sudah konvergen ke typed action contract;
-WA belum. **Kandidat next task** (lihat §8). Scope belum diputuskan (apakah WA juga kirim
-typed action payload, atau tetap natural-language).
+### 6.9 ⚪ P7 — WA convergence ke action contract — **DITUTUP, TIDAK DIPERLUKAN (22 Agu 2026)**
+
+Keputusan owner: WA **TIDAK** akan dikonvergensi ke Action Registry/typed action contract.
+Alasan: Action Registry didesain untuk aksi yang **SUDAH** diketahui tanpa interpretasi
+(tap tombol UI) — proteksinya (`actionId`/`idempotency-key`) menjawab masalah UI double-tap
+yang tidak eksis di WA. WA **SELALU** free-text dan **SELALU** butuh LLM untuk interpretasi
+(Q1/Q3 kontrak §3 PROJECT-CONTRACT selalu jawab "structured input: TIDAK", "perlu LLM: YA") —
+berbeda mendasar dari alasan Action Registry dibuat. Prinsip kanal RAILS §3 (LOCKED): WA tidak
+akan pernah punya tombol interaktif, sehingga tidak akan pernah punya kasus "aksi sudah diketahui
+tanpa interpretasi".
+
+Proteksi yang WA butuhkan **SUDAH ADA** dan setara PWA: idempotency lock (P7 lama, RESMI SELESAI
+19 Agu 2026 — `FOR UPDATE` + `SAVEPOINT` sama persis dengan PWA) + truth boundary
+`validateCartOpsAgainstDb` (P2/I13). Jalur masuk beda (LLM vs typed) memang seharusnya beda karena
+sifat kanal berbeda, bukan gap yang perlu ditutup.
+
+Syarat buka ulang: HANYA kalau ada kebutuhan operasional konkret (misal audit-trail seragam
+lintas kanal, response contract disamakan untuk analytics) — BUKAN alasan "konsistensi arsitektur"
+semata. Belum ada sinyal kebutuhan itu saat ini.
 
 ---
 
@@ -379,20 +392,13 @@ typed action payload, atau tetap natural-language).
 
 ## 8. NEXT TASK YANG DISEPAKATI
 
-### 8.1 P7 — WA convergence ke action contract (kandidat berikutnya, **BELUM DIPUTUSKAN SCOPE**)
-Saat ini hanya PWA/web yang pakai typed action contract (`/action`). WA (`webhooks.ts`) masih
-natural-language via Conversation Engine. Opsi belum diputuskan:
-- (a) WA tetap NL, tapi hasil interpreter diarahkan ke action contract yang sama (konvergensi
-  di executor, bukan di gateway), atau
-- (b) WA juga kirim typed action payload (butuh client WA/button).
-**Scope belum disepakati** — jangan mulai tanpa keputusan owner (batasi scope, jangan modifik
-  CartAuthority core / transaction invariant §6A).
+### 8.1 P7 — WA convergence ke action contract
+Lihat §6.9 — DITUTUP, tidak diperlukan (22 Agu 2026).
 
 ### 8.2 Antrian (open)
-- **P7 WA convergence** — BELUM diputuskan scope (§8.1).
 - **II-5 test-isolation** — audit assertion `actionType`/`store`-wide lintas file test.
 - **6.5** pre-existing test failures (II-1/II-2) — perbaiki di test env (tidak blocking).
- - **6.7** sisa kosmetik / normalizer (I-1, III-4/5/7/8).
+  - **6.7** sisa kosmetik / normalizer (I-1, III-4/5/7/8).
 
 
 ---
