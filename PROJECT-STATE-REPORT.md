@@ -188,7 +188,7 @@ pelajaran (jangan biarkan pekerjaan besar menggantung uncommitted) tidak hilang.
 | **G2-E** | Storefront UI/UX | banyak done (PWA deploy `qlobot.web.id`, realtime+push FASE 1-4) |
 | **G2-F** | Checkout/Order/Payment | **SELESAI TOTAL (F1–F6)** — F1 (schema+bugfix) SELESAI, F2 (payment-report/verify) SELESAI, F3 (PWA checkout) SELESAI, F4 (dashboard payment verification UI + `GET /orders/:id/valid-next-states`) SELESAI, F5 (CI coverage audit + golden dataset checkout/payment, mutation-tested) SELESAI, F6 (F6a: paymentRejectReason opsional di payment-verify + UI reject dialog; F6b: endpoint `cod-settle` + halaman dashboard COD terpisah) SELESAI (commit `50d4d25`). F6a/F6b ditemukan sebagai penutup item minor setelah F5 (reject-reason untuk audit + visibilitas COD). COD settlement ke `orderStatus`/fulfillment TETAP DEFERRED (lihat DECISION-COD-SETTLEMENT-DEFERRED.md) |
 | **G2-G** | Realtime + Scale Hardening | **AUDIT BASELINE SELESAI** (`AUDIT-BASELINE-G2-G.md`, `dd20696`); **monitoring dasar SELESAI** (`GET /api/admin/metrics/system`, `b18b6d5`, in-memory single-instance); breakdown sub-fase hardening BELUM diputuskan |
-| **G2-H** | Release Readiness | **BELUM** — gate terakhir |
+| **G2-H** | Release Readiness | **PRAKTIS SELESAI** — audit 10-item closure ✅; rate-limiter gaps 11 endpoint publik ✅ (`10be048`); generalLimiter global safety net ✅ (sebelumnya dead code, `10be048`); backup restore rehearsal + fix ✅ (`0d29aaf`); smoke-fase4 Store fixture ✅ (`be8aff4`); SSL/HTTPS ✅ (certbot, expiry 2026-11-05, auto-renew aktif); VAPID/web-push env ✅ (FASE4); `test:shipping` CI ✅ (`e16679d`). **SISA 2 item DEFERRED:** (1) rotate seluruh secret (`VII-A`, DITUNDA sebelum go-live); (2) backup-alert sender — env `BACKUP_ALERT_EMAIL` terisi tapi TIDAK ADA sender terpasang (gap baru, Medium, lihat §6.10) |
 
 ---
 
@@ -233,6 +233,28 @@ swap-able).
 
 Registrasi toko SEKARANG wajib phone + address + lokasi asal (dan lokasi tujuan checkout
 lewat §4.5). Pre-launch data hygiene; belum ada customer terdampak (website belum rilis).
+
+---
+
+### 4.7 G2-H Release Readiness Audit — **PRAKTIS SELESAI (2 item deferred)**
+
+Ringkas 10 item audit awal + status closure masing-masing (commit terverifikasi via `git show --stat`):
+
+| # | Item audit | Commit / Bukti | Status closure |
+|---|-----------|----------------|-----------------|
+| 1 | Shipping test CI wiring (`test:shipping` ke CI + fix hardcoded quota date) | `e16679d` | ✅ RESOLVED |
+| 2 | Backup restore rehearsal + `restoreDatabase` psql→pg_restore + `backup:create` clean exit | `0d29aaf` (ditemukan via rehearsal NYATA) | ✅ RESOLVED |
+| 3 | Smoke-fase4 Store fixture NOT NULL | `be8aff4` | ✅ RESOLVED |
+| 4 | VAPID_PUBLIC_KEY/PRIVATE_KEY/SUBJECT + FASE4 web-push notification | env-only (runtime log "FASE4 notification service initialized" + smoke 63/63) | ✅ RESOLVED |
+| 5 | BACKUP_ALERT_EMAIL: env terisi + sender email | env-only (`10be048`-era) | ⚠️ env DONE / sender OPEN (gap baru, Medium — lihat §6.10) |
+| 6 | generalLimiter global safety net (sebelumnya dead code) | `10be048` | ✅ RESOLVED |
+| 7 | Rate-limiter gaps 11 endpoint publik tanpa proteksi | `10be048` (reuse existing limiter) | ✅ RESOLVED |
+| 8 | SSL/HTTPS (certbot, expiry 2026-11-05, auto-renew) | verifikasi manual VPS (infra-only) | ✅ RESOLVED |
+| 9 | Rotate seluruh secret | `VII-A` | 🟡 DEFERRED (sebelum go-live) |
+| 10 | G2-H Release Readiness sign-off (audit + docs-sync) | task ini (22 Agu 2026) | ✅ SELESAI |
+
+Catatan: item 5 & 10 terkait — env sudah ada (item 5) tapi mekanisme pengirim (item 10) belum ada,
+jadi alert kegagalan backup TIDAK terkirim. Item 9 (rotate secret) sengaja ditunda per keputusan owner.
 
 ---
 
@@ -365,6 +387,13 @@ Syarat buka ulang: HANYA kalau ada kebutuhan operasional konkret (misal audit-tr
 lintas kanal, response contract disamakan untuk analytics) — BUKAN alasan "konsistensi arsitektur"
 semata. Belum ada sinyal kebutuhan itu saat ini.
 
+### 6.10 🟡 BACKUP_ALERT_EMAIL terisi tapi TIDAK ADA sender (gap baru, temuan G2-H UNIT audit — 22 Agu 2026)
+
+- **Item:** `BACKUP_ALERT_EMAIL=pandjie@yahoo.com` sudah ditambahkan ke `.env` server (env-only, era `10be048`). Namun `backup.config.ts:50` hanya MEMBACA variabel → `backupConfig.notificationEmail`, dan `notifyOnFailure: true` (default), tapi TIDAK ADA satupun konsumen yang mengirim email: tidak ada SMTP / `nodemailer` / `transporter` / mail service di `src`.
+- **Dampak:** pada kegagalan backup, alert TIDAK akan benar-benar terkirim meski env terisi — silent failure. Ini gap terbuka baru (bukan regression), ditemukan saat audit wiring `BACKUP_ALERT_EMAIL`.
+- **Status:** 🟡 OPEN / Medium (bukan blocking go-live, tapi risiko silent-failure untuk backup gagal). Perlu implementasi email sender + wiring ke failure path `backup.service.ts` sebagai task terpisah.
+- Lihat juga: BUG-BELUM-DIBERESKAN §VI-5, RAILS.md §6 (entri 22 Agu 2026 G2-H).
+
 ---
 
 ## 7. DATABASE & CONFIG
@@ -426,8 +455,7 @@ npm run test:structured   # node:test structured-actions*: 115 tests / 7 suites 
 npm run test:payment      # node:test G2-F suites: 37 tests / 4 files pass (G2-F6, commit `50d4d25`)
 #   - payment.test.ts (F2, ~13) + pwa-checkout.test.ts (F3, 8) + payment-verify-routes.e2e.test.ts (F1/F4 + F6a/F6b, ~16)
 #     + golden-payment.e2e.test.ts (G2-F5 golden checkout/payment, 5, mutation-tested)
-# Shipping suites (BELUM ada script npm, lihat §6.7 SHIPPING-CI-GAP) — jalankan manual:
-#   npx tsx --test --test-force-exit "src/tests/shipping*.test.ts" "src/services/shipping/**/*.test.ts"
+npm run test:shipping     # node:test shipping-cost suite: 8 tests pass (`e16679d`, CI step setelah test:payment)
 ```
 
 ### 9.3 Restart & log (produksi VPS `root@vps3541799`, repo `/home/ubuntu/garuda`)
