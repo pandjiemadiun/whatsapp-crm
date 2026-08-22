@@ -2,7 +2,7 @@
 
 > **Dokumen ini dibuat untuk onboarding ke project baru (Claude/AI coding agent).**
 > Semua klaim status di bawah diverifikasi terhadap **source code, test, dan git log aktual**
-> di working tree `/home/ubuntu/garuda` pada **2026-08-21** (HEAD `2e64c0a`). Tidak ada klaim
+> di working tree `/home/ubuntu/garuda` pada **2026-08-22** (HEAD `ea1f0c2`). Tidak ada klaim
 > yang diambil mentah dari roadmap/STATUS lama tanpa cross-check ke kode.
 >
 > **ATURAN RAILS.md BERLAKU:** tidak ada kode yang diubah dalam pembuatan dokumen ini
@@ -399,9 +399,10 @@ natural-language via Conversation Engine. Opsi belum diputuskan:
 
 ## 9. CARA VERIFIKASI (untuk siapapun yang lanjutkan)
 
-> Working tree BERISIKAN dist modified (sumber `2a93924..2e64c0a` SUDAH ter-commit &
-> ter-push ke `origin/main`, HEAD `2e64c0a`, tapi `dist/` belum di-rebuild — pola III-1,
-> lihat §6.6). Sebelum deploy: `cd apps/api && npm run build` lalu commit `dist/`.
+> Working tree BERSIH (cluster `2a93924..2e64c0a` SUDAH di-merge ke `main` via commit
+> `ea1f0c2`, `dist/` SUDAH di-rebuild & ter-commit di `da1b2e1`, force-push + merge selesai
+> 22 Agu 2026). Satu-satunya untracked: `P7-AUDIT-FINDINGS.md` (sengaja dibiarkan) dan
+> `.env` (gitignored, bukan bagian git). Lihat RAILS.md §6 (insiden `.env` 22 Agu).
 
 ### 9.1 Build & typecheck (dari `apps/api`)
 ```bash
@@ -441,7 +442,7 @@ npx prisma studio
 ### 9.5 Git state
 ```bash
 git status --short | head   # EXPECT dist/ modified (belum rebuild, §6.6) + P7-AUDIT-FINDINGS.md untracked
-git log --oneline -3        # HEAD: 2e64c0a
+git log --oneline -3        # HEAD: ea1f0c2
 ```
 
 ### 9.6 Verifikasi klaim
@@ -536,6 +537,6 @@ wajib `npm run build` + commit `dist/`.
 ---
 
 *Laporan dibuat read-only (tidak ada kode diubah). Semua klaim diverifikasi ke source/test/git
-log working tree `/home/ubuntu/garuda` per 2026-08-21 (HEAD `2e64c0a`). Klaim yang tidak bisa
+log working tree `/home/ubuntu/garuda` per 2026-08-22 (HEAD `ea1f0c2`). Klaim yang tidak bisa
 diverifikasi mandiri ditandai [DUGAAN] atau "belum diverifikasi". INSIDEN unreported-work gap
 ada di §10 (19 Agu) dan §10.2 (21 Agu).*
