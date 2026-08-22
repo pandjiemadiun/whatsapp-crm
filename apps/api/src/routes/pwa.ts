@@ -3,6 +3,7 @@ import multer from 'multer';
 import { prisma } from '../infrastructure/prisma.js';
 import {
   conversationLimiter,
+  orderMutationLimiter,
   pwaInitLimiter,
   pwaProductsLimiter,
   pwaShippingOptionsLimiter,
@@ -112,7 +113,7 @@ router.get('/:storeSlug/init', pwaInitLimiter, async (req: Request, res: Respons
 
 // GET /api/pwa/:storeSlug/history?uid=<webUid> — riwayat Web Conversation.
 // Visitor pertama kali (Customer/Conversation belum ada) -> history kosong, BUKAN 404.
-router.get('/:storeSlug/history', async (req: Request, res: Response) => {
+router.get('/:storeSlug/history', pwaProductsLimiter, async (req: Request, res: Response) => {
   try {
     const { storeSlug } = req.params;
     const uid = req.query.uid;
@@ -412,7 +413,7 @@ router.post('/:storeSlug/message', conversationLimiter, async (req: Request, res
 // (store:{storeId}:admin). Server-side throttle 1s (ephemeral event, tidak dipersist).
 const typingThrottle = new Map<string, number>();
 const TYPING_THROTTLE_MS = 1000;
-router.post('/:storeSlug/typing', async (req: Request, res: Response) => {
+router.post('/:storeSlug/typing', conversationLimiter, async (req: Request, res: Response) => {
   try {
     const { storeSlug } = req.params;
     const { uid, conversationId, typing } = req.body as {
@@ -478,7 +479,7 @@ router.post('/:storeSlug/typing', async (req: Request, res: Response) => {
 // only calls on controlled triggers (visible new msg / reconnect catch-up).
 const readThrottle = new Map<string, number>();
 const READ_THROTTLE_MS = 5000;
-router.post('/:storeSlug/read', async (req: Request, res: Response) => {
+router.post('/:storeSlug/read', conversationLimiter, async (req: Request, res: Response) => {
   try {
     const { storeSlug } = req.params;
     const { uid, conversationId, at } = req.body as {
@@ -562,7 +563,7 @@ router.post('/:storeSlug/read', async (req: Request, res: Response) => {
 // JANGAN percaya customerId/storeId dari client (tenant isolation). UPDATE
 // existing Customer.pushSubscription (refresh/replace bila browser rotate langganan;
 // MVP = 1 browser/device per webUid → kolom Json? cukup).
-router.post('/:storeSlug/subscribe', async (req: Request, res: Response) => {
+router.post('/:storeSlug/subscribe', conversationLimiter, async (req: Request, res: Response) => {
   try {
     const { storeSlug } = req.params;
     const { uid, subscription } = req.body as { uid?: string; subscription?: unknown };
@@ -607,7 +608,7 @@ router.post('/:storeSlug/subscribe', async (req: Request, res: Response) => {
 // Server-authoritative resolution (slug + webUid). Clears the column; does NOT
 // delete the customer or conversation. Called on user opt-out / browser-driven
 // unsubscription.
-router.post('/:storeSlug/unsubscribe', async (req: Request, res: Response) => {
+router.post('/:storeSlug/unsubscribe', conversationLimiter, async (req: Request, res: Response) => {
   try {
     const { storeSlug } = req.params;
     const { uid } = req.body as { uid?: string };
@@ -735,7 +736,7 @@ export async function getOrCreateWebSession(
 // Realtime service memforward ke room customer (store:{storeId}:conv:{conversationId})
 // sehingga PWA listener `conversation.handoff` berputasi — dan response juga
 // konsisten secara optimis (state updated di sisi server).
-router.post('/:storeSlug/handoff', async (req: Request, res: Response) => {
+router.post('/:storeSlug/handoff', conversationLimiter, async (req: Request, res: Response) => {
   try {
     const { storeSlug } = req.params;
     const { uid, conversationId: convId } = req.body as { uid?: string; conversationId?: string };
@@ -773,7 +774,7 @@ router.post('/:storeSlug/handoff', async (req: Request, res: Response) => {
 // POST /api/pwa/:storeSlug/clear — hapus riwayat chat web conversation.
 // Hard-delete conversation_history rows (schema tidak ada deletedAt pada history)
 // + reset status conversation ke 'open'. Dipanggil setelah konfirmasi modal.
-router.post('/:storeSlug/clear', async (req: Request, res: Response) => {
+router.post('/:storeSlug/clear', conversationLimiter, async (req: Request, res: Response) => {
   try {
     const { storeSlug } = req.params;
     const { uid, conversationId: convId } = req.body as { uid?: string; conversationId?: string };
@@ -803,7 +804,7 @@ router.post('/:storeSlug/clear', async (req: Request, res: Response) => {
 // Body: { uid, orderId, paymentMethod: 'transfer'|'qris', proofUrl }.
 // Tenant isolation: resolve web session (store+customer), lalu paymentService.reportPayment
 // memvalidasi order milik store+customer yang sama. orderStatus TIDAK disentuh.
-router.post('/:storeSlug/payment-report', async (req: Request, res: Response) => {
+router.post('/:storeSlug/payment-report', conversationLimiter, async (req: Request, res: Response) => {
   try {
     const { storeSlug } = req.params;
     const { uid, orderId, paymentMethod, proofUrl } = req.body as {
@@ -852,7 +853,7 @@ router.post('/:storeSlug/payment-report', async (req: Request, res: Response) =>
 // Reuse CartAuthority.checkout (draft -> waiting_address). COD: selesai (tetap waiting_address,
 // TIDAK panggil payment-report). Transfer/QRIS: order tetap waiting_address; signal frontend
 // untuk upload bukti via payment-report (endpoint terpisah, dipanggil manual customer).
-router.post('/:storeSlug/checkout', async (req: Request, res: Response) => {
+router.post('/:storeSlug/checkout', orderMutationLimiter, async (req: Request, res: Response) => {
   try {
     const { storeSlug } = req.params;
     const {
@@ -1297,7 +1298,7 @@ const proofUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 },
 });
-router.post('/:storeSlug/payment-proof-upload', proofUpload.single('proof'), async (req: Request, res: Response) => {
+router.post('/:storeSlug/payment-proof-upload', orderMutationLimiter, proofUpload.single('proof'), async (req: Request, res: Response) => {
   try {
     const { storeSlug } = req.params;
     const store = await prisma.store.findUnique({

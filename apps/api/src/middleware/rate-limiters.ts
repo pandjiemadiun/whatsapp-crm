@@ -50,6 +50,9 @@ export const generalLimiter = rateLimit({
   message: { error: 'Too many requests, please slow down' },
   standardHeaders: true,
   legacyHeaders: false,
+  // Skipped under NODE_ENV=test (jest). The tsx-based suites run with
+  // NODE_ENV=production and are expected to stay under the 1000/15m ceiling.
+  skip: skipInTest,
   store: new RedisRateLimitStore('rl:general', 15 * 60 * 1000),
 });
 

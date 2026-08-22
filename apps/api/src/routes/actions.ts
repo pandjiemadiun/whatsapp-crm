@@ -9,6 +9,8 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { pwaProductsLimiter } from '../middleware/rate-limiters.js';
+
 import { Router, Request, Response } from 'express';
 import { prisma } from '../infrastructure/prisma.js';
 import { getOrCreateWebSession } from './pwa.js';
@@ -20,7 +22,7 @@ import { executeAction, actionRegistry } from '../business/action-registry.js';
 const router = Router();
 
 // POST /api/pwa/:storeSlug/action — execute structured action
-router.post('/:storeSlug/action', async (req: Request, res: Response) => {
+router.post('/:storeSlug/action', pwaProductsLimiter, async (req: Request, res: Response) => {
   try {
     const { storeSlug } = req.params;
     const { uid, action } = req.body as { uid?: string; action?: unknown };

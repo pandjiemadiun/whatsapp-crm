@@ -8,6 +8,7 @@
  * NEVER trusts client-supplied identity as business authority.
  */
 import { randomUUID } from 'node:crypto';
+import { pwaProductsLimiter } from '../middleware/rate-limiters.js';
 import { Router } from 'express';
 import { prisma } from '../infrastructure/prisma.js';
 import { getOrCreateWebSession } from './pwa.js';
@@ -17,7 +18,7 @@ import { ErrorCodes } from '../constants/errorCodes.js';
 import { executeAction } from '../business/action-registry.js';
 const router = Router();
 // POST /api/pwa/:storeSlug/action — execute structured action
-router.post('/:storeSlug/action', async (req, res) => {
+router.post('/:storeSlug/action', pwaProductsLimiter, async (req, res) => {
     try {
         const { storeSlug } = req.params;
         const { uid, action } = req.body;
