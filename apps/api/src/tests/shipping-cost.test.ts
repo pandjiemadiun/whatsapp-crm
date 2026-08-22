@@ -12,6 +12,7 @@ import assert from 'node:assert/strict';
 import {
   CachedShippingCostService,
   CacheStore,
+  wibDateKey,
 } from '../services/shipping/cached-shipping-cost.service.js';
 import {
   ShippingCostProvider,
@@ -103,8 +104,8 @@ describe('CachedShippingCostService', () => {
   test('quota exceeded → QUOTA_EXCEEDED, provider never called', async () => {
     const calls: number[] = [];
     const redis = new FakeRedis();
-    // Seed the daily quota counter at the limit.
-    await redis.set('ongkir:quota:rajaongkir:2026-08-20', 100, 3600);
+    // Seed the daily quota counter at the limit (use same WIB date key as source).
+    await redis.set(`ongkir:quota:rajaongkir:${wibDateKey()}`, 100, 3600);
     const svc = new CachedShippingCostService(makeProvider(SAMPLE, calls), redis, 100);
 
     const res = await svc.getCost('1', '2', 500, 'jne');

@@ -4,6 +4,7 @@ export interface CacheStore {
     get<T>(key: string): Promise<T | null>;
     set<T>(key: string, value: T, ttlSeconds: number): Promise<void>;
 }
+export declare function wibDateKey(d?: Date): string;
 export declare class CachedShippingCostService {
     private readonly provider;
     private readonly redis;

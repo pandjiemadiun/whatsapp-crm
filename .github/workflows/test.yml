@@ -156,3 +156,12 @@ jobs:
       - name: Run test:payment (payment/checkout/payment-verify + golden cases)
         working-directory: apps/api
         run: npm run test:payment
+
+      # ── test:shipping (node:test) — MUST pass, 0 failure ───────────────────
+      # TASK G2-H-BATCH-1 / SHIPPING-CI-GAP (VI-1) — shipping-cost suite
+      # SEBELUMNYA TIDAK ter-cover CI. Regresi layer shipping (cached cost
+      # service / RajaOngkir adapter) bisa lolos tanpa terdeteksi (pola II-6 /
+      # VI-1 payment). Global, FAIL CI jika ada test gagal.
+      - name: Run test:shipping (shipping-cost suite)
+        working-directory: apps/api
+        run: npm run test:shipping
