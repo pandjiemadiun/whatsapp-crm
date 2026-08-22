@@ -144,10 +144,17 @@
 ### VI-D. OPEN / KNOWN (tidak blocking, task terpisah)
 | ID | Item | Severity | Note |
 |----|------|----------|------|
-| VI-1 | **SHIPPING-CI-GAP**: test suite shipping (`shipping*.test.ts`, `order-weight.helper`, `shipping-options`/`select-shipping` e2e) TIDAK ter-cover CI (tidak masuk test:chat/golden/structured/payment). | High (CI gap) | Jalankan manual: `tsx --test --test-force-exit "src/tests/shipping*.test.ts" "src/services/shipping/**/*.test.ts"`. Butuh script `test:shipping` + step CI (pola II-6/II-7). |
+| VI-1 | **SHIPPING-CI-GAP**: test suite shipping TIDAK ter-cover CI — **RESOLVED** (`e16679d`): `test:shipping` script + step CI setelah `test:payment` (MUST pass 0 failure); plus fix hardcoded quota date pakai `wibDateKey()`. | Resolved | `npm run test:shipping` (8/8 pass). |
 | VI-2 | **Monitoring single-instance**: `/api/admin/metrics/system` in-memory → TIDAK akurat di multi-instance pm2. | Low–Med | Gap diketahui; aman untuk single-instance saat ini. |
 | VI-3 | **RajaOngkir/Komerce dependency risk**: caching hasil cost (Redis 7d) + quota guard — risiko ban disengaja diterima owner; interface swap-able. | Low (owner-accepted) | Tidak ada follow-up wajib. |
 | VI-4 | **DIST dirty (III-1 berulang)**: source cluster `2a93924..2e64c0a` ter-commit tapi `dist/` belum di-rebuild → working tree berisi dist modified. | High (infra, MITIGASI) | Sebelum deploy: `cd apps/api && npm run build` lalu commit `dist/`. |
+| VI-5 | **BACKUP_ALERT_EMAIL no sender**: env `BACKUP_ALERT_EMAIL` sudah terisi (pandjie@yahoo.com) tapi TIDAK ADA email sender terpasang di manapun di `src` (no SMTP/nodemailer/mail service). `backup.config.ts:50` membaca → `notificationEmail`, `notifyOnFailure:true`, tapi tidak ada konsumen yang mengirim email → alert kegagalan backup TIDAK terkirim. Gap baru temuan G2-H UNIT audit. | Medium (silent-failure risk) | Perlu implementasi sender + wiring ke failure path `backup.service.ts` (task terpisah, lihat PROJECT-STATE §6.10). |
+
+### VI-E. RESOLVED (G2-H release readiness — 22 Agu 2026)
+- **Shipping CI gap (VI-1) — `e16679d`**: `test:shipping` script + step CI setelah `test:payment` (pola II-6/II-7, MUST pass 0 failure); plus fix hardcoded quota date (`wibDateKey()` dipakai test agar seed key cocok WIB nyata). ✅ RESOLVED.
+- **Backup restore rehearsal (`0d29aaf`) — DITEMUKAN via rehearsal NYATA, bukan cuma dry-run**: `restoreDatabase` pipa `pg_dump --format=custom` (binary) ke `psql` yang TIDAK bisa baca custom format → full restore SELALU gagal. Diganti `pg_restore --clean --if-exists` (idempoten); `pg_terminate_backend` kill-step tetap `psql`. Plus bookkeeping manifest pakai upsert (bukan update) + `backup:create` clean exit (`prisma.$disconnect()` + `process.exit(0)`). Bukti: full restore ke sandbox DB terpisah EXIT 0, row-count + id-checksum orders/order_items/stores/products/customers COCOK sumber, tanpa data loss. ✅ RESOLVED — ini bukti kenapa rehearsal restore penting: dry-run tidak menangkap format mismatch ini.
+- **generalLimiter dead-code (`10be048`)**: `generalLimiter` (15m/1000/IP) sebelumnya didefinisikan tapi TIDAK PERNAH dipasang (dead code). Kini di-mount sebagai global safety net di `index.ts` (setelah body-parser/maintenance, sebelum route; `/api/health` + `/r` dikecualikan). ✅ RESOLVED.
+- **Rate-limiter gaps 11 endpoint publik (`10be048`)**: 11 endpoint publik no-auth tanpa proteksi (`/checkout`, `/payment-proof-upload`, `/action`, `/payment-report`, `/subscribe`, `/unsubscribe`, `/handoff`, `/clear`, `/typing`, `/read`, `/history`) + redirect `/r/:storeId` kini dapat limiter (reuse existing: `orderMutationLimiter`, `conversationLimiter`, `pwaProductsLimiter`). ✅ RESOLVED.
 
 ---
 

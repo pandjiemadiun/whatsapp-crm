@@ -1341,3 +1341,38 @@ dari laporan sesi sebelumnya.
   **ROTATE semua secret DITUNDA sampai sebelum GO-LIVE** per keputusan owner (rotate
   seluruh secret kecuali `RAJAONGKIR_API_KEY` yang tidak pernah ter-expose).
 - Siapa yang setuju: owner (Panji), Claude — diverifikasi independen 22 Agu 2026.
+
+### 22 Agu 2026 — G2-H Release Readiness: closure cluster (real-time, dilaporkan saat commit)
+
+Konteks:
+G2-H (gate terakhir release readiness) dikerjakan sebagai serangkaian unit terverifikasi:
+audit 10-item → shipping test CI → backup restore rehearsal + fix → VAPID/web-push env →
+smoke-fase4 fixture → rate-limiter gaps. Semua bukti dari commit asli (`git show --stat`) +
+runtime log, dilaporkan saat commit (BUKAN post-hoc / retroaktif).
+
+Keputusan:
+- `e16679d` — `test:shipping` di-wire ke CI (script + step setelah `test:payment`, MUST pass 0
+  failure) + fix hardcoded quota date (`wibDateKey()`). SHIPPING-CI-GAP (VI-1) RESOLVED.
+- `0d29aaf` — backup restore rehearsal NYATA menemukan `restoreDatabase` pipa dump custom-format
+  ke `psql` (gagal); diganti `pg_restore --clean --if-exists` (idempoten) + manifest upsert +
+  `backup:create` clean exit. RESOLVED (bukti: full restore sandbox DB EXIT 0, row-count +
+  checksum cocok). Ini bukti kenapa rehearsal restore penting — dry-run tidak menangkap format mismatch.
+- `be8aff4` — smoke-fase4 Store fixture diperbaiki untuk field NOT NULL. RESOLVED (smoke 63/63,
+  termasuk "web push sent").
+- VAPID_PUBLIC_KEY/PRIVATE_KEY/SUBJECT + FASE4 web-push notification: env-only, terverifikasi
+  via runtime log "FASE4 notification service initialized" + smoke 63/63. RESOLVED (tanpa commit source).
+- `10be048` — generalLimiter (sebelumnya DEAD CODE, tidak pernah dipasang) di-mount sebagai global
+  safety net (15m/1000/IP) + 11 endpoint publik tanpa proteksi dapat limiter (reuse existing:
+  orderMutationLimiter / conversationLimiter / pwaProductsLimiter). RESOLVED.
+- SSL/HTTPS: certbot terverifikasi manual — certificate valid, expiry 2026-11-05, auto-renew via
+  certbot.timer aktif. RESOLVED (infra-only, tanpa kode).
+
+Alasan:
+G2-H Release Readiness praktis SELESAI. Dua item SENGAJA DEFERRED (bukan bug blocking):
+(1) Rotate seluruh secret — `VII-A`, DITUNDA sampai sebelum GO-LIVE (per keputusan owner, sudah
+di-record di entri `.env` 22 Agu di atas); (2) BACKUP_ALERT_EMAIL env sudah terisi tapi TIDAK ADA
+email sender terpasang di manapun di `src` (no SMTP/nodemailer) → alert kegagalan backup TIDAK akan
+terkirim; ini GAP terbuka baru (Medium, silent-failure), dilaporkasi sebagai item terpisah di
+BUG-BELUM-DIBERESKAN §VI-5 + PROJECT-STATE §6.10.
+
+Siapa yang setuju: owner (Panji), AI CLI (Kilo).
