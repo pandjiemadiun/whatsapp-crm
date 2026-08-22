@@ -68,6 +68,11 @@ memaksa setiap klaim dibuktikan, bukan diucapkan.
     sesi/clone lain. (Ditambahkan setelah insiden hash `e6c7157`→`84ad070`
     kemarin di-rewrite lewat amend + force-push.)
 
+11. **DILARANG memulai sesi tanpa cek `git ls-files | grep -x .env`**
+    (harus KOSONG) sejajar dengan `git status` di awal sesi (§1.6). Insiden
+    22 Agu 2026 baru ketahuan karena kebetulan ada task merge — tanpa cek
+    eksplisit ini, exposure secret bisa tidak terdeteksi bertahun-tahun.
+
 ## 2. VERDICT ARSITEKTUR (hasil audit 9 Agu 2026, MASIH BERLAKU)
 
 Akar masalah "chatbot kaku, tambal-sulam tanpa akhir" BUKAN semata
