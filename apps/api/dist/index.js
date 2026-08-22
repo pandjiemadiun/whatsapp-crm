@@ -42,7 +42,7 @@ import actionsRouter from './routes/actions.js';
 import { adminAuthMiddleware } from './middleware/adminAuth.js';
 import { authMiddleware } from './middleware/auth.js';
 import { requireAdminRole } from './middleware/adminAuthGuard.js';
-import { pwaLocationsLimiter } from './middleware/rate-limiters.js';
+import { pwaLocationsLimiter, generalLimiter, pwaProductsLimiter } from './middleware/rate-limiters.js';
 import { initializeDefaultConfigs } from './bootstrap/initializeConfig.js';
 import { maintenanceModeMiddleware } from './middleware/maintenanceMode.js';
 import healthRouter from './routes/health.js';
@@ -97,8 +97,17 @@ app.use(metricsMiddleware);
 app.use(maintenanceModeMiddleware);
 // Health check routes (mounted BEFORE other routes, AFTER CORS)
 app.use('/api', healthRouter);
-// Short-link redirect routes (public — QR codes printed on materials must work)
-app.use('/r', redirectRouter);
+// Short-link redirect routes (public — QR codes printed on materials must work).
+// Protected by the generous public read limiter as a basic abuse safety net.
+app.use('/r', pwaProductsLimiter, redirectRouter);
+// ─── GLOBAL RATE-LIMIT SAFETY NET ───────────────────────────────────────────
+// Mounted AFTER body-parser/CORS/metrics/maintenance and AFTER the health +
+// redirect mounts (so automated /api/health probes and QR redirects stay open),
+// but BEFORE all other /api routes. Acts as the OUTER layer: each route's own
+// specific limiter (pwaProductsLimiter, conversationLimiter, ...) still runs
+// INNER and independently — both may trip; the first to hit its ceiling wins.
+// Skipped under NODE_ENV=test (jest); active in production runtime.
+app.use(generalLimiter);
 // Mount Routes
 app.use('/api/messages', messagesRouter);
 app.use('/api/faq', faqRouter);
