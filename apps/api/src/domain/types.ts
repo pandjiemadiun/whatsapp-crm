@@ -263,6 +263,9 @@ export interface DiscussedItem {
  */
 export interface ConfirmedItem extends DiscussedItem {
   confirmedAt: string;
+  /** PV-P1: identifier varian (null = produk tanpa varian). Membedakan baris
+   *  produk sama tapi varian beda agar tidak tergabung saat di-reconcile. */
+  variantId?: string | null;
 }
 
 /**

@@ -44,9 +44,10 @@ function txOrGlobal(tx?: unknown): any {
 export interface CartLine {
   id: string;            // OrderItem.id
   productId: string | null;  // FK to Product (null if product was deleted)
+  variantId: string | null;  // PV-P1: FK to ProductVariant (null = no variant)
   productName: string;   // snapshot at add time
   quantity: number;      // > 0
-  unitPrice: number;     // snapshot from Product.price at add time
+  unitPrice: number;     // snapshot from resolved price (Product or ProductVariant) at add time
   subtotal: number;      // unitPrice × quantity
 }
 
@@ -182,6 +183,7 @@ export class CartAuthority {
     customerId: string,
     productId: string,
     qty: number = 1,
+    variantId: string | null = null,
   ): Promise<CartLine[]> {
     if (qty < 1) {
       throw new CartInvariantError('Quantity must be >= 1', 'INVALID_QUANTITY');
@@ -202,8 +204,9 @@ export class CartAuthority {
       );
     }
 
-    // Price from DB (authoritative — ignore any caller-provided price)
-    const unitPrice = product.price;
+    // PV-P1: price/stock authoritatively resolved via centralized helper.
+    // variantId null → Product (unchanged); variantId set → ProductVariant.
+    const { price: unitPrice, stock } = await this.resolvePriceAndStock(productId, variantId);
     const newQty = qty;
 
     return await prisma.$transaction(async (tx) => {
@@ -226,19 +229,21 @@ export class CartAuthority {
         customerId,
       );
 
-      // Find existing OrderItem for this productId
+      // PV-P1: find key = productId + variantId (variantId null is a VALID value,
+      // not an empty filter — match it explicitly).
       const existingItem = await tx.orderItem.findFirst({
         where: {
           orderId: order.id,
           productId: productId,
+          variantId: variantId ?? null,
         },
       });
 
       // Stock check: existing qty in cart + new qty must not exceed stock
       const existingQty = existingItem ? Number(existingItem.quantity) : 0;
-      if (freshProduct.stock !== null && freshProduct.stock < existingQty + newQty) {
+      if (stock !== null && stock < existingQty + newQty) {
         throw new CartInvariantError(
-          `Insufficient stock for ${freshProduct.name}: ${freshProduct.stock} available, ${existingQty + newQty} needed`,
+          `Insufficient stock for ${freshProduct.name}: ${stock} available, ${existingQty + newQty} needed`,
           'INSUFFICIENT_STOCK',
         );
       }
@@ -262,6 +267,7 @@ export class CartAuthority {
           data: {
             orderId: order.id,
             productId,
+            variantId: variantId ?? null,
             productName: product.name,
             quantity: newQty,
             unitPrice,
@@ -457,7 +463,7 @@ export class CartAuthority {
     }
 
     // FINAL stock invariant at cart→order boundary
-    // Validates every line item's quantity against current DB stock
+    // Validates every line item's quantity against current DB stock (variant-aware).
     for (const item of order.orderItems as any[]) {
       if (!item.productId) continue; // skip items with no product (product was deleted)
       const product = await productService.getProductById(item.productId);
@@ -467,9 +473,11 @@ export class CartAuthority {
           'PRODUCT_INACTIVE',
         );
       }
-      if (product.stock !== null && product.stock < item.quantity) {
+      // PV-P1: stock source depends on whether the line carries a variant.
+      const { stock } = await this.resolvePriceAndStock(item.productId, item.variantId ?? null);
+      if (stock !== null && stock < item.quantity) {
         throw new CartInvariantError(
-          `Insufficient stock for "${product.name}": ${product.stock} available, ${item.quantity} in cart`,
+          `Insufficient stock for "${product.name}": ${stock} available, ${item.quantity} in cart`,
           'INSUFFICIENT_STOCK',
         );
       }
@@ -561,17 +569,20 @@ export class CartAuthority {
 
           const { productId, productName, unitPrice } = result;
           const qty = op.qty && op.qty >= 1 ? Math.floor(op.qty) : 1;
+          const variantId = (op as any).variantId ?? null;
 
-          // Stock check: existing qty in cart + new qty must not exceed stock
-          const existing = items.find((i: any) => i.productId === productId);
+          // PV-P1: stock check via centralized helper (variant-aware).
+          const { stock } = await this.resolvePriceAndStock(productId, variantId);
+          const existing = items.find(
+            (i: any) => i.productId === productId && (i.variantId ?? null) === (variantId ?? null),
+          );
           const existingQty = existing ? Number(existing.quantity) : 0;
-          const product = await productService.getProductById(productId);
-          if (product.stock !== null && product.stock < existingQty + qty) {
+          if (stock !== null && stock < existingQty + qty) {
             adapters.logger.warn('CartAuthority: insufficient stock, skipping', {
               product: productName,
               requested: qty,
               inCart: existingQty,
-              available: product.stock,
+              available: stock,
             });
             continue;
           }
@@ -599,6 +610,7 @@ export class CartAuthority {
               data: {
                 orderId: order.id,
                 productId,
+                variantId: variantId ?? null,
                 productName,
                 quantity: qty,
                 unitPrice,
@@ -609,11 +621,16 @@ export class CartAuthority {
           }
         } else if (op.type === 'remove') {
           if (result) {
-            const toRemove = items.filter((i: any) => i.productId === result.productId);
+            const variantId = (op as any).variantId ?? null;
+            const toRemove = items.filter(
+              (i: any) => i.productId === result.productId && (i.variantId ?? null) === (variantId ?? null),
+            );
             for (const ri of toRemove) {
               await tx.orderItem.delete({ where: { id: ri.id } });
             }
-            items = items.filter((i: any) => i.productId !== result.productId);
+            items = items.filter(
+              (i: any) => !(i.productId === result.productId && (i.variantId ?? null) === (variantId ?? null)),
+            );
             adapters.logger.debug('CartAuthority: removed product from cart', {
               product: result.productName,
               conversationId,
@@ -1012,6 +1029,42 @@ export class CartAuthority {
     };
   }
 
+  /**
+   * PV-P1 — SATU helper terpusat untuk resolve price + stock dari cart line.
+   *
+   * Aturan:
+   * - variantId != null  → BACA DARI ProductVariant (price + stock). Product.price/
+   *   Product.stock TIDAK PERNAH dipakai untuk baris ini. Variant divalidasi
+   *   milik productId yang benar & aktif; kalau tidak valid → throw (sama perilaku
+   *   product tidak ditemukan).
+   * - variantId == null  → BACA DARI Product seperti sebelum task ini (TIDAK BERUBAH).
+   *
+   * Semua titik yang butuh price/stock (addLine, executeOps, checkout) WAJIB pakai
+   * helper ini — jangan duplikasi logika.
+   */
+  private async resolvePriceAndStock(
+    productId: string,
+    variantId: string | null,
+  ): Promise<{ price: number; stock: number | null }> {
+    const product = await productService.getProductById(productId);
+    if (!product || product.storeId === undefined) {
+      throw new CartInvariantError(`Product ${productId} not found`, 'PRODUCT_NOT_FOUND');
+    }
+
+    if (variantId) {
+      const variant = await prisma.productVariant.findUnique({ where: { id: variantId } });
+      if (!variant || variant.productId !== productId || !variant.isActive) {
+        throw new CartInvariantError(
+          `Product variant ${variantId} is not valid for product ${productId}`,
+          'VARIANT_INVALID',
+        );
+      }
+      return { price: variant.price, stock: variant.stock };
+    }
+
+    return { price: product.price, stock: product.stock };
+  }
+
   private async resolveProductByName(
     tx: any,
     storeId: string,
@@ -1098,6 +1151,9 @@ export class CartAuthority {
       price: i.unitPrice,
       productItemId: i.id,
       productId: i.productId,
+      // PV-P1: carry variantId so downstream consumers can distinguish variants
+      // of the same product (null = no variant).
+      variantId: i.variantId ?? null,
     }));
   }
 
@@ -1106,6 +1162,7 @@ export class CartAuthority {
     return items.map((i) => ({
       id: i.id,
       productId: i.productId ?? null,
+      variantId: i.variantId ?? null,
       productName: i.productName,
       quantity: i.quantity,
       unitPrice: i.unitPrice,
@@ -1119,6 +1176,7 @@ export class CartAuthority {
       product: l.productName,
       qty: l.quantity,
       price: l.unitPrice,
+      variantId: l.variantId ?? null,
       mentionedAt: new Date().toISOString(),
       confirmedAt: new Date().toISOString(),
     }));
@@ -1130,6 +1188,7 @@ export class CartAuthority {
       product: i.productName,
       qty: i.quantity,
       price: i.unitPrice,
+      variantId: i.variantId ?? null,
       mentionedAt: new Date().toISOString() ?? '',
       confirmedAt: new Date().toISOString() ?? '',
     }));

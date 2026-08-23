@@ -6,6 +6,7 @@ import type { CartOp } from '../domain/types.js';
 export interface CartLine {
     id: string;
     productId: string | null;
+    variantId: string | null;
     productName: string;
     quantity: number;
     unitPrice: number;
@@ -61,7 +62,7 @@ export declare class CartAuthority {
      * - customer correct (customerId check)
      * - price from DB (authoritative, not from caller)
      */
-    addLine(conversationId: string, storeId: string, customerId: string, productId: string, qty?: number): Promise<CartLine[]>;
+    addLine(conversationId: string, storeId: string, customerId: string, productId: string, qty?: number, variantId?: string | null): Promise<CartLine[]>;
     /**
      * Remove a line item from the cart by lineItemId.
      * Invariant: line item belongs to this conversation's draft order.
@@ -183,6 +184,20 @@ export declare class CartAuthority {
      * product is missing / not accessible, mirroring resolveProductForCart.
      */
     private resolveProductById;
+    /**
+     * PV-P1 — SATU helper terpusat untuk resolve price + stock dari cart line.
+     *
+     * Aturan:
+     * - variantId != null  → BACA DARI ProductVariant (price + stock). Product.price/
+     *   Product.stock TIDAK PERNAH dipakai untuk baris ini. Variant divalidasi
+     *   milik productId yang benar & aktif; kalau tidak valid → throw (sama perilaku
+     *   product tidak ditemukan).
+     * - variantId == null  → BACA DARI Product seperti sebelum task ini (TIDAK BERUBAH).
+     *
+     * Semua titik yang butuh price/stock (addLine, executeOps, checkout) WAJIB pakai
+     * helper ini — jangan duplikasi logika.
+     */
+    private resolvePriceAndStock;
     private resolveProductByName;
     /**
      * Compute total price from OrderItem rows.
