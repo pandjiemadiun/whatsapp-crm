@@ -276,14 +276,19 @@ model OrderItem {
   unitPrice             Float
   subtotal              Float
   customizations        Json?
+  // PV-P0: nullable — diisi oleh CartAuthority di PV-P1 (di luar scope task ini).
+  // Row existing = null (item tanpa varian).
+  variantId             String?
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
 
   order                 Order    @relation(fields: [orderId], references: [id])
   product               Product? @relation(fields: [productId], references: [id])
+  variant               ProductVariant? @relation(fields: [variantId], references: [id])
 
   @@index([orderId])
   @@index([productId])
+  @@index([variantId])
   @@map("order_items")
 }
 
@@ -321,6 +326,9 @@ model Product {
   images                Json?
   primaryImageUrl       String?
   isActive              Boolean  @default(true)
+  // PV-P0: flag apakah produk punya varian. Default false; di-set true oleh write
+  // path di PV-P1 (di luar scope task ini). Semua row existing = false.
+  hasVariants           Boolean  @default(false)
   source                String   @default("api") // 'api' | 'magic_paste' | 'import'
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
@@ -329,11 +337,38 @@ model Product {
   store                 Store    @relation(fields: [storeId], references: [id])
   category              ProductCategory? @relation(fields: [categoryId], references: [id])
   orderItems            OrderItem[]
+  variants              ProductVariant[]
 
   @@unique([storeId, sku])
   @@index([storeId])
   @@index([categoryId])
   @@map("products")
+}
+
+// ── PV-P0: Product Variants ────────────────────────────────────────────────────
+// Model baru untuk product variants (size/warna/dll). Schema-only (PV-P0):
+// TIDAK ADA business logic / endpoint. `storeId` di-denormalize dari Product
+// agar query per-toko tidak perlu join ke Product. `attributes` Json menyimpan
+// pasangan opsi (mis. {"size":"L","color":"red"}) — bentuk bebas, server-authoritative
+// di PV-P1. `price` disamakan tipe dengan Product.price (Float).
+model ProductVariant {
+  id                    String   @id @default(uuid())
+  productId             String
+  storeId               String
+  sku                   String?  // nullable; unik per store (konsisten dgn Product.sku)
+  attributes            Json
+  price                 Float
+  stock                 Int?
+  isActive              Boolean  @default(true)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  product               Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  orderItems            OrderItem[]
+
+  @@unique([storeId, sku])
+  @@index([productId])
+  @@map("product_variants")
 }
 
 // Riwayat eksekusi Magic Paste — dasar analytics confidence (Phase 1.9.6).
