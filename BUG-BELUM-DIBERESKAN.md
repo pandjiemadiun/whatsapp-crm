@@ -194,3 +194,11 @@
   lengkap. CATATAN: `pm2 restart` tanpa `--update-env` mempertahankan env lama di memory —
   kalau pm2 di-restart penuh / server reboot, pastikan `.env` (atau `ecosystem.config.js`)
   menyuplai `RAJAONGKIR_*` supaya modul ongkir produksi punya kredensial.
+
+## VIII. SESSION 27 AGU 2026 — PV-P2 variant support (post-PV-P2 fix)
+
+### VIII-A. RESOLVED (`4c2e4f2` + this fix commit) — executeOps price bug + resolvePriceAndStock tx-consistency
+- **Item [PV-P2-FINDING-001]:** `executeOps` add/update branch di `cart-authority.ts:570-618` menulis `result.unitPrice` (parent product price dari `resolveProductById`) ke `OrderItem.unitPrice`, bukan harga varian. Untuk varian dengan harga berbeda dari parent, harga yang terpersist salah.
+- **Item tambahan (ditemukan saat analisa):** `resolvePriceAndStock` (1) tidak filter `isActive/deletedAt` untuk produk non-varian — regresi terhadap §8 kontrak (byte-identical behavior untuk `hasVariants=false`); (2) baca via `prisma` global, bukan `tx` yang sedang jalan di `executeOps`/`addLine`/`checkout` — inkonsisten dengan pola `resolveProductById` yang menerima `tx`.
+- **Konteks severity:** Tidak ada customer terdampak (fitur varian belum diluncurkan). Bug ini blocking PV-P2 karena varian dengan harga beda dari parent tidak bisa diuji tanpa perbaikan ini.
+- **Status:** ✅ RESOLVED — commit `4c2e4f2` (PV-P2) memperbaiki executeOps pakai `resolvePriceAndStock` untuk authPrice. Commit ini (PV-P2-FIX) menambahkan parameter `tx` opsional ke `resolvePriceAndStock` (pakai `tx ?? prisma`), filter `isActive/deletedAt` untuk produk + parent product check untuk varian, dan update semua caller (`addLine`, `executeOps`, `checkout`) untuk meneruskan `tx`.
