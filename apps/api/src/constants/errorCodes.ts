@@ -46,6 +46,10 @@ export const ErrorCodes = {
   ERR_MAGIC_PASTE_PARSE: 'ERR_MAGIC_PASTE_PARSE',
   ERR_PRICE_INVALID: 'ERR_PRICE_INVALID',
   ERR_SKU_GENERATION_FAILED: 'ERR_SKU_GENERATION_FAILED',
+
+  // Product Variants (PV-P2)
+  VARIANT_REQUIRED: 'VARIANT_REQUIRED',
+  VARIANT_NOT_FOUND: 'VARIANT_NOT_FOUND',
 } as const;
 
 export type ErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes];

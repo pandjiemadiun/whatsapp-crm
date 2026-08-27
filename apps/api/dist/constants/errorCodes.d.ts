@@ -27,6 +27,8 @@ export declare const ErrorCodes: {
     readonly ERR_MAGIC_PASTE_PARSE: "ERR_MAGIC_PASTE_PARSE";
     readonly ERR_PRICE_INVALID: "ERR_PRICE_INVALID";
     readonly ERR_SKU_GENERATION_FAILED: "ERR_SKU_GENERATION_FAILED";
+    readonly VARIANT_REQUIRED: "VARIANT_REQUIRED";
+    readonly VARIANT_NOT_FOUND: "VARIANT_NOT_FOUND";
 };
 export type ErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes];
 export declare const HttpStatusMap: Record<string, number>;

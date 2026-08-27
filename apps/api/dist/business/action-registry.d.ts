@@ -32,6 +32,7 @@ export declare const AddToCartRequestSchema: z.ZodObject<{
     payload: z.ZodObject<{
         productId: z.ZodString;
         quantity: z.ZodNumber;
+        variantId: z.ZodOptional<z.ZodString>;
     }, z.core.$strip>;
 }, z.core.$strip>;
 export type AddToCartRequest = z.infer<typeof AddToCartRequestSchema>;
@@ -56,6 +57,8 @@ export declare const AddToCartResponseSchema: z.ZodObject<{
                 quantity: z.ZodNumber;
                 unitPrice: z.ZodNumber;
                 subtotal: z.ZodNumber;
+                variantId: z.ZodOptional<z.ZodNullable<z.ZodString>>;
+                variantLabel: z.ZodOptional<z.ZodNullable<z.ZodString>>;
             }, z.core.$strip>>;
             total: z.ZodNumber;
         }, z.core.$strip>;

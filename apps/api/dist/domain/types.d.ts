@@ -241,6 +241,8 @@ export interface DiscussedItem {
  */
 export interface ConfirmedItem extends DiscussedItem {
     confirmedAt: string;
+    /** PV-P2: cart line id (OrderItem.id) — carried so action responses can echo it. */
+    id?: string | null;
     /** PV-P1: identifier varian (null = produk tanpa varian). Membedakan baris
      *  produk sama tapi varian beda agar tidak tergabung saat di-reconcile. */
     variantId?: string | null;
@@ -281,6 +283,12 @@ export interface CartOp {
      * agar jalur LLM/natural-language tetap tidak berubah.
      */
     productId?: string;
+    /**
+     * PV-P2: opsional variantId (structured/validated path, ADD_TO_CART).
+     * Diteruskan ke CartAuthority.executeOps → addLine. null/undefined = produk
+     * tanpa varian (atau hasVariants=false).
+     */
+    variantId?: string | null;
 }
 /** Opsi clarification untuk pending state */
 export interface ClarificationOption {
