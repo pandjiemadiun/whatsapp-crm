@@ -3,11 +3,13 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import { Package, Edit, Trash2, ChevronLeft, Loader2, Calendar, Tag, Wallet, Warehouse, Globe, ImageIcon } from 'lucide-react';
 import adminApi from '../../services/adminApi';
 import { ProductFormModal } from '../../components/admin/ProductFormModal';
+import { VariantManagementPanel } from '../../components/admin/VariantManagementPanel';
 
 interface ProductDetail {
   id: string;
   storeId: string;
   categoryId: string | null;
+  hasVariants: boolean;
   name: string;
   description: string | null;
   price: number;
@@ -262,6 +264,13 @@ export function ProductDetailPage() {
           </div>
         </div>
       </div>
+
+      <VariantManagementPanel
+        productId={product.id}
+        storeId={product.storeId}
+        productHasVariants={product.hasVariants || false}
+        onChanged={fetchProduct}
+      />
 
       {/* Edit Modal */}
       {modalOpen && (
