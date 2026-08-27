@@ -117,7 +117,7 @@ export class CartAuthority {
         }
         // PV-P1: price/stock authoritatively resolved via centralized helper.
         // variantId null → Product (unchanged); variantId set → ProductVariant.
-        const { price: unitPrice, stock } = await this.resolvePriceAndStock(productId, variantId);
+        const { price: unitPrice, stock } = await this.resolvePriceAndStock(productId, variantId, undefined);
         const newQty = qty;
         return await prisma.$transaction(async (tx) => {
             // Re-fetch product inside transaction for latest stock (avoids race)
@@ -350,7 +350,7 @@ export class CartAuthority {
                 throw new CartInvariantError(`Product "${product.name}" is no longer available`, 'PRODUCT_INACTIVE');
             }
             // PV-P1: stock source depends on whether the line carries a variant.
-            const { stock } = await this.resolvePriceAndStock(item.productId, item.variantId ?? null);
+            const { stock } = await this.resolvePriceAndStock(item.productId, item.variantId ?? null, undefined);
             if (stock !== null && stock < item.quantity) {
                 throw new CartInvariantError(`Insufficient stock for "${product.name}": ${stock} available, ${item.quantity} in cart`, 'INSUFFICIENT_STOCK');
             }
@@ -433,7 +433,7 @@ export class CartAuthority {
                     // PV-P1: authoritative price/stock (variant or parent product).
                     // Use the persisted price, NOT `result.unitPrice` (which is the parent
                     // product price from resolveProductById — wrong for variants).
-                    const { price: authPrice, stock } = await this.resolvePriceAndStock(productId, variantId);
+                    const { price: authPrice, stock } = await this.resolvePriceAndStock(productId, variantId, tx);
                     const existing = items.find((i) => i.productId === productId && (i.variantId ?? null) === (variantId ?? null));
                     const existingQty = existing ? Number(existing.quantity) : 0;
                     if (stock !== null && stock < existingQty + qty) {
@@ -819,16 +819,30 @@ export class CartAuthority {
      * Semua titik yang butuh price/stock (addLine, executeOps, checkout) WAJIB pakai
      * helper ini — jangan duplikasi logika.
      */
-    async resolvePriceAndStock(productId, variantId) {
-        const product = await productService.getProductById(productId);
+    async resolvePriceAndStock(productId, variantId, tx) {
+        const client = tx ?? prisma;
+        const product = await client.product.findUnique({
+            where: { id: productId },
+            select: { id: true, price: true, stock: true, isActive: true, deletedAt: true, storeId: true },
+        });
         if (!product || product.storeId === undefined) {
-            throw new CartInvariantError(`Product ${productId} not found`, 'PRODUCT_NOT_FOUND');
+            const err = new Error('Product not found or not accessible');
+            err.code = 'PRODUCT_NOT_FOUND';
+            err.name = 'CartInvariantError';
+            throw err;
+        }
+        if (!product.isActive || product.deletedAt) {
+            const err = new Error('Product not found or not accessible');
+            err.code = 'PRODUCT_NOT_FOUND';
+            err.name = 'CartInvariantError';
+            throw err;
         }
         if (variantId) {
-            const variant = await prisma.productVariant.findUnique({ where: { id: variantId } });
+            const variant = await client.productVariant.findUnique({ where: { id: variantId } });
             if (!variant || variant.productId !== productId || !variant.isActive) {
                 throw new CartInvariantError(`Product variant ${variantId} is not valid for product ${productId}`, 'VARIANT_INVALID');
             }
+            // Parent product isActive/deletedAt checked above.
             return { price: variant.price, stock: variant.stock };
         }
         return { price: product.price, stock: product.stock };
