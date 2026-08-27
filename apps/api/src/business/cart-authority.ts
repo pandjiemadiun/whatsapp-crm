@@ -567,12 +567,14 @@ export class CartAuthority {
             continue;
           }
 
-          const { productId, productName, unitPrice } = result;
+          const { productId, productName } = result;
           const qty = op.qty && op.qty >= 1 ? Math.floor(op.qty) : 1;
           const variantId = (op as any).variantId ?? null;
 
-          // PV-P1: stock check via centralized helper (variant-aware).
-          const { stock } = await this.resolvePriceAndStock(productId, variantId);
+          // PV-P1: authoritative price/stock (variant or parent product).
+          // Use the persisted price, NOT `result.unitPrice` (which is the parent
+          // product price from resolveProductById — wrong for variants).
+          const { price: authPrice, stock } = await this.resolvePriceAndStock(productId, variantId);
           const existing = items.find(
             (i: any) => i.productId === productId && (i.variantId ?? null) === (variantId ?? null),
           );
@@ -594,18 +596,18 @@ export class CartAuthority {
               where: { id: existing.id },
               data: {
                 quantity: newQty,
-                unitPrice: unitPrice,
-                subtotal: unitPrice * newQty,
+                unitPrice: authPrice,
+                subtotal: authPrice * newQty,
               },
             });
             // Update items array
             items = items.map((i: any) =>
               i.id === existing.id
-                ? { ...i, quantity: newQty, unitPrice, subtotal: unitPrice * newQty }
+                ? { ...i, quantity: newQty, unitPrice: authPrice, subtotal: authPrice * newQty }
                 : i,
             );
           } else {
-            const subtotal = unitPrice * qty;
+            const subtotal = authPrice * qty;
             const newItem = await tx.orderItem.create({
               data: {
                 orderId: order.id,
@@ -613,7 +615,7 @@ export class CartAuthority {
                 variantId: variantId ?? null,
                 productName,
                 quantity: qty,
-                unitPrice,
+                unitPrice: authPrice,
                 subtotal,
               },
             });
@@ -660,7 +662,9 @@ export class CartAuthority {
       const confirmedItems = this.orderItemsToConfirmedItems(items);
       await this.syncConfirmedItemsJson(tx, conversationId, confirmedItems);
 
-      // Return as ConfirmedItem[] (backward compat)
+      // Return confirmedItems (backward compat for PipelineContext callers).
+      // `items` now carries the correct unitPrice (variant or product) and
+      // variantId after the authPrice fix above, so confirmedItems is authoritative.
       return confirmedItems;
     };
 
@@ -1185,6 +1189,7 @@ export class CartAuthority {
   /** Convert OrderItem rows directly to ConfirmedItem[]. */
   private orderItemsToConfirmedItems(items: any[]): ConfirmedItem[] {
     return items.map((i) => ({
+      id: i.id ?? null,
       product: i.productName,
       qty: i.quantity,
       price: i.unitPrice,

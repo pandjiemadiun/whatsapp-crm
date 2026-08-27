@@ -36,6 +36,9 @@ export const AddToCartRequestSchema = z.object({
     payload: z.object({
         productId: z.string().uuid(),
         quantity: z.number().int().positive(),
+        // PV-P2: variant selection. Optional — required only when the target
+        // Product.hasVariants = true (validated in handleAddToCart, not here).
+        variantId: z.string().uuid().optional(),
     }),
 });
 /** ADD_TO_CART response schema */
@@ -55,6 +58,9 @@ export const AddToCartResponseSchema = z.object({
                 quantity: z.number().int(),
                 unitPrice: z.number(),
                 subtotal: z.number(),
+                // PV-P2: surface variant identity + human-readable label in cart response.
+                variantId: z.string().uuid().nullable().optional(),
+                variantLabel: z.string().nullable().optional(),
             })),
             total: z.number(),
         }),
@@ -302,13 +308,14 @@ export const ContactAdminResponseSchema = z.object({
     status: z.enum(['applied', 'already_applied']),
 });
 /**
- * Resolve productId to productName + unitPrice (authoritative from DB)
- * Reuses existing productService for tenant isolation
+ * Resolve productId to the full Product row (authoritative from DB).
+ * PV-P2: widened from {productName,unitPrice} to the whole product so the
+ * handler can read `hasVariants` for variant validation.
  */
 async function resolveProductForCart(tx, storeId, productId) {
     const product = await tx.product.findUnique({
         where: { id: productId },
-        select: { id: true, name: true, price: true, storeId: true, isActive: true, deletedAt: true },
+        select: { id: true, name: true, price: true, storeId: true, isActive: true, deletedAt: true, hasVariants: true },
     });
     if (!product)
         return null;
@@ -316,7 +323,43 @@ async function resolveProductForCart(tx, storeId, productId) {
         return null;
     if (!product.isActive || product.deletedAt)
         return null;
-    return { productName: product.name, unitPrice: product.price };
+    return product;
+}
+/**
+ * PV-P2 — Resolve a ProductVariant by id, tenant-scoped via the parent Product.
+ * Returns null when not found / not owned by storeId / belongs to another product /
+ * inactive. Caller decides the concrete error (VARIANT_REQUIRED vs VARIANT_NOT_FOUND).
+ */
+async function resolveVariantById(tx, storeId, productId, variantId) {
+    const client = tx ?? prisma;
+    const variant = await client.productVariant.findUnique({ where: { id: variantId } });
+    if (!variant)
+        return null;
+    if (variant.productId !== productId)
+        return null;
+    const product = await client.product.findUnique({
+        where: { id: variant.productId },
+        select: { storeId: true, isActive: true, deletedAt: true },
+    });
+    if (!product || product.storeId !== storeId || !product.isActive || product.deletedAt)
+        return null;
+    if (!variant.isActive)
+        return null;
+    return { id: variant.id, attributes: variant.attributes, sku: variant.sku ?? null };
+}
+/**
+ * PV-P2 — Build a human-readable variant label from the variant's attributes JSON.
+ * Free-form: "S · Merah" for {size:"S", color:"Merah"}; falls back to SKU.
+ */
+function buildVariantLabel(attributes, sku) {
+    if (attributes && typeof attributes === 'object' && !Array.isArray(attributes)) {
+        const parts = Object.values(attributes)
+            .filter((v) => v !== null && v !== undefined && v !== '')
+            .map((v) => String(v));
+        if (parts.length > 0)
+            return parts.join(' · ');
+    }
+    return sku ?? 'Varian';
 }
 /**
  * STAGE 1 — CLAIM
@@ -497,28 +540,61 @@ export async function handleAddToCart(request, context) {
             err.name = 'CartInvariantError';
             throw err;
         }
+        // PV-P2: variant business validation (handler layer, NOT Zod).
+        let resolvedVariant = null;
+        let variantLabel = null;
+        if (product.hasVariants) {
+            if (!payload.variantId) {
+                // Product requires a variant but client didn't send one.
+                const err = new Error('Product requires a variantId');
+                err.code = ErrorCodes.VARIANT_REQUIRED;
+                err.name = 'CartInvariantError';
+                throw err;
+            }
+            resolvedVariant = await resolveVariantById(tx, storeId, payload.productId, payload.variantId);
+            if (!resolvedVariant) {
+                // Invalid / not-owned / inactive variant → VARIANT_NOT_FOUND.
+                const err = new Error('Product variant not found or not valid for this product');
+                err.code = ErrorCodes.VARIANT_NOT_FOUND;
+                err.name = 'CartInvariantError';
+                throw err;
+            }
+            variantLabel = buildVariantLabel(resolvedVariant.attributes, resolvedVariant.sku);
+        }
+        // hasVariants=false → any variantId sent is ignored (nulled), behavior unchanged.
         // Build CartOp for CartAuthority.executeOps.
         // Structured/validated path: kirim productId langsung (sudah di-resolve
         // server-side + tenant-scoped di atas) sehingga executeOps skip
         // round-trip resolveProductByName. `product` tetap diisi sebagai fallback
         // backward-compat bila suatu saat dipakai jalur tanpa productId.
+        // PV-P2: variantId diteruskan ke executeOps (single entry point tetap sama).
         const ops = [{
                 type: 'add',
                 productId: payload.productId,
                 product: product.productName,
                 qty: payload.quantity,
+                variantId: product.hasVariants ? (payload.variantId ?? null) : null,
             }];
         // Execute cart mutation — THIS IS THE ONLY CART MUTATION ENTRY POINT
         const cartLines = await cartAuthority.executeOps(ops, storeId, customerId, conversationId, tx);
-        // Compute deterministic result per §5.4 contract
-        const items = cartLines.map(item => ({
-            id: payload.productId,
-            productId: payload.productId,
-            productName: item.product,
-            quantity: typeof item.qty === 'number' ? item.qty : (typeof item.qty === 'string' ? Number(item.qty) : 1),
-            unitPrice: typeof item.price === 'number' ? item.price : 0,
-            subtotal: (typeof item.price === 'number' ? item.price : 0) * (typeof item.qty === 'number' ? item.qty : (typeof item.qty === 'string' ? Number(item.qty) : 1)),
-        }));
+        // Compute deterministic result per §5.4 contract.
+        // cartLines is authoritative (orderItemsToConfirmedItems → mapOrderItems):
+        // real unitPrice (variant or product) + variantId.
+        const items = cartLines.map(item => {
+            const qty = typeof item.qty === 'number' ? item.qty : (typeof item.qty === 'string' ? Number(item.qty) : 1);
+            const price = typeof item.price === 'number' ? item.price : 0;
+            return {
+                id: item.id ?? payload.productId,
+                productId: payload.productId,
+                productName: item.product,
+                quantity: qty,
+                unitPrice: price,
+                subtotal: price * qty,
+                // PV-P2: surface variant identity + label (null when no variant).
+                variantId: item.variantId ?? null,
+                variantLabel: product.hasVariants ? variantLabel : null,
+            };
+        });
         const total = items.reduce((sum, item) => sum + item.subtotal, 0);
         return {
             productId: payload.productId,
