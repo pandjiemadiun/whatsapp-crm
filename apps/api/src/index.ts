@@ -36,6 +36,7 @@ import productsRouter from './routes/products.js';
 import storeProductsRouter from './routes/store-products.js';
 import analyticsRouter from './routes/analytics.js';
 import adminProductsRoutes from './routes/admin/products.js';
+import adminVariantsRoutes from './routes/admin/variants.js';
 import bankAccountsRouter from './routes/bank-accounts.js';
 import sopRouter from './routes/sop.js';
 import pwaRouter from './routes/pwa.js';
@@ -155,6 +156,7 @@ app.use('/api/store/locations', authMiddleware, locationRouter);
 // tightly because each hit also consumes the shared external RajaOngkir quota.
 app.use('/api/pwa-locations', pwaLocationsLimiter, locationRouter);
 app.use('/api/admin', adminProductsRoutes);
+app.use('/api/admin/variants', adminVariantsRoutes);
 // Store-owner product routes (auth) — mounted BEFORE public catalog
 app.use('/api/products', storeProductsRouter);
 // Store-owner analytics routes (auth)
