@@ -307,6 +307,164 @@ export class ProductService {
     }
   }
 
+  // ================================================================
+  // PV-P3 — ProductVariant CRUD + hasVariants transactional write
+  // ================================================================
+
+  /**
+   * Create a ProductVariant for a product.
+   * Flips Product.hasVariants = true in the SAME transaction if this is the first variant.
+   */
+  async createVariant(productId: string, storeId: string, data: {
+    price: number;
+    stock?: number | null;
+    sku?: string | null;
+    attributes: Record<string, any>;
+  }): Promise<any> {
+    // Verify product exists and belongs to store
+    const product = await prisma.product.findFirst({
+      where: { id: productId, storeId, deletedAt: null },
+    });
+    if (!product) {
+      throw new ApiError(ErrorCodes.ERR_NOT_FOUND, 'Product not found');
+    }
+
+    // SKU uniqueness check within store
+    if (data.sku) {
+      const existingSku = await prisma.productVariant.findFirst({
+        where: { storeId, sku: data.sku },
+      });
+      if (existingSku) {
+        throw new ApiError(ErrorCodes.ERR_CONFLICT, `SKU "${data.sku}" already exists for this store`);
+      }
+    }
+
+    return await prisma.$transaction(async (tx) => {
+      // Create the variant
+      const variant = await tx.productVariant.create({
+        data: {
+          productId,
+          storeId,
+          price: data.price,
+          stock: data.stock ?? null,
+          sku: data.sku ?? null,
+          attributes: data.attributes as any,
+          isActive: true,
+        },
+      });
+
+      // Flip hasVariants = true (idempotent if already true)
+      await tx.product.update({
+        where: { id: productId },
+        data: { hasVariants: true },
+      });
+
+      adapters.logger.info('ProductVariant created', { variantId: variant.id, productId, storeId });
+      return variant;
+    });
+  }
+
+  /**
+   * List variants for a product.
+   */
+  async listVariants(productId: string, storeId: string): Promise<any[]> {
+    // Verify product exists and belongs to store
+    const product = await prisma.product.findFirst({
+      where: { id: productId, storeId, deletedAt: null },
+    });
+    if (!product) {
+      throw new ApiError(ErrorCodes.ERR_NOT_FOUND, 'Product not found');
+    }
+
+    return await prisma.productVariant.findMany({
+      where: { productId },
+      orderBy: { createdAt: 'asc' },
+    });
+  }
+
+  /**
+   * Update a ProductVariant.
+   * Does NOT touch hasVariants flag.
+   * productId is immutable — cannot be changed.
+   */
+  async updateVariant(variantId: string, productId: string, storeId: string, data: {
+    price?: number;
+    stock?: number | null;
+    sku?: string | null;
+    attributes?: Record<string, any>;
+    isActive?: boolean;
+  }): Promise<any> {
+    // Verify variant exists and belongs to product/store
+    const existing = await prisma.productVariant.findFirst({
+      where: { id: variantId, productId, product: { storeId, deletedAt: null } },
+    });
+    if (!existing) {
+      throw new ApiError(ErrorCodes.ERR_NOT_FOUND, 'Variant not found');
+    }
+
+    // SKU uniqueness check (if sku is being updated)
+    if (data.sku !== undefined && data.sku !== existing.sku) {
+      const duplicateSku = await prisma.productVariant.findFirst({
+        where: { storeId, sku: data.sku, id: { not: variantId } },
+      });
+      if (duplicateSku) {
+        throw new ApiError(ErrorCodes.ERR_CONFLICT, `SKU "${data.sku}" already exists for this store`);
+      }
+    }
+
+    const updateData: any = {};
+    if (data.price !== undefined) updateData.price = data.price;
+    if (data.stock !== undefined) updateData.stock = data.stock;
+    if (data.sku !== undefined) updateData.sku = data.sku;
+    if (data.attributes !== undefined) updateData.attributes = data.attributes;
+    if (data.isActive !== undefined) updateData.isActive = data.isActive;
+
+    const updated = await prisma.productVariant.update({
+      where: { id: variantId },
+      data: updateData,
+    });
+
+    adapters.logger.info('ProductVariant updated', { variantId, productId });
+    return updated;
+  }
+
+  /**
+   * Delete a ProductVariant.
+   * Flips Product.hasVariants = false in the SAME transaction if this was the last variant.
+   * Soft-delete is NOT used for variants (hard delete per Prisma schema onDelete: Cascade).
+   */
+  async deleteVariant(variantId: string, productId: string, storeId: string): Promise<void> {
+    // Verify variant exists and belongs to product/store
+    const existing = await prisma.productVariant.findFirst({
+      where: { id: variantId, productId, product: { storeId, deletedAt: null } },
+    });
+    if (!existing) {
+      throw new ApiError(ErrorCodes.ERR_NOT_FOUND, 'Variant not found');
+    }
+
+    return await prisma.$transaction(async (tx) => {
+      // Delete the variant
+      await tx.productVariant.delete({
+        where: { id: variantId },
+      });
+
+      // Check if there are remaining variants for this product
+      const remaining = await tx.productVariant.count({
+        where: { productId },
+      });
+
+      // Flip hasVariants = false if no variants remain
+      if (remaining === 0) {
+        await tx.product.update({
+          where: { id: productId },
+          data: { hasVariants: false },
+        });
+      }
+
+      adapters.logger.info('ProductVariant deleted', { variantId, productId, remaining });
+    });
+  }
+
   /**
    * List produk milik toko, opsional filter kategori.
    */

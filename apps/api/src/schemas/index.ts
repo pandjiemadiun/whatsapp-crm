@@ -176,3 +176,28 @@ export const magicPasteSchema = z.object({
 });
 
 export type MagicPasteInput = z.infer<typeof magicPasteSchema>;
+
+// ─── PRODUCT VARIANT SCHEMAS (PV-P3) ───
+
+export const createVariantSchema = z.object({
+  price: z.coerce.number().min(0, 'Price must be >= 0'),
+  stock: z.coerce.number().int().min(0, 'Stock must be >= 0').optional().nullable(),
+  sku: z.string().max(100).optional().nullable(),
+  attributes: z.record(z.string(), z.any()).refine((val) => Object.keys(val).length > 0, {
+    message: 'attributes must be a non-empty object',
+  }),
+});
+
+export type CreateVariantInput = z.infer<typeof createVariantSchema>;
+
+export const updateVariantSchema = z.object({
+  price: z.coerce.number().min(0, 'Price must be >= 0').optional(),
+  stock: z.coerce.number().int().min(0, 'Stock must be >= 0').optional().nullable(),
+  sku: z.string().max(100).optional().nullable(),
+  attributes: z.record(z.string(), z.any()).refine((val) => Object.keys(val).length > 0, {
+    message: 'attributes must be a non-empty object',
+  }).optional(),
+  isActive: z.boolean().optional(),
+});
+
+export type UpdateVariantInput = z.infer<typeof updateVariantSchema>;

@@ -124,4 +124,22 @@ export const magicPasteSchema = z.object({
     // Store ID bisa UUID (admin-created) atau format store-xxx (self-registered)
     storeId: z.string().min(1, 'storeId is required'),
 });
+// ─── PRODUCT VARIANT SCHEMAS (PV-P3) ───
+export const createVariantSchema = z.object({
+    price: z.coerce.number().min(0, 'Price must be >= 0'),
+    stock: z.coerce.number().int().min(0, 'Stock must be >= 0').optional().nullable(),
+    sku: z.string().max(100).optional().nullable(),
+    attributes: z.record(z.string(), z.any()).refine((val) => Object.keys(val).length > 0, {
+        message: 'attributes must be a non-empty object',
+    }),
+});
+export const updateVariantSchema = z.object({
+    price: z.coerce.number().min(0, 'Price must be >= 0').optional(),
+    stock: z.coerce.number().int().min(0, 'Stock must be >= 0').optional().nullable(),
+    sku: z.string().max(100).optional().nullable(),
+    attributes: z.record(z.string(), z.any()).refine((val) => Object.keys(val).length > 0, {
+        message: 'attributes must be a non-empty object',
+    }).optional(),
+    isActive: z.boolean().optional(),
+});
 //# sourceMappingURL=index.js.map

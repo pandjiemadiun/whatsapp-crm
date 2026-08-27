@@ -55,6 +55,38 @@ export declare class ProductService {
      */
     deleteProduct(productId: string): Promise<void>;
     /**
+     * Create a ProductVariant for a product.
+     * Flips Product.hasVariants = true in the SAME transaction if this is the first variant.
+     */
+    createVariant(productId: string, storeId: string, data: {
+        price: number;
+        stock?: number | null;
+        sku?: string | null;
+        attributes: Record<string, any>;
+    }): Promise<any>;
+    /**
+     * List variants for a product.
+     */
+    listVariants(productId: string, storeId: string): Promise<any[]>;
+    /**
+     * Update a ProductVariant.
+     * Does NOT touch hasVariants flag.
+     * productId is immutable — cannot be changed.
+     */
+    updateVariant(variantId: string, productId: string, storeId: string, data: {
+        price?: number;
+        stock?: number | null;
+        sku?: string | null;
+        attributes?: Record<string, any>;
+        isActive?: boolean;
+    }): Promise<any>;
+    /**
+     * Delete a ProductVariant.
+     * Flips Product.hasVariants = false in the SAME transaction if this was the last variant.
+     * Soft-delete is NOT used for variants (hard delete per Prisma schema onDelete: Cascade).
+     */
+    deleteVariant(variantId: string, productId: string, storeId: string): Promise<void>;
+    /**
      * List produk milik toko, opsional filter kategori.
      */
     listProductsByStore(storeId: string, filter?: {

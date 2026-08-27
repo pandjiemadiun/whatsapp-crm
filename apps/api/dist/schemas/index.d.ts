@@ -138,4 +138,19 @@ export declare const magicPasteSchema: z.ZodObject<{
     storeId: z.ZodString;
 }, z.core.$strip>;
 export type MagicPasteInput = z.infer<typeof magicPasteSchema>;
+export declare const createVariantSchema: z.ZodObject<{
+    price: z.ZodCoercedNumber<unknown>;
+    stock: z.ZodNullable<z.ZodOptional<z.ZodCoercedNumber<unknown>>>;
+    sku: z.ZodNullable<z.ZodOptional<z.ZodString>>;
+    attributes: z.ZodRecord<z.ZodString, z.ZodAny>;
+}, z.core.$strip>;
+export type CreateVariantInput = z.infer<typeof createVariantSchema>;
+export declare const updateVariantSchema: z.ZodObject<{
+    price: z.ZodOptional<z.ZodCoercedNumber<unknown>>;
+    stock: z.ZodNullable<z.ZodOptional<z.ZodCoercedNumber<unknown>>>;
+    sku: z.ZodNullable<z.ZodOptional<z.ZodString>>;
+    attributes: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodAny>>;
+    isActive: z.ZodOptional<z.ZodBoolean>;
+}, z.core.$strip>;
+export type UpdateVariantInput = z.infer<typeof updateVariantSchema>;
 //# sourceMappingURL=index.d.ts.map
