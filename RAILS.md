@@ -1376,3 +1376,47 @@ terkirim; ini GAP terbuka baru (Medium, silent-failure), dilaporkasi sebagai ite
 BUG-BELUM-DIBERESKAN §VI-5 + PROJECT-STATE §6.10.
 
 Siapa yang setuju: owner (Panji), AI CLI (Kilo).
+
+### 28 Agu 2026 — Admin security cluster: public registration exposure + engine.ts unauthenticated routes (real-time, dilaporkan saat commit)
+
+Konteks:
+POST /api/admin/auth/register terbuka ke publik internet tanpa gate (konfirmasi live via curl
+mengembalikan 201 untuk request tanpa auth). Kombinasi dengan temuan AUDIT-BASELINE
+(admin tidak punya store-ownership scoping — Finding 1-4) berarti siapapun di internet bisa
+self-register sebagai admin dan langsung dapat akses global ke semua merchant stores. Terbongkar
+saat verifikasi live POST /register mengembalikan 201 untuk email test
+`exposure-check-DO-NOT-USE@example.invalid`.
+
+Temuan terpisah: `src/routes/admin/engine.ts` (4 route yang mengontrol versi AI engine yang
+memproses pesan customer — v1 vs v2, canary metrics) sama sekali TIDAK ada auth middleware-nya,
+masuknya langsung dari `app.use('/api/admin/engine', ...)` tanpa `adminAuthMiddleware`.
+
+3 baris `admin_users`Existing diaudit: `metrics-test@garuda.local`, `m2@garuda.local`,
+`exposure-check-DO-NOT-USE@example.invalid` — None belonged to owner, semua di-deactivate
+(`isActive=false`, tidak di-hard-delete, audit trail preserved). Owner kemudian registrasi
+akun super_admin baru (`pandjie@yahoo.com`).
+
+Keputusan:
+- `b64babf` — gating bootstrap-once pada POST /register: route TERBUKA hanya ketika
+  belum ada super_admin aktif (count=0), kemudian LOCKED permanen. Saat bootstrap mode,
+  role WAJIB diset `super_admin` terlepas dari apa yang dikirim di request body (tested:
+  kirim `role=support_admin` tetap dapat `super_admin`). Setelah super_admin pertama
+  ter-create, route memerlukan `adminAuthMiddleware` + `requireAdminRole(['super_admin'])`
+  untuk setiap registrasi selanjutnya. Verified via live curl: 201 di bootstrap state,
+  401 di locked state.
+- `ae40461` — `adminAuthMiddleware` ditambahkan ke semua 4 route engine.ts. GET routes
+  (read-only metrics/config) cukup `adminAuthMiddleware` (any authenticated admin).
+  POST `/:storeId` (mutates engine version untuk seluruh store) ditambahkan
+  `requireAdminRole(['super_admin'])` — konsisten dengan pola `config.ts` PUT/DELATE +
+  `backups.ts` restore/delete yang sama-sama memerlukan super_admin untuk aksi destruktif.
+  Verified via live curl: 401 tanpa auth, 200/403 dengan auth sesuai role.
+
+Alasan:
+Keduanya adalah security-critical gap yang confirmed live, bukan teori. Admin panel di-
+akses oleh owner's own team (internal-only, confirmed oleh owner) — store-ownership scoping
+( Finding 1-4 ADMIN-TENANT-ISOLATION-AUDIT-BASELINE.md ) SENGAJA DITUNDA, bukan lupa:
+belum ada admin kedua, membangun RBAC sekarang adalah solving for user yang belum ada.
+Owner separately setting up Cloudflare Access (infra-level, di luar repo ini) sebagai lapisan
+tambahan di depan /admin — ini adalah owner's own action, bukan bagian dari commit repo.
+
+Siapa yang setuju: owner (Panji), AI CLI (Kilo).
