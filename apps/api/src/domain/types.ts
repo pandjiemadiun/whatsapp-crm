@@ -166,6 +166,7 @@ export interface Product {
   createdAt: Date;
   updatedAt: Date;
   deletedAt: Date | null;
+  hasVariants: boolean;
 }
 
 /**

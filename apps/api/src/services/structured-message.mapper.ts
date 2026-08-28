@@ -243,17 +243,41 @@ async function fetchCart(conversationId: string): Promise<CartSummary> {
   return { items, total, orderId: active.id };
 }
 
-/** product public fields: id/name/price dari result metadata, stock+imageUrl dari DB (1 fetch). */
+/** product public fields: id/name/price dari result metadata, stock+imageUrl dari DB (1 fetch).
+ *  Jika produk memiliki varian aktif, daftar varian juga disertakan (mapped ke VariantOption).
+ */
 async function enrichProduct(base: Record<string, unknown>): Promise<Record<string, unknown>> {
   const id = base.id;
   const price = base.price ?? null;
   const name = base.name;
   const prod = isNonEmptyString(id) ? await productService.getProductById(id as string) : null;
-  return {
+  const result: Record<string, unknown> = {
     id: prod?.id ?? id ?? null,
     name: prod?.name ?? name ?? null,
     price: prod?.price ?? price ?? null,
     stock: prod?.stock ?? null,
     imageUrl: prod?.primaryImageUrl ?? null,
   };
+  if (prod?.hasVariants) {
+    const variants = await productService.listVariants(id as string, prod.storeId);
+    const activeVariants = variants.filter((v: any) => v.isActive && v.deletedAt === null);
+    result.variants = activeVariants.map((v: any) => {
+      let label = 'Varian';
+      if (v.attributes && typeof v.attributes === 'object' && !Array.isArray(v.attributes)) {
+        const parts = Object.values(v.attributes)
+          .filter((val) => val !== null && val !== undefined && val !== '')
+          .map((val) => String(val));
+        if (parts.length > 0) label = parts.join(' · ');
+      }
+      if (label === 'Varian' && v.sku) label = v.sku;
+      return {
+        id: v.id,
+        label,
+        price: v.price ?? null,
+        stock: v.stock ?? null,
+        sku: v.sku ?? null,
+      };
+    });
+  }
+  return result;
 }
