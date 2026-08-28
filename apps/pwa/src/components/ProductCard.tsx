@@ -77,14 +77,26 @@ function Badge({ badge }: { badge?: string | { text: string; variant: 'default' 
  *  - compact: image-top commerce card (image → name → price → stock → action).
  *  - conversation: large image, 340px max, full commerce CTA.
  *  BUG 3: conversation/compact action buttons call onAddToCart (shared client
- *  cart) / onShowRelated — bukan no-op lagi. Price & stock straight from payload. */
+ *  cart) / onShowRelated — bukan no-op lagi. Price & stock straight from payload.
+ *  PV-P2b: produk dengan varian → tombol add-to-cart membuka detail sheet
+ *  (onTap) untuk pilih varian, BUKAN langsung kirim ADD_TO_CART. */
 export default function ProductCard({ product, variant = 'default', onTap, badge, onAddToCart, onShowRelated }: ProductCardProps) {
   const { name, price, stock, imageUrl } = product;
   const compact = variant === 'compact';
   const conversation = variant === 'conversation';
+  const hasVariants = (product.variants && product.variants.length > 0) || product.hasVariants;
 
   const handleClick = () => {
     if (onTap) onTap(product);
+  };
+
+  const handleAddToCartClick = (e: React.MouseEvent<HTMLButtonElement>) => {
+    e.stopPropagation();
+    if (hasVariants) {
+      onTap?.(product);
+    } else {
+      onAddToCart?.(product);
+    }
   };
 
   if (conversation) {
@@ -115,7 +127,7 @@ export default function ProductCard({ product, variant = 'default', onTap, badge
               </button>
               <button
                 type="button"
-                onClick={(e) => { e.stopPropagation(); onAddToCart?.(product) }}
+                onClick={handleAddToCartClick}
                 className="flex-1 text-center py-2 rounded-full text-xs font-bold text-white border-0"
                 style={{ background: 'var(--forest)' }}
               >
@@ -148,7 +160,7 @@ export default function ProductCard({ product, variant = 'default', onTap, badge
           <div className="px-2.5 pb-2.5">
             <button
               type="button"
-              onClick={(e) => { e.stopPropagation(); onAddToCart?.(product) }}
+              onClick={handleAddToCartClick}
               className="w-full flex items-center justify-center gap-1 py-2 rounded-full text-xs font-bold text-white border-0 cursor-pointer transition-all hover:brightness-110 active:scale-95"
               style={{ background: 'var(--forest)' }}
             >

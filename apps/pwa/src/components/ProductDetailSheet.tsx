@@ -5,6 +5,15 @@ export type ProductDetailSheetProps = {
   productId: string | null;
   storeSlug: string;
   onClose: () => void;
+  onAddToCart?: (productId: string, variantId: string) => void;
+};
+
+type VariantOption = {
+  id: string;
+  label: string;
+  price: number | null;
+  stock: number | null;
+  sku: string | null;
 };
 
 type ProductDetail = {
@@ -15,6 +24,8 @@ type ProductDetail = {
   stock: number | null;
   primaryImageUrl: string | null;
   category?: { id: string; name: string } | null;
+  hasVariants: boolean;
+  variants?: VariantOption[];
 };
 
 function formatPrice(price: number | null | undefined): string {
@@ -22,20 +33,23 @@ function formatPrice(price: number | null | undefined): string {
   return `Rp ${price.toLocaleString('id-ID')}`;
 }
 
-export default function ProductDetailSheet({ productId, storeSlug, onClose }: ProductDetailSheetProps) {
+export default function ProductDetailSheet({ productId, storeSlug, onClose, onAddToCart }: ProductDetailSheetProps) {
   const [product, setProduct] = useState<ProductDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [selectedVariantId, setSelectedVariantId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!productId) {
       setProduct(null);
+      setSelectedVariantId(null);
       return;
     }
 
     let cancelled = false;
     setLoading(true);
     setError(null);
+    setSelectedVariantId(null);
 
     api
       .get(`/pwa/${encodeURIComponent(storeSlug)}/products/${encodeURIComponent(productId)}`)
@@ -50,6 +64,8 @@ export default function ProductDetailSheet({ productId, storeSlug, onClose }: Pr
               price: data.price,
               stock: data.stock,
               primaryImageUrl: data.primaryImageUrl ?? null,
+              hasVariants: data.hasVariants ?? false,
+              variants: data.hasVariants ? data.variants : undefined,
             });
           } else {
             setError('Produk tidak ditemukan');
@@ -68,7 +84,7 @@ export default function ProductDetailSheet({ productId, storeSlug, onClose }: Pr
     return () => {
       cancelled = true;
     };
-  }, [productId]);
+  }, [productId, storeSlug]);
 
   useEffect(() => {
     if (!productId) return;
@@ -96,6 +112,15 @@ export default function ProductDetailSheet({ productId, storeSlug, onClose }: Pr
       : product?.stock === null
         ? 'text-green-600'
         : 'text-muted-foreground';
+
+  const selectedVariant = product?.variants?.find((v) => v.id === selectedVariantId) ?? null;
+
+  const handleAddToCart = () => {
+    if (selectedVariantId && onAddToCart && product) {
+      onAddToCart(product.id, selectedVariantId);
+      onClose();
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center">
@@ -179,6 +204,11 @@ export default function ProductDetailSheet({ productId, storeSlug, onClose }: Pr
 
                 <div className="flex items-baseline gap-2">
                   <span className="text-2xl font-semibold text-foreground">{formatPrice(product.price)}</span>
+                  {selectedVariant && selectedVariant.price != null && (
+                    <span className="text-sm text-muted-foreground">
+                      ({formatPrice(selectedVariant.price)} untuk varian ini)
+                    </span>
+                  )}
                 </div>
 
                 <div className="flex items-center gap-2">
@@ -190,10 +220,71 @@ export default function ProductDetailSheet({ productId, storeSlug, onClose }: Pr
                     {product.description}
                   </p>
                 )}
+
+                {/* Variant selector */}
+                {product.hasVariants && product.variants && product.variants.length > 0 && (
+                  <div className="pt-3 border-t border-border">
+                    <p className="text-sm font-semibold text-foreground mb-2">Pilih Varian</p>
+                    <div className="flex flex-col gap-2">
+                      {product.variants.map((v) => {
+                        const isSelected = selectedVariantId === v.id;
+                        const isOutOfStock = v.stock !== null && v.stock === 0;
+                        return (
+                          <label
+                            key={v.id}
+                            className={`flex items-center justify-between px-3 py-2.5 rounded-xl border text-sm cursor-pointer transition-colors ${
+                              isSelected
+                                ? 'border-primary bg-primary/10'
+                                : 'border-border hover:border-primary/50'
+                            } ${isOutOfStock ? 'opacity-50 cursor-not-allowed' : ''}`}
+                          >
+                            <span className="flex items-center gap-2">
+                              <input
+                                type="radio"
+                                name="variant"
+                                checked={isSelected}
+                                onChange={() => !isOutOfStock && setSelectedVariantId(v.id)}
+                                disabled={isOutOfStock}
+                                className="accent-primary"
+                              />
+                              <span>
+                                <span className="font-medium">{v.label}</span>
+                                {v.sku && (
+                                  <span className="block text-xs text-muted-foreground">SKU: {v.sku}</span>
+                                )}
+                              </span>
+                            </span>
+                            <span className="text-right">
+                              <span className="font-semibold">{formatPrice(v.price ?? product.price)}</span>
+                              <span className="block text-xs text-muted-foreground">
+                                {v.stock === null ? 'Stok tidak terbatas' : v.stock === 0 ? 'Stok habis' : `Stok: ${v.stock}`}
+                              </span>
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           )}
         </div>
+
+        {/* Add-to-cart footer */}
+        {product && product.hasVariants && product.variants && product.variants.length > 0 && onAddToCart && (
+          <div className="p-4 border-t border-border bg-surface-elevated">
+            <button
+              type="button"
+              onClick={handleAddToCart}
+              disabled={!selectedVariantId}
+              className="w-full py-3 rounded-full text-sm font-bold text-white border-0 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              style={{ background: 'var(--forest)' }}
+            >
+              {selectedVariant ? `Tambah ke Keranjang — ${selectedVariant.label}` : 'Pilih varian terlebih dahulu'}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

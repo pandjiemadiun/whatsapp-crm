@@ -496,11 +496,22 @@ export default function ChatPage() {
 
   // G2-E.3.2 §10/§11/§12: "+ Keranjang" / "Tambah" → typed ADD_TO_CART action.
   const handleAddToCart = useCallback(
-    (product: ProductPayload) => {
-      if (!product.id || inputDisabled) return
-      void sendAction('ADD_TO_CART', { productId: product.id, quantity: 1 })
+    (productId: string, variantId?: string) => {
+      if (!productId || inputDisabled) return
+      const payload: Record<string, unknown> = { productId, quantity: 1 }
+      if (variantId) payload.variantId = variantId
+      void sendAction('ADD_TO_CART', payload)
     },
     [sendAction, inputDisabled],
+  )
+
+  // Adapter for ProductCard/EmptyState which pass whole product object.
+  const handleAddToCartFromCard = useCallback(
+    (product: ProductPayload) => {
+      if (!product.id) return
+      handleAddToCart(product.id)
+    },
+    [handleAddToCart],
   )
 
   // P4-3: "Produk Lain" → typed SHOW_RELATED_PRODUCTS action. The server returns
@@ -817,7 +828,7 @@ export default function ChatPage() {
           products={products}
           onQuickAction={handleQuickAction}
           onProductTap={handleProductTap}
-          onAddToCart={handleAddToCart}
+          onAddToCart={handleAddToCartFromCard}
         />
       ) : (
         <MessageList
@@ -829,7 +840,7 @@ export default function ChatPage() {
           onQuickAction={handleQuickAction}
           onQuickReply={handleQuickReply}
           onProductTap={handleProductTap}
-          onAddToCart={handleAddToCart}
+          onAddToCart={handleAddToCartFromCard}
           onShowRelated={handleShowRelated}
           onCheckout={setCheckoutOrderId}
           submitting={sending}
@@ -897,6 +908,7 @@ export default function ChatPage() {
         productId={selectedProduct?.id ?? null}
         storeSlug={slug!}
         onClose={() => setSelectedProduct(null)}
+        onAddToCart={handleAddToCart}
       />
 
       {/* Composer — only in chat view; storefront view uses EmptyState "Tanya Toko" FAB */}

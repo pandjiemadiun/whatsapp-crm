@@ -68,6 +68,13 @@ export declare class ProductService {
      * List variants for a product.
      */
     listVariants(productId: string, storeId: string): Promise<any[]>;
+    getMappedVariants(productId: string, storeId: string): Promise<Array<{
+        id: string;
+        label: string;
+        price: number | null;
+        stock: number | null;
+        sku: string | null;
+    }>>;
     /**
      * Update a ProductVariant.
      * Does NOT touch hasVariants flag.

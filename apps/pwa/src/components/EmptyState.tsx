@@ -92,6 +92,7 @@ export default function EmptyState({ store, products = [], onQuickAction, onProd
                 price: p.price,
                 stock: p.stock,
                 imageUrl: p.primaryImageUrl ?? null,
+                hasVariants: p.hasVariants,
               }}
               variant="compact"
               onTap={onProductTap}

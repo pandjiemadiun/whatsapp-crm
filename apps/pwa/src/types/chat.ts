@@ -59,6 +59,7 @@ export interface ProductPayload {
   price: number | null;
   stock: number | null; // null === unlimited stock
   imageUrl: string | null;
+  hasVariants: boolean;
   variants?: VariantOption[];
 }
 
@@ -89,6 +90,8 @@ export interface CartItem {
   quantity: number;
   unitPrice: number;
   subtotal: number;
+  variantId?: string | null;
+  variantLabel?: string | null;
 }
 
 export interface CartPayload {
@@ -149,4 +152,5 @@ export interface ChatProduct {
   price: number;
   stock: number | null; // null === unlimited stock
   primaryImageUrl: string | null;
+  hasVariants: boolean;
 }

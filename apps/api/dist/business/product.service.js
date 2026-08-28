@@ -338,6 +338,30 @@ export class ProductService {
             orderBy: { createdAt: 'asc' },
         });
     }
+    async getMappedVariants(productId, storeId) {
+        const variants = await this.listVariants(productId, storeId);
+        return variants
+            .filter((v) => v.isActive)
+            .map((v) => {
+            let label = 'Varian';
+            if (v.attributes && typeof v.attributes === 'object' && !Array.isArray(v.attributes)) {
+                const parts = Object.values(v.attributes)
+                    .filter((val) => val !== null && val !== undefined && val !== '')
+                    .map((val) => String(val));
+                if (parts.length > 0)
+                    label = parts.join(' · ');
+            }
+            if (label === 'Varian' && v.sku)
+                label = v.sku;
+            return {
+                id: v.id,
+                label,
+                price: v.price ?? null,
+                stock: v.stock ?? null,
+                sku: v.sku ?? null,
+            };
+        });
+    }
     /**
      * Update a ProductVariant.
      * Does NOT touch hasVariants flag.

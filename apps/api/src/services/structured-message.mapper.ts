@@ -259,25 +259,8 @@ async function enrichProduct(base: Record<string, unknown>): Promise<Record<stri
     imageUrl: prod?.primaryImageUrl ?? null,
   };
   if (prod?.hasVariants) {
-    const variants = await productService.listVariants(id as string, prod.storeId);
-    const activeVariants = variants.filter((v: any) => v.isActive && v.deletedAt === null);
-    result.variants = activeVariants.map((v: any) => {
-      let label = 'Varian';
-      if (v.attributes && typeof v.attributes === 'object' && !Array.isArray(v.attributes)) {
-        const parts = Object.values(v.attributes)
-          .filter((val) => val !== null && val !== undefined && val !== '')
-          .map((val) => String(val));
-        if (parts.length > 0) label = parts.join(' · ');
-      }
-      if (label === 'Varian' && v.sku) label = v.sku;
-      return {
-        id: v.id,
-        label,
-        price: v.price ?? null,
-        stock: v.stock ?? null,
-        sku: v.sku ?? null,
-      };
-    });
+    const variants = await productService.getMappedVariants(id as string, prod.storeId);
+    result.variants = variants;
   }
   return result;
 }
