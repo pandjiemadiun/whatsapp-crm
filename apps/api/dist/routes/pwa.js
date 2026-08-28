@@ -199,6 +199,7 @@ router.get('/:storeSlug/products', pwaProductsLimiter, async (req, res) => {
             price: p.price,
             stock: p.stock,
             primaryImageUrl: p.primaryImageUrl ?? null,
+            hasVariants: p.hasVariants,
         }));
         res.json({
             success: true,
@@ -234,16 +235,21 @@ router.get('/:storeSlug/products/:productId', pwaProductsLimiter, async (req, re
         if (!product || product.storeId !== store.id) {
             return res.status(404).json({ error: 'Product not found' });
         }
+        const responseData = {
+            id: product.id,
+            name: product.name,
+            description: product.description ?? null,
+            price: product.price,
+            stock: product.stock,
+            primaryImageUrl: product.primaryImageUrl ?? null,
+            hasVariants: product.hasVariants,
+        };
+        if (product.hasVariants) {
+            responseData.variants = await productService.getMappedVariants(productId, store.id);
+        }
         res.json({
             success: true,
-            data: {
-                id: product.id,
-                name: product.name,
-                description: product.description ?? null,
-                price: product.price,
-                stock: product.stock,
-                primaryImageUrl: product.primaryImageUrl ?? null,
-            },
+            data: responseData,
         });
     }
     catch (err) {

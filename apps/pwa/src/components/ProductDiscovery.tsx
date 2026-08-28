@@ -40,6 +40,7 @@ export default function ProductDiscovery({
     price: p.price,
     stock: p.stock,
     imageUrl: p.primaryImageUrl ?? null,
+    hasVariants: p.hasVariants,
   });
 
   return (

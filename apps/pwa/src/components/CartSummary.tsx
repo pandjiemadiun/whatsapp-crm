@@ -58,7 +58,10 @@ export default function CartSummary({
         {list.map((item) => (
           <div className="receipt-row" key={item.id}>
             <span>
-              {item.productName} × {item.quantity}
+              {item.productName}
+              {item.variantLabel ? ` (${item.variantLabel})` : ''}
+              {' × '}
+              {item.quantity}
             </span>
             <span>{formatPrice(item.subtotal)}</span>
           </div>
