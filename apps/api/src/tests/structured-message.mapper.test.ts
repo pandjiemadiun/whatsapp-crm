@@ -169,9 +169,9 @@ test('PV-P2a-Gate2: hasVariants=true → hanya active+not-deleted, shape {id,lab
 
   const prod = { id: 'p1', name: 'Sosis', price: 15000, stock: 5, primaryImageUrl: 'http://x/s.png', hasVariants: true, storeId: STORE_ID };
   const variants = [
-    { id: 'v1', productId: 'p1', storeId: STORE_ID, price: 16000, stock: 5, sku: 'SOS-R', attributes: { size: 'S', color: 'Merah' }, isActive: true, deletedAt: null, createdAt: new Date(), updatedAt: new Date() },
-    { id: 'v2', productId: 'p1', storeId: STORE_ID, price: 17000, stock: 0, sku: 'SOS-L', attributes: { size: 'L' }, isActive: false, deletedAt: null, createdAt: new Date(), updatedAt: new Date() },
-    { id: 'v3', productId: 'p1', storeId: STORE_ID, price: 18000, stock: 3, sku: 'SOS-XL', attributes: { size: 'XL' }, isActive: true, deletedAt: new Date('2024-01-01'), createdAt: new Date(), updatedAt: new Date() },
+    { id: 'v1', productId: 'p1', storeId: STORE_ID, price: 16000, stock: 5, sku: 'SOS-R', attributes: { size: 'S', color: 'Merah' }, isActive: true },
+    { id: 'v2', productId: 'p1', storeId: STORE_ID, price: 17000, stock: 0, sku: 'SOS-L', attributes: { size: 'L' }, isActive: false },
+    { id: 'v3', productId: 'p1', storeId: STORE_ID, price: 18000, stock: 3, sku: 'SOS-XL', attributes: { size: 'XL' }, isActive: false },
   ];
   const r = makeResult({ id: 'm-p2a2', source: ResponseSource.PRODUCT, content: 'Harga sosis', matchedNames: ['Sosis'], productIds: ['p1'], matchedPrices: [15000] });
   await seedRow(r);
@@ -210,10 +210,10 @@ test('PV-P2a-Gate3: variant label fallback attributes→sku→Varian', async () 
 
   const prod = { id: 'p1', name: 'Sosis', price: 15000, stock: 5, primaryImageUrl: 'http://x/s.png', hasVariants: true, storeId: STORE_ID };
   const variants = [
-    { id: 'v1', price: 16000, stock: 5, sku: null, attributes: null, isActive: true, deletedAt: null },
-    { id: 'v2', price: 17000, stock: 0, sku: 'SKU-123', attributes: {}, isActive: true, deletedAt: null },
-    { id: 'v3', price: 18000, stock: 3, sku: null, attributes: { size: '' }, isActive: true, deletedAt: null },
-    { id: 'v4', price: 19000, stock: 2, sku: 'SKU-456', attributes: { size: 'M' }, isActive: true, deletedAt: null },
+    { id: 'v1', price: 16000, stock: 5, sku: null, attributes: null, isActive: true },
+    { id: 'v2', price: 17000, stock: 0, sku: 'SKU-123', attributes: {}, isActive: true },
+    { id: 'v3', price: 18000, stock: 3, sku: null, attributes: { size: '' }, isActive: true },
+    { id: 'v4', price: 19000, stock: 2, sku: 'SKU-456', attributes: { size: 'M' }, isActive: true },
   ];
   const r = makeResult({ id: 'm-p2a3', source: ResponseSource.PRODUCT, content: 'Harga sosis', matchedNames: ['Sosis'], productIds: ['p1'], matchedPrices: [15000] });
   await seedRow(r);
