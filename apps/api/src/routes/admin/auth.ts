@@ -1,17 +1,38 @@
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
 import { adapters } from '../../adapters/container.js';
 import { hashPassword, verifyPassword } from '../../utils/password.util.js';
 import { adminAuthMiddleware, AuthenticatedAdminRequest } from '../../middleware/adminAuth.js';
+import { requireAdminRole } from '../../middleware/adminAuthGuard.js';
 import { prisma } from '../../infrastructure/prisma.js';
 import { validateRequest, getValidated } from '../../middleware/validate-request.js';
 import { loginSchema, registerAdminSchema } from '../../schemas/index.js';
 import { adminAuthLimiter } from '../../middleware/rate-limiters.js';
 
+// Bootstrap gate: allows ONE unauthenticated registration when no super_admin exists,
+// then locks forever (requires existing super_admin to create new admins).
+async function bootstrapRegistrationGate(req: AuthenticatedAdminRequest, res: Response, next: NextFunction) {
+  const superAdminCount = await prisma.adminUser.count({
+    where: { role: 'super_admin', isActive: true, deletedAt: null },
+  });
+
+  if (superAdminCount === 0) {
+    return next();
+  }
+
+  if (!req.admin) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+  if (req.admin.role !== 'super_admin') {
+    return res.status(403).json({ error: 'Insufficient permissions' });
+  }
+  next();
+}
+
 const router = Router();
 
 // ─── POST /api/admin/auth/register ───
-router.post('/register', validateRequest(registerAdminSchema, 'body'), adminAuthLimiter, async (req: Request, res: Response) => {
+router.post('/register', validateRequest(registerAdminSchema, 'body'), adminAuthLimiter, bootstrapRegistrationGate, async (req: Request, res: Response) => {
   try {
     const { email, password } = getValidated<{ email: string; password: string }>(req);
 
@@ -20,13 +41,19 @@ router.post('/register', validateRequest(registerAdminSchema, 'body'), adminAuth
       return res.status(409).json({ error: 'Email already registered' });
     }
 
+    // Bootstrap mode: if no super_admin exists yet, force role='super_admin'
+    const superAdminCount = await prisma.adminUser.count({
+      where: { role: 'super_admin', isActive: true, deletedAt: null },
+    });
+    const forcedRole = superAdminCount === 0 ? 'super_admin' : 'support_admin';
+
     const passwordHash = await hashPassword(password);
 
     const admin = await prisma.adminUser.create({
       data: {
         email,
         passwordHash,
-        role: 'support_admin',
+        role: forcedRole,
         isActive: true,
       },
     });

@@ -7,21 +7,43 @@ import { prisma } from '../../infrastructure/prisma.js';
 import { validateRequest, getValidated } from '../../middleware/validate-request.js';
 import { loginSchema, registerAdminSchema } from '../../schemas/index.js';
 import { adminAuthLimiter } from '../../middleware/rate-limiters.js';
+// Bootstrap gate: allows ONE unauthenticated registration when no super_admin exists,
+// then locks forever (requires existing super_admin to create new admins).
+async function bootstrapRegistrationGate(req, res, next) {
+    const superAdminCount = await prisma.adminUser.count({
+        where: { role: 'super_admin', isActive: true, deletedAt: null },
+    });
+    if (superAdminCount === 0) {
+        return next();
+    }
+    if (!req.admin) {
+        return res.status(401).json({ error: 'Authentication required' });
+    }
+    if (req.admin.role !== 'super_admin') {
+        return res.status(403).json({ error: 'Insufficient permissions' });
+    }
+    next();
+}
 const router = Router();
 // ─── POST /api/admin/auth/register ───
-router.post('/register', validateRequest(registerAdminSchema, 'body'), adminAuthLimiter, async (req, res) => {
+router.post('/register', validateRequest(registerAdminSchema, 'body'), adminAuthLimiter, bootstrapRegistrationGate, async (req, res) => {
     try {
         const { email, password } = getValidated(req);
         const existing = await prisma.adminUser.findUnique({ where: { email } });
         if (existing && !existing.deletedAt) {
             return res.status(409).json({ error: 'Email already registered' });
         }
+        // Bootstrap mode: if no super_admin exists yet, force role='super_admin'
+        const superAdminCount = await prisma.adminUser.count({
+            where: { role: 'super_admin', isActive: true, deletedAt: null },
+        });
+        const forcedRole = superAdminCount === 0 ? 'super_admin' : 'support_admin';
         const passwordHash = await hashPassword(password);
         const admin = await prisma.adminUser.create({
             data: {
                 email,
                 passwordHash,
-                role: 'support_admin',
+                role: forcedRole,
                 isActive: true,
             },
         });
