@@ -59,6 +59,15 @@ export interface ProductPayload {
   price: number | null;
   stock: number | null; // null === unlimited stock
   imageUrl: string | null;
+  variants?: VariantOption[];
+}
+
+export interface VariantOption {
+  id: string;
+  label: string;
+  price: number | null;
+  stock: number | null;
+  sku: string | null;
 }
 
 export interface ProductListItem {
