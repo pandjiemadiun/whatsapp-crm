@@ -1,19 +1,21 @@
 import { Router } from 'express';
+import { adminAuthMiddleware, AuthenticatedAdminRequest } from '../../middleware/adminAuth.js';
+import { requireAdminRole } from '../../middleware/adminAuthGuard.js';
 import { getStoreEngine, setStoreEngine, EngineVersion, StoreEngineConfig } from '../../services/chat/engine-config.js';
 import { redisAdapter } from '../../adapters/cache/redis.adapter.js';
 import { getCanaryMetrics } from '../../services/chat/engine-metrics.js';
 
 const router = Router();
 
-// Canary metrics
-router.get('/metrics/:storeId', async (req, res) => {
+// Canary metrics — read-only, any authenticated admin
+router.get('/metrics/:storeId', adminAuthMiddleware, async (req: AuthenticatedAdminRequest, res) => {
   const { storeId } = req.params;
   const days = req.query.days ? parseInt(req.query.days as string) : 7;
   res.json(await getCanaryMetrics(storeId, days));
 });
 
-// Get config for a store
-router.get('/:storeId', async (req, res) => {
+// Get config for a store — read-only, any authenticated admin
+router.get('/:storeId', adminAuthMiddleware, async (req: AuthenticatedAdminRequest, res) => {
   const { storeId } = req.params;
   const config = await redisAdapter.get<StoreEngineConfig>(`store:${storeId}:engine`);
   const engine = await getStoreEngine(storeId);
@@ -25,8 +27,8 @@ router.get('/:storeId', async (req, res) => {
   }
 });
 
-// Set config for a store
-router.post('/:storeId', async (req, res) => {
+// Set config for a store — mutates state, super_admin only
+router.post('/:storeId', adminAuthMiddleware, requireAdminRole(['super_admin']), async (req: AuthenticatedAdminRequest, res) => {
   const { storeId } = req.params;
   const { engine } = req.body as { engine: EngineVersion };
   if (engine !== 'v1' && engine !== 'v2') {
@@ -36,8 +38,8 @@ router.post('/:storeId', async (req, res) => {
   res.json({ success: true });
 });
 
-// Get all stores with v2 engine
-router.get('/', async (req, res) => {
+// Get all stores with v2 engine — read-only, any authenticated admin
+router.get('/', adminAuthMiddleware, async (req: AuthenticatedAdminRequest, res) => {
   const keys = await redisAdapter.keys('store:*:engine');
   const configs = await Promise.all(keys.map(k => redisAdapter.get<StoreEngineConfig>(k)));
   const v2Stores = configs.filter(c => c?.engine === 'v2');
