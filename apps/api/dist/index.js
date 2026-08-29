@@ -56,6 +56,7 @@ import { healthMonitorService } from './services/health-monitor.service.js';
 import { scheduleBackups } from './bootstrap/scheduleBackups.js';
 import { scheduleFollowUps } from './bootstrap/scheduleFollowUps.js';
 import { scheduleLearning } from './bootstrap/scheduleLearning.js';
+import { scheduleAutoCancel } from './bootstrap/scheduleAutoCancel.js';
 import { requestIdMiddleware } from './middleware/requestId.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { metricsMiddleware } from './middleware/metrics.middleware.js';
@@ -225,6 +226,9 @@ httpServer.listen(PORT, async () => {
     // Start proactive follow-up scheduler (every 10min by default)
     scheduleFollowUps();
     scheduleLearning();
+    // Start auto-cancel scheduler (every 15min) — PV-P1-08: expires stuck
+    // unpaid orders (waiting_address / waiting_payment) and restores stock.
+    scheduleAutoCancel();
     // Seed default store on first startup
     try {
         await prisma.store.upsert({
