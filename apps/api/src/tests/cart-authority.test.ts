@@ -970,3 +970,187 @@ describe('G2-C Cleanup: Stock Concurrency', () => {
     assert.ok(orderId, 'checkout should succeed when cart qty equals stock');
   });
 });
+
+// ════════════════════════════════════════════════════════════════════════════
+// PV-P2: VARIANT_REQUIRED guard (single authority — CartAuthority)
+// ════════════════════════════════════════════════════════════════════════════
+
+describe('PV-P2: VARIANT_REQUIRED guard (CartAuthority single authority)', () => {
+  let variantProductId: string;
+  let variantId: string;
+  let noVariantProductId: string;
+
+  before(async () => {
+    // Product WITH variants
+    const vp = await prisma.product.create({
+      data: {
+        id: `${TEST_PREFIX}-prod-sosis`,
+        storeId,
+        name: 'Sosis',
+        price: 30000,
+        currency: 'IDR',
+        isActive: true,
+        hasVariants: true,
+      },
+    });
+    variantProductId = vp.id;
+
+    // Create a variant for it
+    const variant = await prisma.productVariant.create({
+      data: {
+        productId: variantProductId,
+        storeId,
+        price: 35000,
+        stock: 50,
+        sku: 'SOSIS-500G',
+        attributes: { weight: '500g' },
+        isActive: true,
+      },
+    });
+    variantId = variant.id;
+
+    // Product WITHOUT variants (regression control)
+    const nvp = await prisma.product.create({
+      data: {
+        id: `${TEST_PREFIX}-prod-beras-premium`,
+        storeId,
+        name: 'Beras Premium',
+        price: 75000,
+        currency: 'IDR',
+        isActive: true,
+        hasVariants: false,
+      },
+    });
+    noVariantProductId = nvp.id;
+  });
+
+  beforeEach(async () => {
+    await prisma.orderItem.deleteMany({ where: { order: { storeId } } }).catch(() => {});
+    await prisma.order.deleteMany({ where: { storeId } }).catch(() => {});
+    await prisma.conversationContext.deleteMany({ where: { conversation: { storeId } } }).catch(() => {});
+    await prisma.conversation.deleteMany({ where: { storeId } }).catch(() => {});
+  });
+
+  // ── 4a: Regression — hasVariants=false, add via CartAuthority directly ──
+
+  test('4a: regression — hasVariants=false product adds normally via addLine (no variantId)', async () => {
+    const convId = await createConversation();
+    // addLine with variantId=null (default) for hasVariants=false → should succeed
+    const lines = await cartAuthority.addLine(convId, storeId, customerId, noVariantProductId, 2, null);
+    assert.equal(lines.length, 1);
+    assert.equal(lines[0].productId, noVariantProductId);
+    assert.equal(lines[0].productName, 'Beras Premium');
+    assert.equal(lines[0].quantity, 2);
+    assert.equal(lines[0].unitPrice, 75000); // from DB
+    assert.equal(lines[0].variantId, null);
+  });
+
+  test('4a: regression — hasVariants=false product adds normally via executeOps (no variantId)', async () => {
+    const convId = await createConversation();
+    const items = await cartAuthority.executeOps(
+      [{ type: 'add', product: 'Beras Premium', qty: 1 } as CartOp],
+      storeId, customerId, convId,
+    );
+    assert.equal(items.length, 1);
+    assert.equal(items[0].product, 'Beras Premium');
+    assert.equal(items[0].price, 75000);
+    assert.equal(items[0].variantId, null);
+  });
+
+  // ── 4c: WA path — hasVariants=true + variantId=null → MUST FAIL ──
+
+  test('4c: WA path — hasVariants=true product without variantId throws VARIANT_REQUIRED', async () => {
+    const convId = await createConversation();
+    await assert.rejects(
+      () => cartAuthority.executeOps(
+        [{ type: 'add', product: 'Sosis', qty: 1 } as CartOp],
+        storeId, customerId, convId,
+      ),
+      (err: unknown) => err instanceof CartInvariantError && err.code === 'VARIANT_REQUIRED',
+    );
+  });
+
+  test('4c: WA path — hasVariants=true product with variantId=undefined throws VARIANT_REQUIRED', async () => {
+    const convId = await createConversation();
+    await assert.rejects(
+      () => cartAuthority.executeOps(
+        [{ type: 'add', product: 'Sosis', qty: 1, variantId: undefined } as CartOp],
+        storeId, customerId, convId,
+      ),
+      (err: unknown) => err instanceof CartInvariantError && err.code === 'VARIANT_REQUIRED',
+    );
+  });
+
+  test('4c: WA path — hasVariants=true product with explicit variantId=null throws VARIANT_REQUIRED', async () => {
+    const convId = await createConversation();
+    await assert.rejects(
+      () => cartAuthority.executeOps(
+        [{ type: 'add', product: 'Sosis', qty: 1, variantId: null } as CartOp],
+        storeId, customerId, convId,
+      ),
+      (err: unknown) => err instanceof CartInvariantError && err.code === 'VARIANT_REQUIRED',
+    );
+  });
+
+  test('4c: WA path — hasVariants=true product with VALID variantId succeeds', async () => {
+    const convId = await createConversation();
+    const items = await cartAuthority.executeOps(
+      [{ type: 'add', product: 'Sosis', qty: 2, variantId } as CartOp],
+      storeId, customerId, convId,
+    );
+    assert.equal(items.length, 1);
+    assert.equal(items[0].product, 'Sosis');
+    assert.equal(items[0].price, 35000); // variant price, NOT parent
+    assert.equal(items[0].qty, 2);
+    assert.equal(items[0].variantId, variantId);
+  });
+
+  test('4c: WA path — no OrderItem created when VARIANT_REQUIRED fires', async () => {
+    const convId = await createConversation();
+    try {
+      await cartAuthority.executeOps(
+        [{ type: 'add', product: 'Sosis', qty: 1 } as CartOp],
+        storeId, customerId, convId,
+      );
+    } catch (e) {
+      // expected
+    }
+    // Assert NO OrderItem was created for this product
+    const orderItems = await prisma.orderItem.findMany({ where: { productId: variantProductId } });
+    assert.equal(orderItems.length, 0, 'no OrderItem should be created when VARIANT_REQUIRED fires');
+  });
+
+  // ── 4d: WA path — hasVariants=false → SUCCESS ──
+
+  test('4d: WA path — hasVariants=false product adds normally via executeOps', async () => {
+    const convId = await createConversation();
+    const items = await cartAuthority.executeOps(
+      [{ type: 'add', product: 'Beras Premium', qty: 3 } as CartOp],
+      storeId, customerId, convId,
+    );
+    assert.equal(items.length, 1);
+    assert.equal(items[0].product, 'Beras Premium');
+    assert.equal(items[0].price, 75000);
+    assert.equal(items[0].qty, 3);
+    assert.equal(items[0].variantId, null);
+  });
+
+  // ── addLine direct path — hasVariants=true + variantId=null → FAIL ──
+
+  test('addLine direct — hasVariants=true product without variantId throws VARIANT_REQUIRED', async () => {
+    const convId = await createConversation();
+    await assert.rejects(
+      () => cartAuthority.addLine(convId, storeId, customerId, variantProductId, 1, null),
+      (err: unknown) => err instanceof CartInvariantError && err.code === 'VARIANT_REQUIRED',
+    );
+  });
+
+  test('addLine direct — hasVariants=true product with valid variantId succeeds', async () => {
+    const convId = await createConversation();
+    const lines = await cartAuthority.addLine(convId, storeId, customerId, variantProductId, 1, variantId);
+    assert.equal(lines.length, 1);
+    assert.equal(lines[0].productId, variantProductId);
+    assert.equal(lines[0].unitPrice, 35000); // variant price
+    assert.equal(lines[0].variantId, variantId);
+  });
+});

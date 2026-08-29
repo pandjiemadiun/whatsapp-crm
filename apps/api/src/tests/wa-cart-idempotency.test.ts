@@ -262,3 +262,193 @@ describe('P7 — WA cart idempotency: engine wiring (v1 resolver)', () => {
     assert.equal(await countClaims(`wa:${conversationId}:MSG-ENG-SAME`), 1);
   });
 });
+
+// ════════════════════════════════════════════════════════════════════════════
+// PV-P2: VARIANT_REQUIRED via WA path (executeWaCartMutation)
+// ════════════════════════════════════════════════════════════════════════════
+
+describe('PV-P2: VARIANT_REQUIRED via WA path (executeWaCartMutation)', () => {
+  const WA_STORE = 'store-wa-variant-p2';
+  const WA_PREFIX = WA_STORE;
+  let waCustomerId: string;
+  let waConvId: string;
+  let variantProdId: string;
+  let validVariantId: string;
+  let noVariantProdId: string;
+
+  async function waCleanup(): Promise<void> {
+    await prisma.actionIdempotency.deleteMany({ where: { storeId: { startsWith: WA_PREFIX } } }).catch(() => {});
+    await prisma.orderItem.deleteMany({ where: { order: { storeId: { startsWith: WA_PREFIX } } } }).catch(() => {});
+    await prisma.order.deleteMany({ where: { storeId: { startsWith: WA_PREFIX } } }).catch(() => {});
+    await prisma.productVariant.deleteMany({ where: { storeId: { startsWith: WA_PREFIX } } }).catch(() => {});
+    await prisma.product.deleteMany({ where: { storeId: { startsWith: WA_PREFIX } } }).catch(() => {});
+    await prisma.conversationContext.deleteMany({ where: { conversation: { storeId: { startsWith: WA_PREFIX } } } }).catch(() => {});
+    await prisma.conversation.deleteMany({ where: { storeId: { startsWith: WA_PREFIX } } }).catch(() => {});
+    await prisma.customer.deleteMany({ where: { storeId: { startsWith: WA_PREFIX } } }).catch(() => {});
+    await prisma.store.deleteMany({ where: { id: { startsWith: WA_PREFIX } } }).catch(() => {});
+  }
+
+  async function waSetupStore(): Promise<void> {
+    await prisma.store.upsert({
+      where: { id: WA_STORE },
+      update: {},
+      create: {
+        id: WA_STORE,
+        name: 'P2 WA Variant Store',
+        slug: WA_STORE,
+        email: 'wa-variant-p2@garuda.test',
+        phoneNumber: '+6281200000097',
+        address: 'Jl. WA Variant No. 1',
+        originProvinceId: 'prov-wa-2',
+        originProvinceName: 'Jawa Barat',
+        originCityId: 'city-wa-2',
+        originCityName: 'Bandung',
+        originSubdistrictId: 'sub-wa-2',
+        originSubdistrictName: 'Coblong',
+      },
+    });
+
+    // Product WITH variants
+    const vp = await prisma.product.create({
+      data: {
+        id: 'prod-wa-sosis',
+        storeId: WA_STORE,
+        name: 'Sosis',
+        price: 30000,
+        currency: 'IDR',
+        isActive: true,
+        hasVariants: true,
+      },
+    });
+    variantProdId = vp.id;
+
+    const variant = await prisma.productVariant.create({
+      data: {
+        productId: variantProdId,
+        storeId: WA_STORE,
+        price: 35000,
+        stock: 50,
+        sku: 'SOSIS-500G',
+        attributes: { weight: '500g' },
+        isActive: true,
+      },
+    });
+    validVariantId = variant.id;
+
+    // Product WITHOUT variants
+    const nvp = await prisma.product.create({
+      data: {
+        id: 'prod-wa-beras',
+        storeId: WA_STORE,
+        name: 'Beras',
+        price: 75000,
+        currency: 'IDR',
+        isActive: true,
+        hasVariants: false,
+      },
+    });
+    noVariantProdId = nvp.id;
+
+    waCustomerId = `cust-wa-${randomUUID()}`;
+    await prisma.customer.create({
+      data: { id: waCustomerId, storeId: WA_STORE, webUid: `${WA_PREFIX}-webuid`, name: 'P2 WA Customer' },
+    });
+  }
+
+  async function waCreateConv(): Promise<void> {
+    waConvId = `conv-wa-${randomUUID()}`;
+    await prisma.conversation.create({
+      data: { id: waConvId, storeId: WA_STORE, customerId: waCustomerId, customerPhone: waCustomerId, channel: 'whatsapp' },
+    });
+    await conversationContextService.initializeContext({ storeId: WA_STORE, customerId: waCustomerId, conversationId: waConvId });
+  }
+
+  before(async () => {
+    (llmGateway as any).generate = mockGenerate;
+    await waCleanup();
+    await waSetupStore();
+  });
+
+  after(async () => {
+    await waCleanup();
+  });
+
+  beforeEach(async () => {
+    await prisma.orderItem.deleteMany({ where: { order: { storeId: { startsWith: WA_PREFIX } } } }).catch(() => {});
+    await prisma.order.deleteMany({ where: { storeId: { startsWith: WA_PREFIX } } }).catch(() => {});
+    await prisma.conversationContext.deleteMany({ where: { conversation: { storeId: { startsWith: WA_PREFIX } } } }).catch(() => {});
+    await prisma.conversation.deleteMany({ where: { storeId: { startsWith: WA_PREFIX } } }).catch(() => {});
+  });
+
+  // ── 4c: WA path — hasVariants=true + variantId=null → MUST FAIL ──
+
+  test('4c: WA path — hasVariants=true + variantId=null → executeWaCartMutation returns "error"', async () => {
+    await waCreateConv();
+    const msgId = `MSG-VARIANT-REQUIRED-${randomUUID()}`;
+    const status = await executeWaCartMutation(
+      [{ type: 'add', product: 'Sosis', qty: 1 } as CartOp],
+      WA_STORE, waCustomerId, waConvId, msgId,
+    );
+    assert.equal(status, 'error', 'executeWaCartMutation must return "error" for hasVariants=true + variantId=null');
+  });
+
+  test('4c: WA path — hasVariants=true + variantId=null → NO OrderItem created', async () => {
+    await waCreateConv();
+    const msgId = `MSG-VARIANT-NOITEM-${randomUUID()}`;
+    await executeWaCartMutation(
+      [{ type: 'add', product: 'Sosis', qty: 1 } as CartOp],
+      WA_STORE, waCustomerId, waConvId, msgId,
+    );
+    const orderItems = await prisma.orderItem.findMany({ where: { productId: variantProdId } });
+    assert.equal(orderItems.length, 0, 'no OrderItem should be created when VARIANT_REQUIRED fires');
+  });
+
+  test('4c: WA path — hasVariants=true + variantId=null → ActionIdempotency = FAILED', async () => {
+    await waCreateConv();
+    const msgId = `MSG-VARIANT-FAILED-${randomUUID()}`;
+    await executeWaCartMutation(
+      [{ type: 'add', product: 'Sosis', qty: 1 } as CartOp],
+      WA_STORE, waCustomerId, waConvId, msgId,
+    );
+    const claim = await prisma.actionIdempotency.findFirst({
+      where: { storeId: WA_STORE, actionType: 'WA_CART_MUTATION', actionId: `wa:${waConvId}:${msgId}` },
+    });
+    assert.ok(claim, 'ActionIdempotency claim row must exist');
+    assert.equal(claim!.status, 'FAILED', 'claim status must be FAILED (per §6A.9)');
+  });
+
+  test('4c: WA path — hasVariants=true + VALID variantId → executeWaCartMutation returns "applied"', async () => {
+    await waCreateConv();
+    const msgId = `MSG-VARIANT-OK-${randomUUID()}`;
+    const status = await executeWaCartMutation(
+      [{ type: 'add', product: 'Sosis', qty: 2, variantId: validVariantId } as CartOp],
+      WA_STORE, waCustomerId, waConvId, msgId,
+    );
+    assert.equal(status, 'applied', 'executeWaCartMutation must return "applied" for hasVariants=true + valid variantId');
+  });
+
+  // ── 4d: WA path — hasVariants=false → SUCCESS ──
+
+  test('4d: WA path — hasVariants=false → executeWaCartMutation returns "applied"', async () => {
+    await waCreateConv();
+    const msgId = `MSG-NOVARIANT-OK-${randomUUID()}`;
+    const status = await executeWaCartMutation(
+      [{ type: 'add', product: 'Beras', qty: 3 } as CartOp],
+      WA_STORE, waCustomerId, waConvId, msgId,
+    );
+    assert.equal(status, 'applied', 'executeWaCartMutation must return "applied" for hasVariants=false');
+  });
+
+  test('4d: WA path — hasVariants=false → OrderItem created with correct price', async () => {
+    await waCreateConv();
+    const msgId = `MSG-NOVARIANT-ITEM-${randomUUID()}`;
+    await executeWaCartMutation(
+      [{ type: 'add', product: 'Beras', qty: 1 } as CartOp],
+      WA_STORE, waCustomerId, waConvId, msgId,
+    );
+    const orderItems = await prisma.orderItem.findMany({ where: { productId: noVariantProdId } });
+    assert.equal(orderItems.length, 1, 'exactly one OrderItem should be created');
+    assert.equal(orderItems[0].unitPrice, 75000, 'unitPrice must match DB price');
+    assert.equal(orderItems[0].variantId, null, 'variantId must be null for hasVariants=false');
+  });
+});
