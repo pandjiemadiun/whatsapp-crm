@@ -1001,6 +1001,14 @@ dari laporan sesi sebelumnya.
     `8ee1104` (F6a) + `50d4d25` (F6b). TIDAK ada perubahan logic `payment.service.ts`/
     `order-transition.ts` selain field mapper `paymentRejectReason` (F6a).
 
+---
+
+### 29 Agu 2026 — PV-P2c-URGENT: VARIANT_REQUIRED guard dipindah ke CartAuthority (single domain authority)
+Konteks: Audit PV-P2c (WA text representation) menemukan gap kritis: produk `hasVariants=true` bisa di-add ke cart via WA path (`executeWaCartMutation` → `cartAuthority.executeOps`) TANPA variantId, dan `resolvePriceAndStock` diam-diam fallback ke parent-product price. Guardian `VARIANT_REQUIRED` HANYA ada di handler-layer `action-registry.ts:handleAddToCart` (PWA path) — WA path bypass total. Integritas data cart terancam: customer bisa di-charge harga parent, dapat `variantId=null` di OrderItem.
+Keputusan: Pindahkan guard ke `CartAuthority.resolvePriceAndStock` (single domain authority per §2.3/§6A.1). Semua path (PWA, WA, addLine, checkout) sekarang wajib lewat guard ini. Handler-layer guard di `action-registry.ts` tetap ada sebagai defense-in-depth (fail-fast sebelum transaction). PV-P2c asli (text display) ditunda — tutup gap data integrity dulu.
+Alasan: WA path tidak punya variant extraction di LLM schema/prompt, tapi data cart harus tetap authoritative. Kalau guard hanya di handler, WA path akan selalu bypass. Single authority = satu titik kebenaran.
+Siapa yang setuju: Claude — real-time, dilaporkan saat commit. Commit `0425f8d`.
+
 ## 6.x LOG RETROAKTIF — cluster structured actions / P4 / P8 (POST-HOC, 19 Agu 2026)
 
 > **⚠️ PENTING — jangan disamarkan sebagai laporan tepat waktu.** Entri di bawah
