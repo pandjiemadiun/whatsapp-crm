@@ -1009,6 +1009,21 @@ Keputusan: Pindahkan guard ke `CartAuthority.resolvePriceAndStock` (single domai
 Alasan: WA path tidak punya variant extraction di LLM schema/prompt, tapi data cart harus tetap authoritative. Kalau guard hanya di handler, WA path akan selalu bypass. Single authority = satu titik kebenaran.
 Siapa yang setuju: Claude — real-time, dilaporkan saat commit. Commit `0425f8d`.
 
+---
+
+### 29 Agu 2026 — PV-P2c full stack closure: WA variant support (TEXT+LLM-A+LLM-B) — RESOLVED
+Konteks: Audit PV-P2c awal menandai "WA variant belum tersentuh" — chat WA tak pernah handle varian (`hasVariants`): inquiry dibalas "masukkan ke keranjang", LLM tak pernah resolve teks varian (warna/ukuran) ke `variantId` (I13: LLM tak tahu `variantId`).
+Keputusan: Tutup end-to-end per-unit + dist rebuild + pm2 restart:
+- **PV-P2c-TEXT** (`71ba429`): `fallback.service.ts` `tryProduct` — inquiry `hasVariants` ("ada sepatu?") redirect ke storefront (`PUBLIC_PWA_URL || 'https://qlobot.web.id'` → `/c/<slug>`), bukan "masukkan ke keranjang"; marker "(ada varian)".
+- **PV-P2c-LLM-A** (`a454ec1`): skema LLM `variant` = deskriptif teks (bukan `variantId`/I13); `DraftCartOp.variant` (`types-v2.ts`), `INTERPRETER_SCHEMA` (`interpreter.ts`), `FEW_SHOTS`[8..10] + rule `n` (`prompts-v2.ts`). (catatan: rule `n` + FS#9-11 + test 7a tidak dipisah hunk-level — Batch-2 & B3.1 berada pada line/objek yang sama; digabung ke LLM-A per fallback.)
+- **PV-P2c-LLM-B** (`ba2acf5`): `CartAuthority.resolveVariantByLabel` (DB-driven, tenant+product-scoped via `product_variants.attributes`+`sku`) + injection di `executeOps` add-path; `conversation.service.ts:314` `variant: e.metadata?.variant ?? null`; single error surface `resolvePriceAndStock` (`VARIANT_REQUIRED`, guar­d sejak `0425f8d`). Unit `cart-authority.test.ts` (4) + golden T1-T4/7b-7e.
+- **dist rebuild** (`a5289ae`); `pm2 restart api` → online; baselines green: chat 271/0, golden 37/0, structured 118/0, payment 46/0, shipping 8/0; `tsc --noEmit` + `npm run build` exit 0.
+- **E2E live** (curl `POST /api/messages/handle`, store Canary `store-f7140b5c`, api port 3000, LLM key dari env api — bukan test key terpisah; seed product `Sepatu` hasVariants + variant `merah/size L` pada canary, sebelumnya 0 produk):
+  - (a) "ada sepatu?" → `source:"product"`, balasan `…cek di toko web kami: https://qlobot.web.id/c/store-f7140b5c` + "(ada varian)", tidak ada "masukkan ke keranjang".
+  - (b) "saya mau sepatu merah size L" → `source:"ai"`, balasan `🛒 Ditambahkan ke keranjang: sepatu x1`; draft `OrderItem` conv `e2e-conv-b` punya `variantId=b619cdf8-e533-41f9-ab6c-69da089175f7` (attrs `{"size":"L","color":"merah"}`) — `resolveVariantByLabel` match teks LLM → variantId.
+Alasan: single error surface (§2.3/§6A.1) sudah ada sejak `0425f8d` (URGENT); PV-P2c full stack melengkapi layer representasi WA (storefront redirect inquiry) + LLM variant text → DB-driven `variantId` — menutup gap "WA variant belum tersentuh".
+Siapa yang setuju: owner (Panji), AI CLI (Kilo).
+
 ## 6.x LOG RETROAKTIF — cluster structured actions / P4 / P8 (POST-HOC, 19 Agu 2026)
 
 > **⚠️ PENTING — jangan disamarkan sebagai laporan tepat waktu.** Entri di bawah
