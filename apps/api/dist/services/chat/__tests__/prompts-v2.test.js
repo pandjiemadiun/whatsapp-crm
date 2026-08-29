@@ -107,8 +107,8 @@ describe('buildUserPrompt (FASE B1)', () => {
 // FEW_SHOTS
 // ─────────────────────────────────────────────────────────────────────────────
 describe('FEW_SHOTS (FASE B1)', () => {
-    it('FEW_SHOTS.length === 8', () => {
-        assert.equal(FEW_SHOTS.length, 8);
+    it('FEW_SHOTS.length === 11', () => {
+        assert.equal(FEW_SHOTS.length, 11);
     });
     it('setiap few-shot punya struktur {user_message, context_description, expected_json}', () => {
         for (const fs of FEW_SHOTS) {
@@ -157,6 +157,26 @@ describe('FEW_SHOTS (FASE B1)', () => {
         assert.equal(parsed.acts.length, 1);
         assert.equal(parsed.acts[0].intent, 'cancel');
         assert.equal(parsed.acts[0].entities[0].type, 'product');
+    });
+    it('PV-P2c-LLM-B 7a: entities[].metadata.variant === draft_cart_ops[].variant (konsisten) untuk 3 few-shot varian', () => {
+        // FS#9 (idx 8), FS#10 (idx 9), FS#11 (idx 10) — 3 contoh yang ada varian.
+        for (const idx of [8, 9, 10]) {
+            const fs = FEW_SHOTS[idx];
+            const parsed = JSON.parse(fs.expected_json);
+            // lookup: product value (lowercased) → entity
+            const entityByProduct = new Map();
+            for (const act of parsed.acts) {
+                for (const e of act.entities) {
+                    if (e.type === 'product')
+                        entityByProduct.set(e.value.toLowerCase(), e);
+                }
+            }
+            for (const op of parsed.draft_cart_ops) {
+                const ent = entityByProduct.get(op.product.toLowerCase());
+                assert.ok(ent, `harus ada entity produk untuk draft_cart_op product="${op.product}" (FS idx ${idx})`);
+                assert.equal(ent.metadata?.variant ?? null, op.variant ?? null, `entity.metadata.variant harus SAMA PERSIS dengan draft_cart_ops.variant untuk "${op.product}" (FS idx ${idx}) — jika golden few-shot sendiri tidak konsisten, instruksi prompt untuk LLM nanti kurang jelas`);
+            }
+        }
     });
 });
 //# sourceMappingURL=prompts-v2.test.js.map

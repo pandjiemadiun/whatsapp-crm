@@ -38,6 +38,23 @@ export declare class FallbackService {
     private detectNegation;
     private capitalize;
     private formatPrice;
+    /**
+     * PV-P2c — Resolve the public store slug used to build a storefront link.
+     * Only fetched on the hasVariants code path (variant products redirected to
+     * the web storefront). A single findUnique is acceptable here since
+     * tryProduct already performs a product findMany; results are NOT cached to
+     * keep this path hermetic-testable (stub prisma.store.findUnique).
+     */
+    private getStoreSlug;
+    /**
+     * PV-P2c — Build the public storefront URL for a store slug.
+     * Domain is read from env (PUBLIC_PWA_URL) and is NOT hardcoded in code;
+     * this mirrors getPublicWebhookBaseUrl in routes/messages.ts which uses
+     * `process.env.PUBLIC_API_URL || 'https://api.qlobot.web.id'`. The fallback
+     * is the documented production PWA domain. Set PUBLIC_PWA_URL in deployment
+     * .env to override. PWA storefront route: /c/<slug> (see apps/pwa/src/App.tsx).
+     */
+    private getStorefrontUrl;
     private get ORDER_STATUS_LABELS();
     handleOrderChangeRequest(context: ConversationContext, customerMessage: string, orderStatus: string): Promise<ResponseOption>;
 }

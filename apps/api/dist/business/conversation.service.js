@@ -234,6 +234,10 @@ export class ConversationService {
                                     product: e.value,
                                     qty: qtyPerEntity,
                                     price: isRemove ? 0 : (priceMap.get(String(e.value).toLowerCase()) ?? 0),
+                                    // PV-P2c-LLM-B B3.2: thread free-text variant from entity.metadata.variant
+                                    // into the CartOp so CartAuthority.resolveVariantByLabel can resolve
+                                    // it to variantId (DB-driven, I13). Absent for non-variant products.
+                                    variant: (e.metadata && typeof e.metadata === 'object' ? e.metadata.variant : null) ?? null,
                                 }));
                                 // Panggil executeWaCartMutation (idempoten via claim/FOR UPDATE) — harga dari DB (I13), bukan LLM
                                 await executeWaCartMutation(ops, storeId, customerId, conversationId, messageId);

@@ -37,11 +37,13 @@ k. Jika ada pending active dan pesan user bukan jawaban confirmation → topic_s
 l. Jika user hanya menyapa (greeting) dan tidak ada act yang perlu dieksekusi → acts=[], isi reply_draft dengan balasan ramah.
 m. summary_update: 1–2 kalimat ringkasan state percakapan setelah pesan ini.
 
+  n. Jika user menyebut produk beserta variannya (warna/ukuran, mis. "merah", "size L", "merah size L"), SIMPAN deskripsi varian bebas (bahasa natural) ke field variant pada draft_cart_ops[] atau cart_ops[] — JANGAN masukkan ke unmatched_mentions. "variant" adalah teks deskriptif (bukan ID); LLM tidak perlu tahu variantId. Produk tanpa varian: biarkan variant kosong/null. (Resolusi variant → variantId dilakukan di layer DB, I13 non-negotiable.) SELAIN ITU, untuk setiap entity produk yang sama, ISI JUGA entities[].metadata.variant dengan teks YANG SAMA PERSIS seperti draft_cart_ops[].variant — KEDUANYA WAJIB konsisten, jangan isi salah satu saja (konsistensi ini dipakai v2 engine untuk meneruskan variant ke CartOp). Produk tanpa varian: biarkan metadata.variant kosong/null.
+
 ========== KATALOG PRODUK ==========
 Produk yang tersedia di katalog: ${productNames}
 
 ========== CONTOH (FEW-SHOT) ==========
-Lihat konstanta FEW_SHOTS untuk 8 contoh transkrip permintaan yang diharapkan.`;
+Lihat konstanta FEW_SHOTS untuk 11 contoh transkrip permintaan yang diharapkan.`;
 }
 // ─────────────────────────────────────────────────────────────────────────────
 // buildUserPrompt
@@ -75,10 +77,10 @@ ${histLines}
 Kembalikan respons HANYA sebagai JSON yang valid sesuai InterpreterResultV2 (lihat system prompt).`;
 }
 // ─────────────────────────────────────────────────────────────────────────────
-// FEW_SHOTS (8 contoh transkrip untuk dilatih interpreter)
+// FEW_SHOTS (11 contoh transkrip untuk dilatih interpreter)
 // ─────────────────────────────────────────────────────────────────────────────
 /**
- * 8 contoh (user_message + konteks + expected_json) yang memandu interpreter:
+ * 11 contoh (user_message + konteks + expected_json) yang memandu interpreter:
  *   1. multi-act 3 produk — tidak ada product mention yang missing.
  *   2. revisi dalam satu kalimat — act kedua punya supersedes=act_id pertama.
  *   3. topic switch — pending aktif + user tanya di luar scope order.
@@ -87,6 +89,9 @@ Kembalikan respons HANYA sebagai JSON yang valid sesuai InterpreterResultV2 (lih
  *   6. multi-add dalam satu kalimat — 3 produk qty 1 eksplisit, confidence tinggi.
  *   7. greeting — acts kosong, reply_draft ramah.
  *   8. cancel — intent cancel + reply_draft konfirmasi pembatalan.
+ *   9. single variant product (warna/size) — deskripsi varian ke draft_cart_ops[].variant.
+ *   10. mix variant + non-variant — variant hanya pada draft_cart_op produk bervarian.
+ *   11. variant product tanpa qty eksplisit (qty default) — varian tetap tercatat.
  */
 export const FEW_SHOTS = [
     {
@@ -204,6 +209,49 @@ export const FEW_SHOTS = [
   "reply_draft": "Oke kak, wortel sudah saya batalkan dari keranjang.",
   "confidence": {"entities":0.9,"intent":0.95,"selection":0.9,"topic":0.6},
   "summary_update": "Customer membatalkan wortel dari keranjang."
+}`,
+    },
+    {
+        user_message: 'Saya mau sosis merah size L',
+        context_description: 'Customer pesan sosis dengan varian warna "merah" dan size "L". Deskripsi varian (merah size L) wajib dicatat ke draft_cart_ops[].variant, bukan ke unmatched_mentions.',
+        expected_json: `{
+  "acts": [
+    {"act_id":"act_sosis","intent":"cart_update","entities":[{"type":"product","value":"sosis","confidence":0.9,"metadata":{"variant":"merah size L"}}],"qty":1,"qty_source":"explicit","confidence":0.9,"supersedes":null}
+  ],
+  "unmatched_mentions": [],
+  "topic_switch": false,
+  "draft_cart_ops": [{"action":"add","product":"sosis","qty":1,"qty_source":"explicit","status":"confirmed","variant":"merah size L"}],
+  "confidence": {"entities":0.9,"intent":0.9,"selection":0.9,"topic":0.9},
+  "summary_update": "Customer ingin menambahkan sosis varian merah size L ke keranjang."
+}`,
+    },
+    {
+        user_message: 'Pesan kaos kaki hitam size M 2, dan teh manis 1 ya',
+        context_description: 'Customer order 2 produk: kaos kaki (varian "hitam size M", qty 2) dan teh manis (tanpa varian, qty 1). Varian hanya dicatat pada draft_cart_op kaos kaki; teh manis tidak punya field variant.',
+        expected_json: `{
+  "acts": [
+    {"act_id":"act_kaos_kaki","intent":"cart_update","entities":[{"type":"product","value":"kaos kaki","confidence":0.9,"metadata":{"variant":"hitam size M"}}],"qty":2,"qty_source":"explicit","confidence":0.9,"supersedes":null},
+    {"act_id":"act_teh","intent":"cart_update","entities":[{"type":"product","value":"teh manis","confidence":0.9}],"qty":1,"qty_source":"explicit","confidence":0.9,"supersedes":null}
+  ],
+  "unmatched_mentions": [],
+  "topic_switch": false,
+  "draft_cart_ops": [{"action":"add","product":"kaos kaki","qty":2,"qty_source":"explicit","status":"confirmed","variant":"hitam size M"},{"action":"add","product":"teh manis","qty":1,"qty_source":"explicit","status":"confirmed"}],
+  "confidence": {"entities":0.9,"intent":0.9,"selection":0.95,"topic":0.9},
+  "summary_update": "Customer menambahkan kaos kaki varian hitam size M (qty 2) dan teh manis (qty 1) ke keranjang."
+}`,
+    },
+    {
+        user_message: 'Mau sosis ayam size L',
+        context_description: 'Customer pesan sosis varian "ayam size L" tanpa sebut qty eksplisit (qty default). Varian tetap dicatat ke draft_cart_ops[].variant.',
+        expected_json: `{
+  "acts": [
+    {"act_id":"act_sosis_ayam","intent":"cart_update","entities":[{"type":"product","value":"sosis","confidence":0.9,"metadata":{"variant":"ayam size L"}}],"qty":null,"qty_source":"default","confidence":0.9,"supersedes":null}
+  ],
+  "unmatched_mentions": [],
+  "topic_switch": false,
+  "draft_cart_ops": [{"action":"add","product":"sosis","qty":1,"qty_source":"default","status":"confirmed","variant":"ayam size L"}],
+  "confidence": {"entities":0.9,"intent":0.85,"selection":0.8,"topic":0.8},
+  "summary_update": "Customer ingin sosis varian ayam size L (qty default)."
 }`,
     },
 ];

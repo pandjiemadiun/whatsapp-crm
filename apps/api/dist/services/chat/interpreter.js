@@ -25,14 +25,14 @@ import { prisma } from '../../infrastructure/prisma.js';
 const FEW_SHOT = `--- Contoh 1 ---\ncustomer: "toralin brp ya?"\nassistant: "Total belanjaan Kakak: Rp 25.000 ya. Ada tambahan?"\ncustomer: "mau tambah ayam goreng"\nassistant: "Oke, ayam goreng sudah dimasukkan. Total baru: Rp 35.000."\n\n--- Contoh 2 ---\ncustomer: "brp ongkirr ke jakarta?"\nassistant: "Ongkir ke Jakarta: Rp 15.000 (standar) atau Rp 25.000 (express)."\ncustomer: "mau express"\n\n--- Contoh 3 ---\ncustomer: "mau beli wortel dan kentang, dua-duanya"\nassistant: "Baik Kak, wortel dan kentang sudah di keranjang. Mau tambah?"\ncustomer: "ya, keduanya"\n`;
 const INTERPRETER_SCHEMA = `{
   "intent": "product_info|total|buy|smalltalk|clarify",
-  "cart_ops": [{ "type": "add|remove", "product": string, "qty": number, "price": number }],
+  "cart_ops": [{ "type": "add|remove", "product": string, "qty": number, "price": number, "variant": string|null }],
   "buy_signal": "yes|no|maybe",
   "order_extract": { "order_id": string } | null,
   "missing_info": string[] | null,
   "identity": { "name": string } | null,
   "reply_draft": string | null,
   "confidence": 0.0-1.0,
-  "clarification": { "question": string, "options": [{ "id": string, "label": string, "cartOps": [{ "type":"add|remove", "product": string, "qty": number, "price": number }], "action": string }], "expected_type": "affirmative|choice|yes_no" } | null
+  "clarification": { "question": string, "options": [{ "id": string, "label": string, "cartOps": [{ "type":"add|remove", "product": string, "qty": number, "price": number, "variant": string|null }], "action": string }], "expected_type": "affirmative|choice|yes_no" } | null
 }`;
 /**
  * runOneCall — BAGIAN 3 (SATU LLM CALL).
