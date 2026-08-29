@@ -309,6 +309,9 @@ async getResponse(
         const lines = top.map(p => {
           let line = `• *${p.name}* — ${this.formatPrice(p.price)}`;
           if (p.stock !== null && p.stock > 0) line += ` (stok: ${p.stock})`;
+          // PV-P2c: beri tahu customer sebelum pilih bahwa produk ini punya
+          // varian (warna/ukuran) — supaya tidak kaget di lanjutkan.
+          if (p.hasVariants) line += ` (ada varian)`;
           return line;
         });
         return {
@@ -341,7 +344,19 @@ async getResponse(
 
       // (a)/(b) High-confidence single match -> answer directly.
       let response = `Halo Kak! Untuk *${p.name}* harganya *${this.formatPrice(p.price)}* per unit ya. 🌿`;
-      if (p.stock !== null) {
+      // PV-P2c: hasVariants products expose color/size variants on the web
+      // storefront, NOT in chat. Chat cannot offer add-to-cart for a variant
+      // product, so we honestly redirect to the storefront web instead of the
+      // (impossible) "masukkan ke keranjang" invitation.
+      if (p.hasVariants) {
+        const storeSlug = await this.getStoreSlug(context.storeId);
+        const storefrontUrl = this.getStorefrontUrl(storeSlug);
+        if (storefrontUrl) {
+          response += `\n\nProduk ini ada beberapa pilihan varian (warna/ukuran) ya Kak. Untuk pilih variannya, silakan cek di toko web kami: ${storefrontUrl}`;
+        } else {
+          response += `\n\nProduk ini ada beberapa pilihan varian (warna/ukuran) ya Kak. Untuk pilih variannya, silakan ke toko web kami langsung ya Kak.`;
+        }
+      } else if (p.stock !== null) {
         if (p.stock > 0) {
           response += ` (Stok ready ${p.stock} pcs)\n\nMau dimasukkan ke keranjang belanja Kakak?`;
         } else {
@@ -1083,6 +1098,43 @@ async getResponse(
   private formatPrice(price: number | null): string {
     if (!price) return 'Rp 0';
     return 'Rp ' + price.toLocaleString('id-ID').replace(/,/g, '.');
+  }
+
+  /**
+   * PV-P2c — Resolve the public store slug used to build a storefront link.
+   * Only fetched on the hasVariants code path (variant products redirected to
+   * the web storefront). A single findUnique is acceptable here since
+   * tryProduct already performs a product findMany; results are NOT cached to
+   * keep this path hermetic-testable (stub prisma.store.findUnique).
+   */
+  private async getStoreSlug(storeId: string): Promise<string | null> {
+    try {
+      const store = await prisma.store.findUnique({
+        where: { id: storeId },
+        select: { slug: true },
+      });
+      return store?.slug ?? null;
+    } catch (err) {
+      adapters.logger.warn('Failed to fetch store slug for storefront link', {
+        storeId,
+        error: (err as Error).message,
+      });
+      return null;
+    }
+  }
+
+  /**
+   * PV-P2c — Build the public storefront URL for a store slug.
+   * Domain is read from env (PUBLIC_PWA_URL) and is NOT hardcoded in code;
+   * this mirrors getPublicWebhookBaseUrl in routes/messages.ts which uses
+   * `process.env.PUBLIC_API_URL || 'https://api.qlobot.web.id'`. The fallback
+   * is the documented production PWA domain. Set PUBLIC_PWA_URL in deployment
+   * .env to override. PWA storefront route: /c/<slug> (see apps/pwa/src/App.tsx).
+   */
+  private getStorefrontUrl(storeSlug: string | null): string | null {
+    if (!storeSlug) return null;
+    const base = (process.env.PUBLIC_PWA_URL || 'https://qlobot.web.id').replace(/\/+$/, '');
+    return `${base}/c/${storeSlug}`;
   }
 
   private get ORDER_STATUS_LABELS(): Record<string, string> {
