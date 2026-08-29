@@ -81,4 +81,26 @@ export declare class OrderService {
     private mapOrderWithItems;
 }
 export declare const orderService: OrderService;
+export declare const PRE_SHIPMENT_STATUSES: readonly ["waiting_address", "waiting_payment", "confirmed", "paid", "packing"];
+/**
+ * Whether cancelling from `orderStatus` requires restoring catalog stock to
+ * reverse the checkout reservation. Guarded at every cancel site so stock is
+ * never inflated for post-ship refunds or double-restored (cancelled is
+ * terminal → blocked by the state machine).
+ */
+export declare function shouldRestoreStock(orderStatus: string): boolean;
+/**
+ * Reverse the checkout stock decrement for a set of OrderItem rows.
+ * Mirrors cart-authority.checkout decrement (variant-aware). Only increments
+ * rows whose stock is currently NOT NULL — unlimited (stock === null) lines
+ * were SKIPPED at checkout, so they are skipped here (never inflated).
+ *
+ * No upper-bound CAS needed: increment is always a true add-back, and the state
+ * machine guarantees a single `cancelled` transition per order.
+ */
+export declare function restoreStockForOrderItems(items: Array<{
+    productId?: string | null;
+    variantId?: string | null;
+    quantity: number;
+}>, tx?: any): Promise<void>;
 //# sourceMappingURL=order.service.d.ts.map

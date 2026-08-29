@@ -381,6 +381,14 @@ export class OrderService {
             throw err;
         }
         try {
+            // PV-P1-08: restore stock decremented at checkout. Only pre-shipment
+            // orders were decremented (draft was never decremented); a shipped/paid
+            // order that cancels is a refund (goods already dispatched — no stock to
+            // restore). Restore runs INSIDE the same tx as the transition so a failed
+            // transition rolls back the restore too (no phantom restores).
+            if (shouldRestoreStock(order.orderStatus)) {
+                await restoreStockForOrderItems(order.orderItems, tx);
+            }
             return await transitionOrder(orderId, 'cancelled', { tx });
         }
         catch (e) {
@@ -442,4 +450,57 @@ OrderService.DONE_ORDERING_KEYWORDS = [
     'minta total', 'berapa total', 'proses pesanan', 'kirim pesanan',
 ];
 export const orderService = new OrderService();
+// ============================================================
+// PV-P1-08: stock restore on cancel (reverse of checkout decrement)
+// ============================================================
+// Pre-shipment statuses whose stock was decremented at checkout and must be
+// restored on cancel. `shipped→cancelled`/`refunded` does NOT restore (goods
+// already dispatched); `draft` was never decremented; `pending` is a manual
+// window with no reservation.
+export const PRE_SHIPMENT_STATUSES = [
+    'waiting_address',
+    'waiting_payment',
+    'confirmed',
+    'paid',
+    'packing',
+];
+/**
+ * Whether cancelling from `orderStatus` requires restoring catalog stock to
+ * reverse the checkout reservation. Guarded at every cancel site so stock is
+ * never inflated for post-ship refunds or double-restored (cancelled is
+ * terminal → blocked by the state machine).
+ */
+export function shouldRestoreStock(orderStatus) {
+    return PRE_SHIPMENT_STATUSES.includes(orderStatus);
+}
+/**
+ * Reverse the checkout stock decrement for a set of OrderItem rows.
+ * Mirrors cart-authority.checkout decrement (variant-aware). Only increments
+ * rows whose stock is currently NOT NULL — unlimited (stock === null) lines
+ * were SKIPPED at checkout, so they are skipped here (never inflated).
+ *
+ * No upper-bound CAS needed: increment is always a true add-back, and the state
+ * machine guarantees a single `cancelled` transition per order.
+ */
+export async function restoreStockForOrderItems(items, tx) {
+    const client = (tx ?? prisma);
+    for (const item of items) {
+        if (!item.productId)
+            continue; // no product = nothing to restore
+        if (item.variantId) {
+            // variant line: reverse into ProductVariant (skip if unlimited/null)
+            await client.productVariant.updateMany({
+                where: { id: item.variantId, stock: { not: null } },
+                data: { stock: { increment: item.quantity } },
+            });
+        }
+        else {
+            // plain product line: reverse into Product (skip if unlimited/null)
+            await client.product.updateMany({
+                where: { id: item.productId, stock: { not: null } },
+                data: { stock: { increment: item.quantity } },
+            });
+        }
+    }
+}
 //# sourceMappingURL=order.service.js.map

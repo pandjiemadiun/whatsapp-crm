@@ -84,18 +84,22 @@ export declare class CartAuthority {
      * The draft Order becomes an immutable snapshot (post-checkout states
      * managed by G2-B.6 state machine).
      *
-     * Stock invariant:
-     *   Cart is NOT a stock reservation — it is a soft-check workspace.
-     *   The FINAL stock invariant is enforced HERE at the cart→order boundary
-     *   (cart→order transition). If any line item exceeds available stock
-     *   at checkout time, throw CartInvariantError(InsufficientStock).
+     * Stock invariant (PV-P1-08):
+     *   The cart→order boundary is the SINGLE atomic stock-deducting point.
+     *   The entire checkout — stock validation, stock DECREMENT, autoCancelAt
+     *   stamping, state-machine transition, and cart-scratchpad clear — runs
+     *   inside ONE prisma.$transaction: any failure (incl. a lost stock race)
+     *   rolls EVERYTHING back so stock is never decremented for a failed order.
      *
-     *   Cart-level stock checks (addLine/executeOps) are best-effort for UX
-     *   feedback only. Two concurrent cart adds MAY both pass the soft check
-     *   but only the first checkout will succeed if stock is constrained.
+     *   Cart-level stock checks (addLine/executeOps) remain best-effort for UX.
+     *   Two concurrent checkouts for the last unit cannot both succeed: the
+     *   decrement uses an atomic compare-and-swap (updateMany WHERE stock >= qty);
+     *   the loser's updateMany returns count===0 → CartInvariantError(INSUFFICIENT_STOCK)
+     *   → transaction rollback. This replaces the old "best-effort, not locked"
+     *   comment — stock is now truly reserved at checkout.
      *
-     *   Full stock reservation (lock rows) is NOT implemented — would require
-     *   G2-C+ reservation architecture. See ledger G2-C-L-016.
+     *   Stock is restored on cancellation (see OrderService.cancelOrder + the
+     *   AutoCancel cron) by reversing the same per-item decrement.
      */
     checkout(conversationId: string, storeId: string): Promise<string>;
     /**
