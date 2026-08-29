@@ -2,6 +2,7 @@ import { prisma } from '../infrastructure/prisma.js';
 import { adapters } from '../adapters/container.js';
 import { productService } from './product.service.js';
 import { transitionOrder } from './order-transition.js';
+import { ErrorCodes } from '../constants/errorCodes.js';
 /** Resolve tx or fall back to global prisma client. */
 function txOrGlobal(tx) {
     return tx ?? prisma;
@@ -807,14 +808,17 @@ export class CartAuthority {
         };
     }
     /**
-     * PV-P1 — SATU helper terpusat untuk resolve price + stock dari cart line.
+     * PV-P1/PV-P2 — SATU helper terpusat untuk resolve price + stock dari cart line.
      *
      * Aturan:
      * - variantId != null  → BACA DARI ProductVariant (price + stock). Product.price/
      *   Product.stock TIDAK PERNAH dipakai untuk baris ini. Variant divalidasi
      *   milik productId yang benar & aktif; kalau tidak valid → throw (sama perilaku
      *   product tidak ditemukan).
-     * - variantId == null  → BACA DARI Product seperti sebelum task ini (TIDAK BERUBAH).
+     * - variantId == null  → BACA DARI Product seperti sebelum task ini.
+     *   PV-P2: kalau product.hasVariants === true → throw VARIANT_REQUIRED.
+     *   Single authority untuk guard ini ada di sini (sesuai kontrak §2.3/§6A.1).
+     *   Handler-layer guard di action-registry.ts tetap ada sebagai defense-in-depth.
      *
      * Semua titik yang butuh price/stock (addLine, executeOps, checkout) WAJIB pakai
      * helper ini — jangan duplikasi logika.
@@ -823,7 +827,7 @@ export class CartAuthority {
         const client = tx ?? prisma;
         const product = await client.product.findUnique({
             where: { id: productId },
-            select: { id: true, price: true, stock: true, isActive: true, deletedAt: true, storeId: true },
+            select: { id: true, price: true, stock: true, isActive: true, deletedAt: true, storeId: true, hasVariants: true },
         });
         if (!product || product.storeId === undefined) {
             const err = new Error('Product not found or not accessible');
@@ -836,6 +840,11 @@ export class CartAuthority {
             err.code = 'PRODUCT_NOT_FOUND';
             err.name = 'CartInvariantError';
             throw err;
+        }
+        // PV-P2: single-authority guard — produk dengan varian WAJIB pilih variant.
+        // Hasil: WA path (executeWaCartMutation) TIDAK BISA bypass validasi ini.
+        if (product.hasVariants && !variantId) {
+            throw new CartInvariantError(`Product ${productId} requires a variantId — hasVariants=true but variantId is missing`, ErrorCodes.VARIANT_REQUIRED);
         }
         if (variantId) {
             const variant = await client.productVariant.findUnique({ where: { id: variantId } });

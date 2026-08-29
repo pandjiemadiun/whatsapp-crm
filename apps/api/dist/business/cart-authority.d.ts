@@ -185,14 +185,17 @@ export declare class CartAuthority {
      */
     private resolveProductById;
     /**
-     * PV-P1 — SATU helper terpusat untuk resolve price + stock dari cart line.
+     * PV-P1/PV-P2 — SATU helper terpusat untuk resolve price + stock dari cart line.
      *
      * Aturan:
      * - variantId != null  → BACA DARI ProductVariant (price + stock). Product.price/
      *   Product.stock TIDAK PERNAH dipakai untuk baris ini. Variant divalidasi
      *   milik productId yang benar & aktif; kalau tidak valid → throw (sama perilaku
      *   product tidak ditemukan).
-     * - variantId == null  → BACA DARI Product seperti sebelum task ini (TIDAK BERUBAH).
+     * - variantId == null  → BACA DARI Product seperti sebelum task ini.
+     *   PV-P2: kalau product.hasVariants === true → throw VARIANT_REQUIRED.
+     *   Single authority untuk guard ini ada di sini (sesuai kontrak §2.3/§6A.1).
+     *   Handler-layer guard di action-registry.ts tetap ada sebagai defense-in-depth.
      *
      * Semua titik yang butuh price/stock (addLine, executeOps, checkout) WAJIB pakai
      * helper ini — jangan duplikasi logika.
