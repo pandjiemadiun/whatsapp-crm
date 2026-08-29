@@ -219,3 +219,8 @@
 
 ### IX-C. VERIFIED — no internal caller for engine.ts routes
 - Exhaustive grep `engine/metrics`, `engine/`, `/api/admin/engine` across `src/` dan `apps/dashboard/` mengembalikan **0 result**. Tidak ada cron, healthcheck, atau service-to-service call yang menggunakan route ini. Aman untuk menambahkan auth tanpa breaking internal integration.
+
+### IX-D. OPEN (non-blocking, refactor kapan saja) — CARTAUTHORITY-VARIANT-GUARD-DUPLICATION
+- **Item [CARTAUTHORITY-VARIANT-GUARD-DUPLICATION]:** Guard `hasVariants && !variantId` ada di 2 tempat: (1) `cart-authority.ts` `resolvePriceAndStock` (single domain authority, commit `0425f8d`) dan (2) `action-registry.ts` `handleAddToCart` (~line 712, handler-layer defense-in-depth). Kedua guard KONSISTEN — sama-sama throw `ErrorCodes.VARIANT_REQUIRED` dengan `name: 'CartInvariantError'`. Tidak ada kontradiksi. Belum di-DRY jadi 1 helper function (`assertVariantSelected(product, variantId)` dipanggil dari 2 tempat).
+- **Severity:** Low (non-blocking — kedua guard sudah konsisten, hanya duplikasi logic).
+- **Status:** OPEN — refactor kapan saja kalau ada siklus maintenance CartAuthority. Tidak blocking PV-P2c atau task lain.
