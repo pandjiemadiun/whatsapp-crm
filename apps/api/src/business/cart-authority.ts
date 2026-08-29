@@ -435,65 +435,119 @@ export class CartAuthority {
    * The draft Order becomes an immutable snapshot (post-checkout states
    * managed by G2-B.6 state machine).
    *
-   * Stock invariant:
-   *   Cart is NOT a stock reservation — it is a soft-check workspace.
-   *   The FINAL stock invariant is enforced HERE at the cart→order boundary
-   *   (cart→order transition). If any line item exceeds available stock
-   *   at checkout time, throw CartInvariantError(InsufficientStock).
+   * Stock invariant (PV-P1-08):
+   *   The cart→order boundary is the SINGLE atomic stock-deducting point.
+   *   The entire checkout — stock validation, stock DECREMENT, autoCancelAt
+   *   stamping, state-machine transition, and cart-scratchpad clear — runs
+   *   inside ONE prisma.$transaction: any failure (incl. a lost stock race)
+   *   rolls EVERYTHING back so stock is never decremented for a failed order.
    *
-   *   Cart-level stock checks (addLine/executeOps) are best-effort for UX
-   *   feedback only. Two concurrent cart adds MAY both pass the soft check
-   *   but only the first checkout will succeed if stock is constrained.
+   *   Cart-level stock checks (addLine/executeOps) remain best-effort for UX.
+   *   Two concurrent checkouts for the last unit cannot both succeed: the
+   *   decrement uses an atomic compare-and-swap (updateMany WHERE stock >= qty);
+   *   the loser's updateMany returns count===0 → CartInvariantError(INSUFFICIENT_STOCK)
+   *   → transaction rollback. This replaces the old "best-effort, not locked"
+   *   comment — stock is now truly reserved at checkout.
    *
-   *   Full stock reservation (lock rows) is NOT implemented — would require
-   *   G2-C+ reservation architecture. See ledger G2-C-L-016.
+   *   Stock is restored on cancellation (see OrderService.cancelOrder + the
+   *   AutoCancel cron) by reversing the same per-item decrement.
    */
   async checkout(conversationId: string, storeId: string): Promise<string> {
-    const order = await prisma.order.findFirst({
-      where: {
-        conversationId,
-        orderStatus: 'draft',
-        deletedAt: null,
-        storeId,
-      },
-      include: { orderItems: { where: { productId: { not: null } } } },
+    const orderId = await prisma.$transaction(async (tx) => {
+      const order = await tx.order.findFirst({
+        where: {
+          conversationId,
+          orderStatus: 'draft',
+          deletedAt: null,
+          storeId,
+        },
+        include: { orderItems: { where: { productId: { not: null } } } },
+      });
+
+      if (!order) {
+        throw new CartInvariantError('No draft order to checkout', 'CART_NOT_FOUND');
+      }
+
+      // 1) Best-effort stock validation (read-only). Provides a clean UX error
+      //    BEFORE attempting the atomic decrement. The authoritative gate is
+      //    the decrement below (updateMany + gte), which also closes the race
+      //    window between this read and the write.
+      for (const item of order.orderItems as any[]) {
+        if (!item.productId) continue; // skip items with no product (product was deleted)
+        const product = await productService.getProductById(item.productId);
+        if (!product.isActive || product.deletedAt) {
+          throw new CartInvariantError(
+            `Product "${product.name}" is no longer available`,
+            'PRODUCT_INACTIVE',
+          );
+        }
+        // PV-P1: stock source depends on whether the line carries a variant.
+        const { stock } = await this.resolvePriceAndStock(item.productId, item.variantId ?? null, tx);
+        if (stock !== null && stock < item.quantity) {
+          throw new CartInvariantError(
+            `Insufficient stock for "${product.name}": ${stock} available, ${item.quantity} in cart`,
+            'INSUFFICIENT_STOCK',
+          );
+        }
+      }
+
+      // 2) Atomic stock decrement — compare-and-swap at the DB level
+      //    (updateMany WHERE stock >= quantity). Variant-aware: variant lines
+      //    decrement ProductVariant.stock; plain-product lines decrement
+      //    Product.stock (stock===null → unlimited → skipped, never decrement).
+      //    If a concurrent checkout already consumed the stock, count===0 →
+      //    hard failure → transaction rollback (no partial reservation).
+      for (const item of order.orderItems as any[]) {
+        if (!item.productId) continue;
+        if (item.variantId) {
+          const result = await tx.productVariant.updateMany({
+            where: { id: item.variantId, stock: { gte: item.quantity } },
+            data: { stock: { decrement: item.quantity } },
+          });
+          if (result.count === 0) {
+            throw new CartInvariantError(
+              `Insufficient stock for variant ${item.variantId} of "${item.productName}" (race lost)`,
+              'INSUFFICIENT_STOCK',
+            );
+          }
+        } else {
+          // No variant: read stock in-tx to decide skip-if-unlimited, then CAS.
+          const { stock } = await this.resolvePriceAndStock(item.productId, item.variantId ?? null, tx);
+          if (stock === null) continue; // unlimited stock — never decremented, skip
+          const result = await tx.product.updateMany({
+            where: { id: item.productId, stock: { gte: item.quantity } },
+            data: { stock: { decrement: item.quantity } },
+          });
+          if (result.count === 0) {
+            throw new CartInvariantError(
+              `Insufficient stock for "${item.productName}" (race lost)`,
+              'INSUFFICIENT_STOCK',
+            );
+          }
+        }
+      }
+
+      // 3) Stamp auto-cancel expiry (configurable ORDER_AUTO_CANCEL_HOURS, default 24h).
+      //    Paired with the stock reservation so a stuck order releases stock automatically.
+      const autoCancelHours = Number(process.env.ORDER_AUTO_CANCEL_HOURS ?? '24');
+      await tx.order.update({
+        where: { id: order.id },
+        data: { autoCancelAt: new Date(Date.now() + autoCancelHours * 3_600_000) },
+      });
+
+      // 4) State machine transition (G2-B.6) — atomic with the decrement above.
+      //    transitionOrder validates ALLOWED_TRANSITIONS (draft → waiting_address ✓)
+      //    and sets confirmedAt on confirmed/paid transitions (N/A here).
+      await transitionOrder(order.id, 'waiting_address', { tx: tx as any, actor: 'system' });
+
+      // 5) Clear confirmedItems JSON — cart state is now committed to the Order
+      //    (OrderItem rows are immutable snapshot; confirmedItems was scratchpad)
+      await this.syncConfirmedItemsJson(tx as any, conversationId, []);
+
+      return order.id;
     });
 
-    if (!order) {
-      throw new CartInvariantError('No draft order to checkout', 'CART_NOT_FOUND');
-    }
-
-    // FINAL stock invariant at cart→order boundary
-    // Validates every line item's quantity against current DB stock (variant-aware).
-    for (const item of order.orderItems as any[]) {
-      if (!item.productId) continue; // skip items with no product (product was deleted)
-      const product = await productService.getProductById(item.productId);
-      if (!product.isActive || product.deletedAt) {
-        throw new CartInvariantError(
-          `Product "${product.name}" is no longer available`,
-          'PRODUCT_INACTIVE',
-        );
-      }
-      // PV-P1: stock source depends on whether the line carries a variant.
-      const { stock } = await this.resolvePriceAndStock(item.productId, item.variantId ?? null, undefined);
-      if (stock !== null && stock < item.quantity) {
-        throw new CartInvariantError(
-          `Insufficient stock for "${product.name}": ${stock} available, ${item.quantity} in cart`,
-          'INSUFFICIENT_STOCK',
-        );
-      }
-    }
-
-    // Delegate to state machine (G2-B.6)
-    // transitionOrder validates ALLOWED_TRANSITIONS (draft → waiting_address ✓)
-    // and sets confirmedAt on confirmed/paid transitions (not applicable here)
-    await transitionOrder(order.id, 'waiting_address', { actor: 'system' });
-
-    // Clear confirmedItems JSON — cart state is now committed to the Order
-    // (OrderItem rows are immutable snapshot; confirmedItems was cart scratchpad)
-    await this.syncConfirmedItemsJson(prisma, conversationId, []);
-
-    return order.id;
+    return orderId;
   }
 
   // ================================================================

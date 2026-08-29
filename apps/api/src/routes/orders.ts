@@ -6,6 +6,7 @@ import { adapters } from '../adapters/container.js';
 import { prisma } from '../infrastructure/prisma.js';
 import { orderMutationLimiter } from '../middleware/rate-limiters.js';
 import { paymentService } from '../business/payment.service.js';
+import { shouldRestoreStock, restoreStockForOrderItems } from '../business/order.service.js';
 
 const router = Router();
 
@@ -124,6 +125,7 @@ router.put('/:id/status', orderMutationLimiter, async (req: AuthenticatedRequest
 
     const order = await prisma.order.findFirst({
       where: { id, storeId, deletedAt: null },
+      include: { orderItems: { where: { productId: { not: null } } } },
     });
 
     if (!order) {
@@ -139,7 +141,27 @@ router.put('/:id/status', orderMutationLimiter, async (req: AuthenticatedRequest
     }
 
     // Delegate to transitionOrder for authoritative state machine transition
-    // which also manages confirmedAt invariant
+    // which also manages confirmedAt invariant.
+    // PV-P1-08: a manual admin cancel (→ 'cancelled') reverses the stock that
+    // checkout atomically decremented, but ONLY for pre-shipment orders
+    // (shouldRestoreStock + the state machine block shipped/paid-refund and
+    // double-cancel). Restore runs in the SAME tx as the transition.
+    if (orderStatus === 'cancelled' && shouldRestoreStock(order.orderStatus)) {
+      const updated = await prisma.$transaction(async (tx) => {
+        await restoreStockForOrderItems((order.orderItems ?? []) as any[], tx);
+        return await transitionOrder(id, orderStatus, { actor: 'system', tx: tx as any });
+      });
+      adapters.logger.info('Order cancelled (admin); stock restored', {
+        orderId: id,
+        from: order.orderStatus,
+        to: orderStatus,
+        storeId,
+      });
+      res.json({ success: true, data: updated });
+      return;
+    }
+
+    // Non-cancel status: plain transition (no stock movement).
     const updated = await transitionOrder(id, orderStatus, { actor: 'system' });
     adapters.logger.info('Order status updated via transitionOrder', {
       orderId: id,
