@@ -593,6 +593,106 @@ test('executeOps: repeated add increments qty', async () => {
   assert.equal(result[0].qty, 3);
 });
 
+// ── PV-P2c-LLM-B: resolveVariantByLabel — unit direct (bukan E2E golden) ──────
+// Berbeda dengan golden E2E, block ini memanggil resolveVariantByLabel secara
+// langsung (private method via `as any`) untuk menguji kontrak matching
+// DB-driven-nya (I13) tanpa melewati jalur order/claim. Fixture: produk
+// 'sepatu' (hasVariants=true) 3 varian + produk 'sepatu-scope' (P2) untuk
+// cross-product scope check. Seeding/semuanya di `before`, dibersihkan di
+// `after` supaya tidak orphan (productVariant FK ke product).
+describe('PV-P2c-LLM-B: resolveVariantByLabel (unit direct)', () => {
+  const P1 = `${TEST_PREFIX}-sepatu`;
+  const P2 = `${TEST_PREFIX}-sepatu-scope`;
+  const variants = [
+    { id: `${P1}-var-merah-l`, productId: P1, attributes: { Warna: 'Merah', Size: 'L' }, sku: 'SEP-MERAH-L', price: 200000 },
+    { id: `${P1}-var-biru-l`, productId: P1, attributes: { Warna: 'Biru', Size: 'L' }, sku: 'SEP-BIRU-L', price: 210000 },
+    { id: `${P1}-var-hijau-m`, productId: P1, attributes: { Warna: 'Hijau', Size: 'M' }, sku: 'SEP-HIJAU-M', price: 190000 },
+    { id: `${P2}-var-other-merah`, productId: P2, attributes: { color: 'Merah' }, sku: 'SEP2-MERAH-M', price: 180000 },
+  ];
+
+  before(async () => {
+    for (const p of [P1, P2]) {
+      await prisma.product.upsert({
+        where: { id: p },
+        update: {
+          storeId,
+          name: p === P1 ? 'Sepatu' : 'Sepatu Scope',
+          price: 150000,
+          currency: 'IDR',
+          isActive: true,
+          deletedAt: null,
+          hasVariants: true,
+        },
+        create: {
+          id: p,
+          storeId,
+          name: p === P1 ? 'Sepatu' : 'Sepatu Scope',
+          price: 150000,
+          currency: 'IDR',
+          isActive: true,
+          hasVariants: true,
+        },
+      });
+    }
+    for (const v of variants) {
+      await prisma.productVariant.upsert({
+        where: { id: v.id },
+        update: {
+          productId: v.productId,
+          storeId,
+          sku: v.sku,
+          attributes: v.attributes as any,
+          price: v.price,
+          stock: 10,
+          isActive: true,
+        },
+        create: {
+          id: v.id,
+          productId: v.productId,
+          storeId,
+          sku: v.sku,
+          attributes: v.attributes as any,
+          price: v.price,
+          stock: 10,
+          isActive: true,
+        },
+      });
+    }
+  });
+
+  after(async () => {
+    await prisma.productVariant.deleteMany({ where: { productId: { in: [P1, P2] } } }).catch(() => {});
+    await prisma.product.deleteMany({ where: { id: { in: [P1, P2] } } }).catch(() => {});
+  });
+
+  const rvl = (productId: string, text: string): Promise<string | null> =>
+    (cartAuthority as any).resolveVariantByLabel(null, storeId, productId, text);
+
+  test('a. match via sku (bukan attributes) — variantText = sku persis → resolve ke variant yang benar', async () => {
+    const id = await rvl(P1, 'SEP-MERAH-L');
+    assert.equal(id, `${P1}-var-merah-l`, 'sku persis → resolve variant via sku (bukan parent/id produk)');
+  });
+
+  test('b. attribute KEY dengan case berbeda ("Warna" vs "warna"/"WARNA") — lowercase-normalize bekerja', async () => {
+    const lower = await rvl(P1, 'warna merah');
+    const upper = await rvl(P1, 'WARNA MERAH');
+    assert.equal(lower, `${P1}-var-merah-l`, 'query lowercase + key "Warna" lowercased → Merah-L (unik)');
+    assert.equal(upper, `${P1}-var-merah-l`, 'query UPPERCASE + key/value lowercased → Merah-L (unik)');
+  });
+
+  test('c. variantText kosong string "" → return null (bukan match-all semua variant)', async () => {
+    const id = await rvl(P1, '');
+    assert.equal(id, null, 'empty string harus return null, bukan match semua variant');
+  });
+
+  test('d. variant milik productId LAIN (P2) tidak boleh ke-match ketika resolve untuk P1 (tenant/product scope)', async () => {
+    const leaked = await rvl(P1, 'SEP2-MERAH-M');
+    const owned = await rvl(P2, 'SEP2-MERAH-M');
+    assert.equal(leaked, null, 'sku milik P2 TIDAK boleh match ketika query scope P1 (no cross-product leak)');
+    assert.equal(owned, `${P2}-var-other-merah`, 'sku milik P2 resolve bila query scope P2 (scope tepat)');
+  });
+});
+
 // ── Import CartOp type for executeOps tests ────────────────────────────────
 import type { CartOp } from '../domain/types.js';
 
