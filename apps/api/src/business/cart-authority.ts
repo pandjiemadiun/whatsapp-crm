@@ -570,7 +570,16 @@ export class CartAuthority {
 
           const { productId, productName } = result;
           const qty = op.qty && op.qty >= 1 ? Math.floor(op.qty) : 1;
-          const variantId = (op as any).variantId ?? null;
+          // PV-P2c-LLM-B B1.3: resolve free-text variant label → variantId
+          // (DB-driven, I13). Explicit variantId (structured/PWA path, already
+          // tenant-validated) ALWAYS takes precedence; the `variant` text is only
+          // consulted when variantId is absent. A null result (no/ambiguous
+          // match) is NOT thrown here — resolvePriceAndStock enforces
+          // VARIANT_REQUIRED downstream with a single, consistent error surface.
+          let variantId = (op as any).variantId ?? null;
+          if (!variantId && (op as any).variant) {
+            variantId = await this.resolveVariantByLabel(tx, storeId, productId, (op as any).variant);
+          }
 
           // PV-P1: authoritative price/stock (variant or parent product).
           // Use the persisted price, NOT `result.unitPrice` (which is the parent
@@ -1099,6 +1108,88 @@ export class CartAuthority {
 
      return { price: product.price, stock: product.stock };
    }
+
+  /**
+   * PV-P2c-LLM-B Bagian 1.2 — Resolve a free-text variant label (warna/ukuran,
+   * mis. "merah", "merah size L") ke variantId — DETERMINISTIK dari data DB
+   * (ProductVariant.attributes + sku), bukan LLM/embedding (I13).
+   *
+   * Strategi (mengikuti pola resolveProductByName: exact → substring):
+   *   1. Exact     : variantText sama persis (case-insensitive) dengan salah
+   *                  satu attribute VALUE atau sku.
+   *   2. Substring : semua token variantText ada di "label token" variant
+   *                  (gabungan attribute key + value + sku, lowercased,
+   *                  dipecah non-word boundary).
+   * - 1 kandidat (exact atau substring) → kembalikan variantId.
+   * - >1 kandidat (ambiguous) → kembalikan null (JANGAN throw).
+   * - 0 kandidat (no match) → kembalikan null.
+   *
+   * null (tidak ter-resolve) disengaja dibiarkan: resolvePriceAndStock — yang
+   * sudah ada & battle-tested — akan melempar CartInvariantError VARIANT_REQUIRED
+   * untuk product.hasVariants. Dengan demikian ada SATU error surface yang
+   * konsisten (tidak 2 pesan error berbeda untuk kasus yang sama).
+   */
+  private async resolveVariantByLabel(
+    tx: any,
+    storeId: string,
+    productId: string,
+    variantText: string,
+  ): Promise<string | null> {
+    const client = tx ?? prisma;
+    const q = (variantText || '').toLowerCase().trim();
+    if (!q) return null;
+
+    const variants = await client.productVariant.findMany({
+      where: { productId, storeId, isActive: true },
+      select: { id: true, sku: true, attributes: true },
+    });
+    if (variants.length === 0) return null;
+
+    const qTokens = q.split(/\W+/).filter(Boolean);
+    const exact: string[] = [];
+    const substring: string[] = [];
+
+    for (const v of variants as Array<{
+      id: string;
+      sku: string | null;
+      attributes: unknown;
+    }>) {
+      const attr = v.attributes as Record<string, unknown> | null;
+      const values: string[] = [];
+      const tokens: string[] = [];
+      if (attr && typeof attr === 'object' && !Array.isArray(attr)) {
+        for (const [key, val] of Object.entries(attr)) {
+          if (val === null || val === undefined) continue;
+          const vstr = String(val).toLowerCase();
+          values.push(vstr);
+          for (const t of vstr.split(/\W+/).filter(Boolean)) tokens.push(t);
+          // termasuk key sebagai token supaya "size L" bisa match key "size"
+          tokens.push(key.toLowerCase());
+        }
+      }
+      if (v.sku) {
+        const s = v.sku.toLowerCase();
+        values.push(s);
+        for (const t of s.split(/\W+/).filter(Boolean)) tokens.push(t);
+      }
+      if (values.length === 0 && tokens.length === 0) continue;
+
+      // 1. Exact: variantText sama persis dengan attribute value / sku
+      if (values.some((vv) => vv === q)) {
+        exact.push(v.id);
+        continue;
+      }
+      // 2. Substring: semua token variantText ada di label token variant
+      if (qTokens.length > 0 && qTokens.every((t) => tokens.includes(t))) {
+        substring.push(v.id);
+      }
+    }
+
+    if (exact.length === 1) return exact[0];
+    if (exact.length > 1) return null; // ambiguous pada level exact
+    if (substring.length === 1) return substring[0];
+    return null; // 0 (no match) atau >1 (ambiguous) pada level substring
+  }
 
   private async resolveProductByName(
     tx: any,

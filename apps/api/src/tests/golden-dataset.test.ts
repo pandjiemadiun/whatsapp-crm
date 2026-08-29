@@ -16,19 +16,22 @@
 
 import { test, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { prisma } from '../infrastructure/prisma.js';
 import { conversationService } from '../business/conversation.service.js';
 import { orderService } from '../business/order.service.js';
 import { conversationContextService } from '../business/conversation-context.service.js';
 import { canonicalConversationStateService } from '../business/canonical-context.service.js';
-import { cartAuthority } from '../business/cart-authority.js';
+import { cartAuthority, CartInvariantError } from '../business/cart-authority.js';
+import { executeWaCartMutation } from '../business/action-registry.js';
+import { validateCartOpsAgainstDb } from '../services/chat/interpreter.js';
 import { llmGateway } from '../adapters/ai/llm-gateway.js';
 import { groqAdapter } from '../adapters/ai/groq.adapter.js';
 import { normalize } from '../services/chat/normalizer.js';
 import { composeReply } from '../services/chat/composer-v2.js';
 import { ResponseSource } from '../domain/types.js';
 import type { AIResponse, AIGenerateOptions } from '../adapters/ai/types.js';
-import type { InterpreterResult, ResponseResult, ConversationContext } from '../domain/types.js';
+import type { CartOp, InterpreterResult, ResponseResult, ConversationContext } from '../domain/types.js';
 import { setStoreEngine } from '../services/chat/engine-config.js';
 import type { InterpreterResultV2 } from '../services/chat/types-v2.js';
 import { fallbackService } from '../business/fallback.service.js';
@@ -1575,3 +1578,286 @@ test('PV-P2c Gate #3: disambiguasi campuran varian/non-varian → "(ada varian)"
   }, true); // Baju Merah hasVariants=true; Baju Putih default false
 });
 
+// ════════════════════════════════════════════════════════════════════════════
+// PV-P2c-LLM-B: variant resolution via free-text label (Opsi a — entity
+// metadata.variant). SEMUA test di bawah memakai STORE_ID = store-golden-test
+// (produk dasar beras/woltel/brambang + fallbackService/LLM mock yang sudah ada).
+// ════════════════════════════════════════════════════════════════════════════
+
+const SEPATU_ID = `${STORE_ID}-sepatu`;
+const SEPATU_VARIANTS = [
+  { id: `${SEPATU_ID}-var-merah-l`, color: 'Merah', size: 'L', price: 200000, stock: 10 },
+  { id: `${SEPATU_ID}-var-biru-l`, color: 'Biru', size: 'L', price: 210000, stock: 10 },
+  { id: `${SEPATU_ID}-var-hijau-m`, color: 'Hijau', size: 'M', price: 190000, stock: 10 },
+] as const;
+
+// NOTE: tidak memakai withProduct() — withProduct menghapus product di finally-nya,
+// sehingga variant (FK ke product) terjebak FK violation. upsert di sini bersifat
+// idempotent; cleanup di after() global (cleanupStoreData) yang bersihkan semua
+// product per toko.
+async function seedSepatu(): Promise<void> {
+  await prisma.product.upsert({
+    where: { id: SEPATU_ID },
+    update: {
+      storeId: STORE_ID,
+      name: 'sepatu',
+      price: 150000,
+      stock: 50,
+      isActive: true,
+      deletedAt: null,
+      currency: 'IDR',
+      hasVariants: true,
+    },
+    create: {
+      id: SEPATU_ID,
+      storeId: STORE_ID,
+      name: 'sepatu',
+      price: 150000,
+      stock: 50,
+      isActive: true,
+      currency: 'IDR',
+      hasVariants: true,
+    },
+  });
+  for (const v of SEPATU_VARIANTS) {
+    await prisma.productVariant.upsert({
+      where: { id: v.id },
+      update: {
+        productId: SEPATU_ID,
+        storeId: STORE_ID,
+        sku: `SEP-${v.color}-${v.size}`,
+        attributes: { color: v.color, size: v.size },
+        price: v.price,
+        stock: v.stock,
+        isActive: true,
+      },
+      create: {
+        id: v.id,
+        productId: SEPATU_ID,
+        storeId: STORE_ID,
+        sku: `SEP-${v.color}-${v.size}`,
+        attributes: { color: v.color, size: v.size },
+        price: v.price,
+        stock: v.stock,
+        isActive: true,
+      },
+    });
+  }
+}
+
+async function draftOrderItems(convId: string): Promise<any[]> {
+  const order = await prisma.order.findFirst({
+    where: { conversationId: convId, orderStatus: 'draft', deletedAt: null },
+  });
+  if (!order) return [];
+  return prisma.orderItem.findMany({ where: { orderId: order.id } });
+}
+
+function sepatuVariantId(color: string): string {
+  return SEPATU_VARIANTS.find((v) => v.color === color)!.id;
+}
+
+// ── B1.2: resolveVariantByLabel (exact / partial / no-match / ambiguous) ──
+// Diuji lewat executeOps(langsung) — op.variant (teks) → resolveVariantByLabel
+// → variantId → resolvePriceAndStock → OrderItem. (B1.3 + B1.2 teruji bareng.)
+
+test('PV-P2c-LLM-B 1: resolveVariantByLabel exact "merah" → variantId Merah-L + harga variant (bukan parent)', async () => {
+  await seedSepatu();
+  const convId = `conv-p2cllmb-T1-${randomUUID().slice(0, 8)}`;
+  await createConv(convId, 'cust-p2cllmb');
+  const items = await cartAuthority.executeOps(
+    [{ type: 'add', product: 'sepatu', qty: 1, price: 150000, variant: 'merah' } as CartOp],
+    STORE_ID,
+    'cust-p2cllmb',
+    convId,
+  );
+  assert.equal(items.length, 1);
+  assert.equal(items[0].variantId, sepatuVariantId('Merah'), 'variantId harus resolve ke Merah-L');
+  assert.equal(items[0].price, 200000, 'harga dari DB variant (bukan parent 150000)');
+});
+
+test('PV-P2c-LLM-B 2: resolveVariantByLabel partial "merah size" → variantId Merah-L (single, unikan)', async () => {
+  await seedSepatu();
+  const convId = `conv-p2cllmb-T2-${randomUUID().slice(0, 8)}`;
+  await createConv(convId, 'cust-p2cllmb');
+  const items = await cartAuthority.executeOps(
+    [{ type: 'add', product: 'sepatu', qty: 1, price: 150000, variant: 'merah size' } as CartOp],
+    STORE_ID,
+    'cust-p2cllmb',
+    convId,
+  );
+  assert.equal(items.length, 1);
+  assert.equal(items[0].variantId, sepatuVariantId('Merah'), 'partial unik → resolve Merah-L');
+  assert.equal(items[0].price, 200000);
+});
+
+test('PV-P2c-LLM-B 3: resolveVariantByLabel no-match "buleh" → VARIANT_REQUIRED, tidak ada OrderItem', async () => {
+  await seedSepatu();
+  const convId = `conv-p2cllmb-T3-${randomUUID().slice(0, 8)}`;
+  await createConv(convId, 'cust-p2cllmb');
+  await assert.rejects(
+    () =>
+      cartAuthority.executeOps(
+        [{ type: 'add', product: 'sepatu', qty: 1, price: 150000, variant: 'buleh' } as CartOp],
+        STORE_ID,
+        'cust-p2cllmb',
+        convId,
+      ),
+    (err: unknown) => err instanceof CartInvariantError && err.code === 'VARIANT_REQUIRED',
+  );
+  const items = await draftOrderItems(convId);
+  assert.equal(items.filter((i: any) => i.productName === 'sepatu').length, 0, 'no match → tidak boleh ada OrderItem');
+});
+
+test('PV-P2c-LLM-B 4: resolveVariantByLabel ambiguous "size l" (2 size-L, warna beda) → null → VARIANT_REQUIRED, tidak ada OrderItem', async () => {
+  await seedSepatu();
+  const convId = `conv-p2cllmb-T4-${randomUUID().slice(0, 8)}`;
+  await createConv(convId, 'cust-p2cllmb');
+  await assert.rejects(
+    () =>
+      cartAuthority.executeOps(
+        [{ type: 'add', product: 'sepatu', qty: 1, price: 150000, variant: 'size l' } as CartOp],
+        STORE_ID,
+        'cust-p2cllmb',
+        convId,
+      ),
+    (err: unknown) => err instanceof CartInvariantError && err.code === 'VARIANT_REQUIRED',
+  );
+  const items = await draftOrderItems(convId);
+  assert.equal(items.filter((i: any) => i.productName === 'sepatu').length, 0, 'ambiguous → tidak boleh pilih sembarangan');
+});
+
+// ── 7b: E2E v2 — entity.metadata.variant → :314 CartOp.variant → executeWaCartMutation → OrderItem ──
+
+test('PV-P2c-LLM-B 7b: v2 E2E — entity.metadata.variant → :314 → executeWaCartMutation → OrderItem w/ variantId + harga variant DB', async () => {
+  await seedSepatu();
+  const convId = 'conv-p2cllmb-7b';
+  await createConv(convId, 'cust-7b');
+
+  // Mock LLM (I8: 0-api) mengembalikan acts[] dengan entities[].metadata.variant,
+  // SAMA PERSIS seperti draft_cart_ops[].variant (konsistensi FS#9-11).
+  cannedContent = cannedV2({
+    acts: [
+      {
+        act_id: 'a1',
+        intent: 'buy',
+        entities: [
+          { type: 'product', value: 'sepatu', confidence: 0.95, metadata: { variant: 'merah size L' } },
+        ],
+        qty: 1,
+        qty_source: 'explicit',
+        confidence: 0.95,
+        supersedes: null,
+      },
+    ],
+    draft_cart_ops: [
+      { action: 'add', product: 'sepatu', qty: 1, qty_source: 'explicit', status: 'confirmed', variant: 'merah size L' },
+    ],
+    reply_draft: 'Sepatu merah size L ditambahkan ke keranjang.',
+  });
+
+  // Pesan tidak mengandung nama produk → tryProduct miss → lanjut ke LLM (I8/I13).
+  const { result, llmCalls: calls } = await processMsg(convId, 'cust-7b', 'harganya 200rb ya?');
+  assert.ok(result, 'must return a response');
+  assert.equal(calls, 1, 'interpreter must call LLM (mock) for buy intent');
+
+  const items = await draftOrderItems(convId);
+  const sepatu = items.find((i: any) => i.productName === 'sepatu');
+  assert.ok(sepatu, 'OrderItem sepatu harus terbuat lewat jalur v2');
+  assert.equal(sepatu.variantId, sepatuVariantId('Merah'), 'variantId resolved DB-driven (I13)');
+  assert.equal(Number(sepatu.unitPrice), 200000, 'harga dari DB variant (bukan parent 150000)');
+});
+
+// ── 7c: E2E — executeWaCartMutation 'error' (ambiguous), tidak ada OrderItem ──
+
+test('PV-P2c-LLM-B 7c: executeWaCartMutation ambiguous "size l" → return "error" (VARIANT_REQUIRED), tidak ada OrderItem', async () => {
+  await seedSepatu();
+  const convId = `conv-p2cllmb-7c-${randomUUID().slice(0, 8)}`;
+  const customerId = 'cust-7c';
+  await createConv(convId, customerId);
+
+  // messageId unik (plain) → actionId = wa:${convId}:${msgId} → fresh WA_CART_MUTATION claim
+  const msgId = `MSG-VARIANT-FAILED-${randomUUID()}`;
+  const status = await executeWaCartMutation(
+    [{ type: 'add', product: 'sepatu', qty: 1, price: 150000, variant: 'size l' } as CartOp],
+    STORE_ID,
+    customerId,
+    convId,
+    msgId,
+  );
+  assert.equal(status, 'error', 'ambiguous variant → executeWaCartMutation kembalikan "error"');
+
+  // §6A.9: claim row harus FAILED + error code VARIANT_REQUIRED tersimpan
+  // (bukan melempar error baru — error surface tunggal resolvePriceAndStock).
+  const claim = await prisma.actionIdempotency.findFirst({
+    where: { storeId: STORE_ID, actionType: 'WA_CART_MUTATION', actionId: `wa:${convId}:${msgId}` },
+  });
+  assert.ok(claim, 'ActionIdempotency claim row must exist for WA path');
+  assert.equal(claim!.status, 'FAILED', 'claim status must be FAILED (per §6A.9)');
+  const errCode = typeof claim!.error === 'string' ? JSON.parse(claim!.error).code : (claim!.error as any)?.code;
+  assert.equal(errCode, 'VARIANT_REQUIRED', 'FAILED claim must persist VARIANT_REQUIRED error code');
+
+  const items = await draftOrderItems(convId);
+  assert.equal(items.filter((i: any) => i.productName === 'sepatu').length, 0, 'ambiguous → tidak ada OrderItem');
+});
+
+// ── 7d: v1 — validateCartOpsAgainstDb (spread ...op) bawa variant → executeWaCartMutation → OrderItem ──
+
+test('PV-P2c-LLM-B 7d: v1 cart_ops — validateCartOpsAgainstDb spread bawa variant → executeWaCartMutation → OrderItem variantId + harga variant', async () => {
+  await seedSepatu();
+  const convId = `conv-p2cllmb-7d-${randomUUID().slice(0, 8)}`;
+  const customerId = 'cust-7d';
+  await createConv(convId, customerId);
+
+  // v1 interpreter cart_ops (dari LLM) — perhatikan field `variant` teks.
+  const cartOps: CartOp[] = [
+    { type: 'add', product: 'sepatu', qty: 1, price: 150000, variant: 'merah size L' },
+  ];
+  // validateCartOpsAgainstDb :657-186 — spread ...op → valid mempertahankan `variant` (BAGIAN 2 verifikasi).
+  const { valid } = await validateCartOpsAgainstDb(cartOps, STORE_ID);
+  assert.equal(valid.length, 1, 'produk ada di DB → valid');
+  assert.equal(valid[0].variant, 'merah size L', 'v1 spread ...op HARUS bawa field variant');
+
+  // executeWaCartMutation (non-WA, tidak ada messageId → executeOps langsung)
+  await executeWaCartMutation(valid, STORE_ID, customerId, convId);
+  const items = await draftOrderItems(convId);
+  const sepatu = items.find((i: any) => i.productName === 'sepatu');
+  assert.ok(sepatu, 'OrderItem sepatu harus terbuat lewat jalur v1 cart_ops');
+  assert.equal(sepatu.variantId, sepatuVariantId('Merah'), 'variantId resolved DB-driven (I13)');
+  assert.equal(Number(sepatu.unitPrice), 200000, 'harga dari DB variant (bukan parent 150000)');
+});
+
+// ── 7e: Regression — hasVariants=false, variant kosong di semua jalur → IDENTIK (parent price, variantId null) ──
+
+test('PV-P2c-LLM-B 7e: regression hasVariants=false (beras) — entity/metadata.variant kosong → variantId null + harga parent (Gate #1 dijalur cart)', async () => {
+  const convId = 'conv-p2cllmb-7e';
+  await createConv(convId, 'cust-7e');
+
+  // beras = base product, hasVariants=false, price 12000. Entity TANPA metadata.variant
+  // + draft_cart_op TANPA variant → :314 op.variant = null → tidak panggil resolveVariantByLabel.
+  cannedContent = cannedV2({
+    acts: [
+      {
+        act_id: 'a1',
+        intent: 'buy',
+        entities: [{ type: 'product', value: 'beras', confidence: 0.95 }],
+        qty: 1,
+        qty_source: 'explicit',
+        confidence: 0.95,
+        supersedes: null,
+      },
+    ],
+    draft_cart_ops: [{ action: 'add', product: 'beras', qty: 1, qty_source: 'explicit', status: 'confirmed' }],
+    reply_draft: 'Beras ditambahkan ke keranjang.',
+  });
+
+  const { result, llmCalls: calls } = await processMsg(convId, 'cust-7e', 'harganya 50rb ya?');
+  assert.ok(result, 'must return a response');
+  assert.equal(calls, 1, 'interpreter must call LLM (mock)');
+
+  const items = await draftOrderItems(convId);
+  const beras = items.find((i: any) => i.productName === 'beras');
+  assert.ok(beras, 'beras harus di keranjang');
+  assert.equal(beras.variantId, null, 'hasVariants=false → variantId null (IDENTIK sebelum)');
+  assert.equal(Number(beras.unitPrice), 12000, 'harga parent dari DB (IDENTIK Gate #1)');
+});

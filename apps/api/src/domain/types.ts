@@ -311,6 +311,14 @@ export interface CartOp {
    * tanpa varian (atau hasVariants=false).
    */
   variantId?: string | null;
+  /**
+   * PV-P2c-LLM-B: deskripsi teks bebas dari varian (warna/ukuran) yang diseupin
+   * user, mis. "merah size L". HANYA untuk jalur LLM/natural-language —
+   * CartAuthority.resolveVariantByLabel memetakan ini ke variantId (DB-driven,
+   * I13). Jika variantId sudah eksplisit (jalur PWA/structured), field ini
+   * DIHAPUS/DIABAIDKAN (variantId eksplisit selalu menang).
+   */
+  variant?: string | null;
 }
 
 /** Opsi clarification untuk pending state */
