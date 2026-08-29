@@ -224,3 +224,17 @@
 - **Item [CARTAUTHORITY-VARIANT-GUARD-DUPLICATION]:** Guard `hasVariants && !variantId` ada di 2 tempat: (1) `cart-authority.ts` `resolvePriceAndStock` (single domain authority, commit `0425f8d`) dan (2) `action-registry.ts` `handleAddToCart` (~line 712, handler-layer defense-in-depth). Kedua guard KONSISTEN — sama-sama throw `ErrorCodes.VARIANT_REQUIRED` dengan `name: 'CartInvariantError'`. Tidak ada kontradiksi. Belum di-DRY jadi 1 helper function (`assertVariantSelected(product, variantId)` dipanggil dari 2 tempat).
 - **Severity:** Low (non-blocking — kedua guard sudah konsisten, hanya duplikasi logic).
 - **Status:** OPEN — refactor kapan saja kalau ada siklus maintenance CartAuthority. Tidak blocking PV-P2c atau task lain.
+
+## X. PV-P2c full stack — WA variant support RESOLVED (E2E live-proven)
+
+**Gap sebelumnya:** WA chat belum pernah menyentuh varian — produk `hasVariants` dibalas generik/"masukkan ke keranjang", dan LLM tidak pernah resolve teks varian (warna/ukuran) ke `variantId` (I13: LLM tak tahu `variantId`). Ditutup end-to-end per-unit:
+1. **PV-P2c-TEXT** (`71ba429`): `fallback.service.ts` `tryProduct` — produk `hasVariants` pada *inquiry* ("ada sepatu?") diarahkan ke storefront web `PUBLIC_PWA_URL || 'https://qlobot.web.id'` → `/c/<slug>`, **bukan** ajakan "masukkan ke keranjang"; marker disambiguasi "(ada varian)".
+2. **PV-P2c-LLM-A** (`a454ec1`): skema LLM (`DraftCartOp.variant` di `types-v2.ts`, `INTERPRETER_SCHEMA` di `interpreter.ts`, `FEW_SHOTS`[8..10] + rule `n` di `prompts-v2.ts`) — LLM mengeluarkan deskriptif teks varian (mis. "merah size L"), **bukan `variantId`** (I13).
+3. **PV-P2c-LLM-B** (`ba2acf5`): `CartAuthority.resolveVariantByLabel` (DB-driven, scoped per tenant+produk via `product_variants.attributes`+`sku`) + injection di `executeOps` add-path; `conversation.service.ts:314` map `variant: e.metadata?.variant ?? null`; single error surface lewat `resolvePriceAndStock` (`VARIANT_REQUIRED`). Unit `cart-authority.test.ts` (4) + golden T1‑T4/7b‑7e.
+
+**E2E live (curl `POST /api/messages/handle`, api pm2 online, store Canary `store-f7140b5c`, LLM key dari env api):**
+- (a) `"ada sepatu?"` → `source:"product"`, balasan mengandung `https://qlobot.web.id/c/store-f7140b5c` + "(ada varian)", **tidak** mengandung "masukkan ke keranjang".
+- (b) `"saya mau sepatu merah size L"` → `source:"ai"`, balasan `🛒 Ditambahkan ke keranjang: sepatu x1`; draft `OrderItem` conversation `e2e-conv-b` punya `variantId=b619cdf8-e533-41f9-ab6c-69da089175f7` (attrs `{"size":"L","color":"merah"}`) — `resolveVariantByLabel` match teks LLM → variantId.
+- Setup E2E: seed test product `Sepatu` (hasVariants) + variant `merah/size L` pada Canary Store (sebelumnya 0 produk).
+
+**Status:** ✅ RESOLVED — PV-P2c full stack (TEXT+LLM-A+LLM-B) `71ba429`…`a5289ae` (dist rebuild). §IX-D (guard-duplication) tetap OPEN (di luar scope ini).
