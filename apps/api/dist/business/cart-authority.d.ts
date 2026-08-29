@@ -201,6 +201,27 @@ export declare class CartAuthority {
      * helper ini — jangan duplikasi logika.
      */
     private resolvePriceAndStock;
+    /**
+     * PV-P2c-LLM-B Bagian 1.2 — Resolve a free-text variant label (warna/ukuran,
+     * mis. "merah", "merah size L") ke variantId — DETERMINISTIK dari data DB
+     * (ProductVariant.attributes + sku), bukan LLM/embedding (I13).
+     *
+     * Strategi (mengikuti pola resolveProductByName: exact → substring):
+     *   1. Exact     : variantText sama persis (case-insensitive) dengan salah
+     *                  satu attribute VALUE atau sku.
+     *   2. Substring : semua token variantText ada di "label token" variant
+     *                  (gabungan attribute key + value + sku, lowercased,
+     *                  dipecah non-word boundary).
+     * - 1 kandidat (exact atau substring) → kembalikan variantId.
+     * - >1 kandidat (ambiguous) → kembalikan null (JANGAN throw).
+     * - 0 kandidat (no match) → kembalikan null.
+     *
+     * null (tidak ter-resolve) disengaja dibiarkan: resolvePriceAndStock — yang
+     * sudah ada & battle-tested — akan melempar CartInvariantError VARIANT_REQUIRED
+     * untuk product.hasVariants. Dengan demikian ada SATU error surface yang
+     * konsisten (tidak 2 pesan error berbeda untuk kasus yang sama).
+     */
+    private resolveVariantByLabel;
     private resolveProductByName;
     /**
      * Compute total price from OrderItem rows.

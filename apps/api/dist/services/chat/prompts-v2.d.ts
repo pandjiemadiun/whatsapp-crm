@@ -36,7 +36,7 @@ export declare function buildSystemPrompt(catalog: CatalogItem[]): string;
  */
 export declare function buildUserPrompt(message: string, workspace: WorkspaceV2, history: HistoryTurn[]): string;
 /**
- * 8 contoh (user_message + konteks + expected_json) yang memandu interpreter:
+ * 11 contoh (user_message + konteks + expected_json) yang memandu interpreter:
  *   1. multi-act 3 produk — tidak ada product mention yang missing.
  *   2. revisi dalam satu kalimat — act kedua punya supersedes=act_id pertama.
  *   3. topic switch — pending aktif + user tanya di luar scope order.
@@ -45,6 +45,9 @@ export declare function buildUserPrompt(message: string, workspace: WorkspaceV2,
  *   6. multi-add dalam satu kalimat — 3 produk qty 1 eksplisit, confidence tinggi.
  *   7. greeting — acts kosong, reply_draft ramah.
  *   8. cancel — intent cancel + reply_draft konfirmasi pembatalan.
+ *   9. single variant product (warna/size) — deskripsi varian ke draft_cart_ops[].variant.
+ *   10. mix variant + non-variant — variant hanya pada draft_cart_op produk bervarian.
+ *   11. variant product tanpa qty eksplisit (qty default) — varian tetap tercatat.
  */
 export declare const FEW_SHOTS: FewShotV2[];
 //# sourceMappingURL=prompts-v2.d.ts.map

@@ -176,6 +176,14 @@ export async function understand(message, workspace, catalog, history, fallbackS
     const validatorCtx = buildValidatorContext(workspace, catalog);
     let validation1;
     try {
+        // I13 / PV-P2c-LLM-A: draft_cart_ops (termasuk field `variant` bebas dari
+        // LLM) PASTHROUGH. validate() hanya membaca acts/unmatched/quantifier/
+        // confidence/clarification/reply_draft — tidak menyentuh draft_cart_ops, dan
+        // tidak mem-build ulang result, jadi `variant` dipertahankan utuh ke result
+        // (InterpreterResultV2) yang dikembalikan pada outcome 'reasoned'. TIDAK
+        // ada validasi khusus di sini: resolusi `variant` (teks) → variantId
+        // (DB-driven, I13 non-negotiable) ditangguhkan ke layer terpisah (Batch 3,
+        // CartAuthority.resolvePriceAndStock).
         validation1 = validate(attempt1.result, validatorCtx);
     }
     catch (err) {
