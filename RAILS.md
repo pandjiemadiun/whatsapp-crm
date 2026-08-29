@@ -1443,3 +1443,24 @@ Owner separately setting up Cloudflare Access (infra-level, di luar repo ini) se
 tambahan di depan /admin — ini adalah owner's own action, bukan bagian dari commit repo.
 
 Siapa yang setuju: owner (Panji), AI CLI (Kilo).
+---
+
+## §6. Real-time log (29 Agu 2026)
+
+### 08:32–09:15 UTC — Stock Integrity Fix (PV-P1-08) + Tenant Isolation
+
+- **Status:** ✅ Implementation complete, verified
+- **Commits pending:** All source changes built, tests passing
+- **Key changes:**
+  - `cart-authority.checkout()`: atomic decrement via `updateMany` CAS (`stock >= qty`), `autoCancelAt` timestamped
+  - `order.service.cancelOrder()`: stock restore before transition (`restoreStockForOrderItems`)
+  - `routes/orders.ts:PUT /:id/status`: cancel path now restores stock
+  - `scheduleAutoCancel.ts`: new 15-min cron for idle orders, skips `pending_verification`
+  - `ORDER_AUTO_CANCEL_HOURS` env var added (default 24h)
+- **Test coverage:** 13 new tests passing (unlimited skip, decrement, race, cancel, auto-expire)
+- **Regression:** test:chat 271/271 unchanged, all other suites 0 failures
+
+### Pending commit:
+  - [ ] Commit source changes
+  - [ ] Update `DECISION-CANCEL-ORDER-STATE-MACHINE.md` (amendment for handleCancelOrder → cancelOrder flow)
+  - [ ] Push with verified diff stat

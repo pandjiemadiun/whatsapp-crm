@@ -238,3 +238,21 @@
 - Setup E2E: seed test product `Sepatu` (hasVariants) + variant `merah/size L` pada Canary Store (sebelumnya 0 produk).
 
 **Status:** ✅ RESOLVED — PV-P2c full stack (TEXT+LLM-A+LLM-B) `71ba429`…`a5289ae` (dist rebuild). §IX-D (guard-duplication) tetap OPEN (di luar scope ini).
+
+---
+
+## VI. STOCK INTEGRITY FIX (29 Agu 2026) — RESOLVED ✅
+
+| ID | Bug | Lokasi | Severity | Note |
+|----|-----|--------|----------|------|
+| VI-1 | **Stock tidak pernah di-decrement di checkout** → 2x race win, oversell | `cart-authority.ts:checkout()` | High | ✅ **RESOLVED** — checkout sekarang di-wrapper dalam `$transaction` dengan atomic decrement via `updateMany({ where: { stock: { gte: qty } }, data: { decrement } })` (CAS). Stock tidak bisa kurang dari 0 oleh concurrent checkout. |
+| VI-2 | **Stock tidak pernah dikembalikan saat order dibatalkan** — terus mengurang per [cancel] | `order.service.ts:cancelOrder()`, `routes/orders.ts:PUT /:id/status` | High | ✅ **RESOLVED** — ditambah `restoreStockForOrderItems()` pada setiap cancel path (structured action via handleCancelOrder, admin PUT status, order.service.cancelOrder). |
+| VI-3 | **Tidak ada auto-expire untuk order menunggu bayar** — order "macet" tak pernah dibatalkan | schema.prisma (`autoCancelAt`), `bootstrap/scheduleAutoCancel.ts` | Medium | ✅ **RESOLVED** — 15-min cron `scheduleAutoCancel()` mencari order dengan `autoCancelAt < now`, `paymentStatus != 'pending_verification'`, auto-cancels + stock restore. Configurable via `ORDER_AUTO_CANCEL_HOURS` (default 24h). |
+
+---
+
+## VII. TENANT ISOLATION FIX (29 Agu 2026) — RESOLVED ✅
+
+| ID | Risiko | Lokasi | Severity | Note |
+|----|--------|--------|----------|------|
+| VII-1 | **GET /:id produk tidak tenant-scoped** — leak detail produk antar toko | `routes/products.ts:GET /:productId` | High | ✅ **RESOLVED** — endpoint dihapus (`delete unscoped GET /:productId`). Penggunaan dipantau: 0 caller di production, telah diganti oleh `/api/pwa/:storeSlug/products/:productId`. |
