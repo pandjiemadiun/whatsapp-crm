@@ -170,21 +170,6 @@ test('6. GET search products — 404 store not found', async () => {
   assert.equal(res.status, 404);
 });
 
-test('7. GET product detail — 200 OK', async () => {
-  const res = await jsonFetch(`/api/products/${createdProductId}`);
-  assert.equal(res.status, 200);
-  const body = await parseJson(res);
-  assert.equal(body.success, true);
-  assert.equal(body.data.id, createdProductId);
-  assert.equal(body.data.name, 'Kangkung Segar');
-  assert.equal(body.data.category.name, 'Sayuran');
-});
-
-test('8. GET product detail — 404 not found', async () => {
-  const res = await jsonFetch('/api/products/nonexistent-id');
-  assert.equal(res.status, 404);
-});
-
 // ─────────────────────────────────────────────────────────────
 // ADMIN ROUTES
 // ─────────────────────────────────────────────────────────────
@@ -286,11 +271,6 @@ test('16. DELETE product — 204 OK (admin)', async () => {
     headers: { Authorization: `Bearer ${adminToken}` },
   });
   assert.equal(res.status, 204);
-});
-
-test('17. GET deleted product — 404 (soft delete works)', async () => {
-  const res = await jsonFetch(`/api/products/${createdProductId}`);
-  assert.equal(res.status, 404);
 });
 
 test('18. DELETE product — 404 not found', async () => {

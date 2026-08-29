@@ -105,22 +105,4 @@ router.get(
   }
 );
 
-/**
- * GET /api/products/:productId
- * Detail produk tunggal (termasuk kategori).
- */
-router.get('/products/:productId', async (req: Request, res: Response) => {
-  try {
-    const product = await productService.getProductById(req.params.productId);
-    adapters.logger.info('Product detail fetched', { productId: req.params.productId });
-    res.json({ success: true, data: product });
-  } catch (error: any) {
-    if (error instanceof ApiError && error.code === ErrorCodes.ERR_NOT_FOUND) {
-      return res.status(404).json({ error: error.message });
-    }
-    adapters.logger.error('Failed to fetch product detail', error as Error);
-    res.status(500).json({ error: error?.message || 'Failed to fetch product detail' });
-  }
-});
-
 export default router;
