@@ -254,6 +254,10 @@ model Order {
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
   deletedAt             DateTime?
+  // PV-P1-08: auto-expiry stamp for stuck orders (waiting_address / waiting_payment).
+  // Set atomically at checkout (stock decrement); consumed by the 15-min
+  // AutoCancel cron. NULL = order under 7-day manual window / terminal state.
+  autoCancelAt          DateTime?
 
   store                 Store    @relation(fields: [storeId], references: [id])
   conversation          Conversation @relation(fields: [conversationId], references: [id])
@@ -264,6 +268,7 @@ model Order {
   @@index([customerId])
   @@index([createdAt])
   @@index([orderStatus, createdAt])
+  @@index([orderStatus, autoCancelAt])
   @@map("orders")
 }
 
