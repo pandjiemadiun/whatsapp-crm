@@ -32,14 +32,14 @@ const FEW_SHOT = `--- Contoh 1 ---\ncustomer: "toralin brp ya?"\nassistant: "Tot
 
 const INTERPRETER_SCHEMA = `{
   "intent": "product_info|total|buy|smalltalk|clarify",
-  "cart_ops": [{ "type": "add|remove", "product": string, "qty": number, "price": number }],
+  "cart_ops": [{ "type": "add|remove", "product": string, "qty": number, "price": number, "variant": string|null }],
   "buy_signal": "yes|no|maybe",
   "order_extract": { "order_id": string } | null,
   "missing_info": string[] | null,
   "identity": { "name": string } | null,
   "reply_draft": string | null,
   "confidence": 0.0-1.0,
-  "clarification": { "question": string, "options": [{ "id": string, "label": string, "cartOps": [{ "type":"add|remove", "product": string, "qty": number, "price": number }], "action": string }], "expected_type": "affirmative|choice|yes_no" } | null
+  "clarification": { "question": string, "options": [{ "id": string, "label": string, "cartOps": [{ "type":"add|remove", "product": string, "qty": number, "price": number, "variant": string|null }], "action": string }], "expected_type": "affirmative|choice|yes_no" } | null
 }`;
 
 /**

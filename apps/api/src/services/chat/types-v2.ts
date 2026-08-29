@@ -70,6 +70,14 @@ export interface DraftCartOp {
   qty: number;
   qty_source: 'explicit' | 'default';
   status: 'confirmed' | 'needs_clarification';
+  /**
+   * PV-P2c-LLM-A: deskripsi varian dalam bahasa natural yang diinput LLM
+   * (mis. "merah", "size L", "merah size L"). BUKAN variantId — LLM tidak
+   * pernah tahu UUID asli (I13 non-negotiable). Resolusi ke variantId
+   * (DB-driven) terjadi di layer terpisah (Batch 3, CartAuthority).
+   * null/undefined = tidak ada varian yang disebutkan / produk non-varian.
+   */
+  variant?: string | null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
