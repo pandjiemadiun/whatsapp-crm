@@ -28,9 +28,10 @@ import { normalize } from '../services/chat/normalizer.js';
 import { composeReply } from '../services/chat/composer-v2.js';
 import { ResponseSource } from '../domain/types.js';
 import type { AIResponse, AIGenerateOptions } from '../adapters/ai/types.js';
-import type { InterpreterResult, ResponseResult } from '../domain/types.js';
+import type { InterpreterResult, ResponseResult, ConversationContext } from '../domain/types.js';
 import { setStoreEngine } from '../services/chat/engine-config.js';
 import type { InterpreterResultV2 } from '../services/chat/types-v2.js';
+import { fallbackService } from '../business/fallback.service.js';
 
 // ──────────────────────────────────────────────────────────
 // Constants
@@ -605,11 +606,12 @@ async function withProduct(
   price: number,
   stock: number | null,
   fn: () => Promise<void>,
+  hasVariants: boolean = false,
 ): Promise<void> {
   await prisma.product.upsert({
     where: { id },
-    update: { storeId: STORE_ID, name, price, stock, isActive: true, deletedAt: null, currency: 'IDR' },
-    create: { id, storeId: STORE_ID, name, price, stock, isActive: true, currency: 'IDR' },
+    update: { storeId: STORE_ID, name, price, stock, isActive: true, deletedAt: null, currency: 'IDR', hasVariants },
+    create: { id, storeId: STORE_ID, name, price, stock, isActive: true, currency: 'IDR', hasVariants },
   });
   try {
     await fn();
@@ -1472,3 +1474,104 @@ test('Case P6-5/P5c: ringkasan keranjang pakai simbol qty ASCII "x", bukan "×" 
     await prisma.conversation.delete({ where: { id: convId } }).catch(() => {});
   }
 });
+// ─────────────────────────────────────────────────────────────────────────────
+// PV-P2c — WA text representation untuk hasVariants=true (fallback.service.ts only)
+// Scope: HANYA src/business/fallback.service.ts (tryProduct single-match +
+// disambiguation). Tests below call tryProduct DIRECTLY (unit-level) against the
+// real golden DB store so the WA text is pinned exactly.
+//   Gate #1 — hasVariants=false → response IDENTIK sebelum/sesudah (regresi)
+//   Gate #2 — hasVariants=true  → arahkan ke storefront, TANPA "masukkan ke keranjang"
+//   Gate #3 — disambiguasi campuran → "(ada varian)" hanya di baris tepat
+// ─────────────────────────────────────────────────────────────────────────────
+
+function makeCtx(convId: string): ConversationContext {
+  return {
+    storeId: STORE_ID,
+    customerId: 'gate-cust',
+    conversationId: convId,
+    messages: [],
+    lastMessageAt: new Date(),
+    status: 'active',
+  };
+}
+
+test('PV-P2c Gate #1 (regresi): hasVariants=false → tryProduct response IDENTIK sebelum/sesudah', async () => {
+  // "beras" adalah base product: hasVariants=false (DB default), stock=50, price=12000.
+  // Expected string = original single-match output. Setelah branch variant ditambah,
+  // path non-variant harus tetap BYTE-IDENTIK (bukti: asercpsi ini pass sebelum+sesudah).
+  const ctx = makeCtx('conv-pv-gate1');
+  const result: any = await (fallbackService as any).tryProduct(ctx, 'beras');
+  assert.ok(result, 'tryProduct must return a result');
+  assert.equal(result.source, ResponseSource.PRODUCT);
+  const expected =
+    'Halo Kak! Untuk *beras* harganya *Rp 12.000* per unit ya. 🌿 (Stok ready 50 pcs)\n\n' +
+    'Mau dimasukkan ke keranjang belanja Kakak?';
+  assert.equal(
+    result.content,
+    expected,
+    'hasVariants=false response must be byte-identical (Gate #1 regresi)',
+  );
+  // Regresi: non-variant TIDAK boleh menampilkan penanda varian / storefront
+  assert.ok(!result.content.includes('toko web'));
+  assert.ok(!result.content.includes('(ada varian)'));
+});
+
+test('PV-P2c Gate #2: hasVariants=true → arahkan ke storefront web, TIDAK ada "masukkan ke keranjang"', async () => {
+  // Set store slug agar link storefront resolve ke .../c/<slug>
+  await prisma.store.update({ where: { id: STORE_ID }, data: { slug: 'golden' } });
+
+  await withProduct(
+    'prod-gate2-kacamata',
+    'kacamata',
+    150000,
+    10,
+    async () => {
+      const ctx = makeCtx('conv-pv-gate2');
+      const result: any = await (fallbackService as any).tryProduct(ctx, 'kacamata');
+      assert.ok(result, 'tryProduct must return a result');
+      assert.equal(result.source, ResponseSource.PRODUCT);
+
+      // Arahin ke toko web (storefront) — berisi link /c/<slug>
+      assert.ok(result.content.includes('toko web'), 'harus arahkan ke toko web');
+      assert.ok(result.content.includes('varian'), 'harus menyebut varian');
+      assert.ok(result.content.includes('/c/golden'), 'harus berisi link storefront /c/<slug>');
+
+      // Regresi: TIDAK ada lagi ajakan masuk keranjang untuk produk variant
+      assert.ok(
+        !result.content.includes('Mau dimasukkan ke keranjang belanja Kakak?'),
+        'hasVariants=true TIDAK boleh mengajak "masukkan ke keranjang"',
+      );
+    },
+    true, // hasVariants
+  );
+});
+
+test('PV-P2c Gate #3: disambiguasi campuran varian/non-varian → "(ada varian)" hanya di baris tepat', async () => {
+  // "baju" prefix-matches "Baju Merah" (score 3) dan "Baju Putih" (score 3)
+  // → similarCount=2 → disambiguation branch. Marker hanya pada hasVariants=true.
+  await withProduct('prod-gate3-merah', 'Baju Merah', 200000, 5, async () => {
+    await withProduct('prod-gate3-putih', 'Baju Putih', 180000, 5, async () => {
+      const ctx = makeCtx('conv-pv-gate3');
+      const result: any = await (fallbackService as any).tryProduct(ctx, 'baju');
+      assert.ok(result, 'tryProduct must return disambiguation');
+      assert.equal(result.source, ResponseSource.PRODUCT);
+
+      // Kedua kandidat muncul di daftar
+      assert.ok(result.content.includes('Baju Merah'));
+      assert.ok(result.content.includes('Baju Putih'));
+
+      // Penanda "(ada varian)" muncul tepat satu kali (hanya Baju Merah)
+      const markerCount = (result.content.match(/\(ada varian\)/g) || []).length;
+      assert.equal(markerCount, 1, 'hanya 1 penanda (ada varian) untuk 1 produk varian');
+
+      const lines = result.content.split('\n');
+      const merahLine = lines.find((l: string) => l.includes('Baju Merah'));
+      const putihLine = lines.find((l: string) => l.includes('Baju Putih'));
+      assert.ok(merahLine, 'harus ada baris Baju Merah');
+      assert.ok(putihLine, 'harus ada baris Baju Putih');
+      assert.ok(merahLine!.includes('(ada varian)'), 'Baju Merah (hasVariants) wajib ada penanda');
+      assert.ok(!putihLine!.includes('(ada varian)'), 'Baju Putih (non-variant) TIDAK boleh ada penanda');
+    });
+  }, true); // Baju Merah hasVariants=true; Baju Putih default false
+});
+
