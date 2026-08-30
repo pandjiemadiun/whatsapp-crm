@@ -292,7 +292,7 @@ test('13. Conversation with context + orders', async () => {
     { productId: productA, quantity: 1 },
   ]);
 
-  const conv = await conversationService.getConversationWithContext(conversationId);
+  const conv = await conversationService.getConversationWithContext(conversationId, storeId);
   assert.ok(conv);
   assert.ok(conv.context);
   assert.equal(conv.context.conversationId, conversationId);

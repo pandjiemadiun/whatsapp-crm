@@ -8,6 +8,8 @@ import { conversationContextService } from './conversation-context.service.js';
 import { prisma } from '../infrastructure/prisma.js';
 import { productService } from './product.service.js';
 import { canonicalConversationStateService } from './canonical-context.service.js';
+import { ApiError } from '../errors/ApiError.js';
+import { ErrorCodes } from '../constants/errorCodes.js';
 import { normalize } from '../services/chat/normalizer.js';
 import { runOneCall, validateCartOpsAgainstDb, truncateTo2Sentences } from '../services/chat/interpreter.js';
 import { getStoreEngine } from '../services/chat/engine-config.js';
@@ -70,6 +72,18 @@ export class ConversationService {
   ): Promise<ResponseResult | null> {
     adapters.logger.info('Processing customer message', { storeId, customerId, conversationId, channel });
 
+    // Tenant isolation: if a conversation with this id already exists, it MUST
+    // belong to the calling store. The upsert below matches by PK (id) alone,
+    // so without this guard a merchant could inject messages into another
+    // store's conversation by supplying the victim's conversationId.
+    const existingConv = await prisma.conversation.findUnique({
+      where: { id: conversationId },
+      select: { storeId: true },
+    });
+    if (existingConv && existingConv.storeId !== storeId) {
+      throw new ApiError(ErrorCodes.ERR_AUTH_FORBIDDEN, 'Conversation not found for store');
+    }
+
     const conversation = await prisma.conversation.upsert({
       where: { id: conversationId },
       update: {},
@@ -92,7 +106,7 @@ export class ConversationService {
         createdAt: new Date(),
       } as ConversationMessage);
       await prisma.conversation.update({
-        where: { id: conversationId },
+        where: { id: conversationId, storeId },
         data: { lastMessageAt: new Date() },
       });
       adapters.logger.info('Skipping AI reply — conversation under human takeover', { conversationId });
@@ -464,7 +478,7 @@ export class ConversationService {
         // pakai konvensi yang SUDAH ADA (human_takeover + humanTakeoverAt,
         // lihat routes/conversations.ts:88) sehingga owner terlihat di dashboard
         // (admin/stores.ts:547 filter humanTakeoverAt != null).
-        await this.markHumanTakeover(conversationId);
+        await this.markHumanTakeover(conversationId, storeId);
         const escalateReply = composeEscalateReply();
         await this.saveMessage({
           id: crypto.randomUUID(),
@@ -572,7 +586,7 @@ export class ConversationService {
         // TASK C1 (Stage 2): tandai human_takeover agar owner dapat alert di
         // dashboard (human_takeoverAt != null) + balasan jujur ke customer.
         // (Bukan generic "kurang paham".)
-        await this.markHumanTakeover(conversationId);
+        await this.markHumanTakeover(conversationId, storeId);
         const escalateReply = composeEscalateReply();
         await this.saveMessage({
           id: crypto.randomUUID(),
@@ -1140,7 +1154,7 @@ export class ConversationService {
     // agar bisa auto-recovery setelah circuit breaker cooldown.
     try {
       await prisma.conversation.update({
-        where: { id: context.conversationId },
+        where: { id: context.conversationId, storeId: context.storeId },
         data: {
           lastMessageAt: new Date(),
           status: 'open',
@@ -1166,10 +1180,10 @@ export class ConversationService {
    * loop ini. (Catatan line ~1051 tentang "jangan auto-set pada AI failure
    * biasa" tetap berlaku untuk jalur non-escalate.)
    */
-  private async markHumanTakeover(conversationId: string): Promise<void> {
+  private async markHumanTakeover(conversationId: string, storeId: string): Promise<void> {
     try {
       await prisma.conversation.update({
-        where: { id: conversationId },
+        where: { id: conversationId, storeId },
         data: escalateStatusUpdate(),
       });
       adapters.logger.info('Escalation: conversation marked for human takeover', {
@@ -1191,9 +1205,9 @@ export class ConversationService {
   /**
    * Ambil percakapan lengkap termasuk context dan orders (dengan items).
    */
-  async getConversationWithContext(conversationId: string): Promise<ConversationWithContext | null> {
-    const conv = await prisma.conversation.findUnique({ where: { id: conversationId } });
-    if (!conv || conv.deletedAt) return null;
+  async getConversationWithContext(conversationId: string, storeId: string): Promise<ConversationWithContext | null> {
+    const conv = await prisma.conversation.findFirst({ where: { id: conversationId, storeId, deletedAt: null } });
+    if (!conv) return null;
 
     const [context, orders] = await Promise.all([
       conversationContextService.getContext(conversationId),
@@ -1264,9 +1278,9 @@ export class ConversationService {
   /**
    * Update status percakapan. Jika 'resolved', set resolvedAt.
    */
-  async updateConversationStatus(conversationId: string, status: string): Promise<void> {
-    await prisma.conversation.update({
-      where: { id: conversationId },
+  async updateConversationStatus(conversationId: string, storeId: string, status: string): Promise<void> {
+    await prisma.conversation.updateMany({
+      where: { id: conversationId, storeId },
       data: {
         status,
         ...(status === 'resolved' ? { resolvedAt: new Date() } : {}),
@@ -1368,11 +1382,11 @@ export class ConversationService {
     });
   }
 
-  async findByIdWithHistory(id: string): Promise<ConversationDetail | null> {
-    const conv = await prisma.conversation.findUnique({
-      where: { id },
+  async findByIdWithHistory(id: string, storeId: string): Promise<ConversationDetail | null> {
+    const conv = await prisma.conversation.findFirst({
+      where: { id, storeId, deletedAt: null },
     });
-    if (!conv || conv.deletedAt) return null;
+    if (!conv) return null;
 
     const history = await prisma.conversationHistory.findMany({
       where: { conversationId: id },

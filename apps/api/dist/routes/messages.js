@@ -4,6 +4,7 @@ import { conversationService } from '../business/conversation.service.js';
 import { adapters } from '../adapters/container.js';
 import { authMiddleware } from '../middleware/auth.js';
 import { prisma } from '../infrastructure/prisma.js';
+import { ApiError } from '../errors/ApiError.js';
 const router = express.Router();
 // Public base URL used to build webhook URLs shown to store owners.
 // In production this MUST be the public API origin (e.g. https://api.qlobot.web.id),
@@ -51,6 +52,9 @@ router.post('/handle', async (req, res) => {
         });
     }
     catch (error) {
+        if (error instanceof ApiError) {
+            return res.status(error.statusCode || 500).json({ error: error.message });
+        }
         adapters.logger.error('Message handler error', error);
         res.status(500).json({ error: 'Failed to process message' });
     }

@@ -245,7 +245,7 @@ async function processFollowUp(conv: IdleConversation, now: Date): Promise<void>
   // Mark followUpSentAt in conversation metadata (maks 1x per percakapan)
   const existingMetadata = (conv.metadata as Record<string, unknown> | null) || {};
   await prisma.conversation.update({
-    where: { id: conversationId },
+    where: { id: conversationId, storeId },
     data: {
       lastMessageAt: followUpTime,
       metadata: { ...existingMetadata, followUpSentAt: followUpTime.toISOString() },

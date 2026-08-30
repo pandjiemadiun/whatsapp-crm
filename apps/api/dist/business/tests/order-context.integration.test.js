@@ -244,7 +244,7 @@ test('13. Conversation with context + orders', async () => {
     await orderService.createOrder(storeId, conversationId, `${TEST_PREFIX}-cust`, [
         { productId: productA, quantity: 1 },
     ]);
-    const conv = await conversationService.getConversationWithContext(conversationId);
+    const conv = await conversationService.getConversationWithContext(conversationId, storeId);
     assert.ok(conv);
     assert.ok(conv.context);
     assert.equal(conv.context.conversationId, conversationId);

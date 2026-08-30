@@ -4,6 +4,7 @@ import { conversationService } from '../business/conversation.service.js';
 import { adapters } from '../adapters/container.js';
 import { authMiddleware, AuthenticatedRequest } from '../middleware/auth.js';
 import { prisma } from '../infrastructure/prisma.js';
+import { ApiError } from '../errors/ApiError.js';
 
 const router = express.Router();
 
@@ -62,7 +63,10 @@ router.post('/handle', async (req: AuthenticatedRequest, res: Response) => {
       requiresHumanReview: result.requiresHumanReview,
       timestamp: result.message.createdAt,
     });
-  } catch (error) {
+  } catch (error: any) {
+    if (error instanceof ApiError) {
+      return res.status(error.statusCode || 500).json({ error: error.message });
+    }
     adapters.logger.error('Message handler error', error as Error);
     res.status(500).json({ error: 'Failed to process message' });
   }

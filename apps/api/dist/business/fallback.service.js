@@ -663,8 +663,8 @@ export class FallbackService {
             items = items.filter((ci) => Number(ci.qty || 0) > 0);
             // Guard 1: empty cart → tawarkan masukkan item, jangan "Rp 0"
             if (items.length === 0) {
-                const conv = await prisma.conversation.findUnique({
-                    where: { id: context.conversationId },
+                const conv = await prisma.conversation.findFirst({
+                    where: { id: context.conversationId, storeId: context.storeId },
                     select: { customerName: true },
                 });
                 const name = conv?.customerName ? `Kak ${conv.customerName}` : 'Kakak';
@@ -1077,7 +1077,7 @@ export class FallbackService {
         // Set conversation metadata
         try {
             await prisma.conversation.updateMany({
-                where: { id: context.conversationId },
+                where: { id: context.conversationId, storeId: context.storeId },
                 data: {
                     metadata: { orderChangeRequestedAt: new Date().toISOString() },
                 },

@@ -53,7 +53,7 @@ export async function executeHandoff(input: ExecuteHandoffInput): Promise<Execut
 
   const messageRow = await prisma.$transaction(async (tx) => {
     await tx.conversation.update({
-      where: { id: conversationId },
+      where: { id: conversationId, storeId },
       data: { status: 'human_takeover', humanTakeoverAt: now },
     });
     return tx.conversationHistory.create({
@@ -103,8 +103,8 @@ export async function executeHandoff(input: ExecuteHandoffInput): Promise<Execut
   // for the PWA path). Mirrors routes/conversations.ts:226-257 gateway choice.
   if (channel === 'whatsapp') {
     try {
-      const conversation = await prisma.conversation.findUnique({
-        where: { id: conversationId },
+      const conversation = await prisma.conversation.findFirst({
+        where: { id: conversationId, storeId },
         select: { customerPhone: true },
       });
       const store = await prisma.store.findUnique({

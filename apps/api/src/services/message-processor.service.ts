@@ -507,7 +507,7 @@ result = await this.llmCircuitBreaker.wrap(() =>
     try {
       const { prisma } = await import('../infrastructure/prisma.js');
       await prisma.conversation.update({
-        where: { id: input.conversationId },
+        where: { id: input.conversationId, storeId: input.storeId },
         data: {
           status: 'human_takeover',
           humanTakeoverAt: new Date(),

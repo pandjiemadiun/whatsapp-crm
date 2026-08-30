@@ -82,7 +82,7 @@ export declare class ConversationService {
     /**
      * Ambil percakapan lengkap termasuk context dan orders (dengan items).
      */
-    getConversationWithContext(conversationId: string): Promise<ConversationWithContext | null>;
+    getConversationWithContext(conversationId: string, storeId: string): Promise<ConversationWithContext | null>;
     /**
      * Buat percakapan baru + inisialisasi context-nya sekaligus.
      */
@@ -95,7 +95,7 @@ export declare class ConversationService {
     /**
      * Update status percakapan. Jika 'resolved', set resolvedAt.
      */
-    updateConversationStatus(conversationId: string, status: string): Promise<void>;
+    updateConversationStatus(conversationId: string, storeId: string, status: string): Promise<void>;
     /**
      * Ambil percakapan terbuka terbaru (default 50), termasuk context & orders.
      */
@@ -103,7 +103,7 @@ export declare class ConversationService {
     private mapConversationWithContext;
     getConversationStats(conversationId: string): Promise<ConversationStats>;
     findAllByStore(storeId: string): Promise<ConversationListItem[]>;
-    findByIdWithHistory(id: string): Promise<ConversationDetail | null>;
+    findByIdWithHistory(id: string, storeId: string): Promise<ConversationDetail | null>;
     private logPipelineAudit;
     private flattenPendingOps;
     private deriveResolvedCartOps;
