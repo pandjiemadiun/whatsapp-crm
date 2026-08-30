@@ -8,6 +8,7 @@ import { prisma } from '../infrastructure/prisma.js';
 import { normalizePhone } from '../lib/normalize-phone.js';
 import { gowaAdapter } from '../adapters/whatsapp/gowa.adapter.js';
 import { configService } from '../business/config.service.js';
+import { getEncryptionKey, hashField } from '../utils/encryption.js';
 
 const router = Router();
 
@@ -86,7 +87,8 @@ router.post('/connect', async (req: AuthenticatedRequest, res: Response) => {
     const rawPhone = req.body.phoneNumber || '';
     const phoneNumber = normalizePhone(rawPhone);
     if (phoneNumber) {
-      await prisma.store.update({ where: { id: storeId }, data: { phoneNumber } });
+      const encKey = await getEncryptionKey();
+      await prisma.store.update({ where: { id: storeId }, data: { phoneNumber, phoneNumberHash: hashField(phoneNumber, encKey) } });
     }
 
     // Check if device already exists and is connected

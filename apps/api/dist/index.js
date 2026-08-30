@@ -62,7 +62,7 @@ import { errorHandler } from './middleware/errorHandler.js';
 import { metricsMiddleware } from './middleware/metrics.middleware.js';
 import systemMetricsRouter from './routes/admin/system-metrics.js';
 import logger from './utils/logger.js';
-import { getEncryptionKey } from './utils/encryption.js';
+import { getEncryptionKey, hashField } from './utils/encryption.js';
 // Menyesuaikan __dirname untuk TypeScript ESM
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -231,6 +231,7 @@ httpServer.listen(PORT, async () => {
     scheduleAutoCancel();
     // Seed default store on first startup
     try {
+        const encKey = await getEncryptionKey();
         await prisma.store.upsert({
             where: { id: 'store-1' },
             update: {},
@@ -238,6 +239,7 @@ httpServer.listen(PORT, async () => {
                 id: 'store-1',
                 name: 'Toko Uji Coba',
                 phoneNumber: '+6281234567890',
+                phoneNumberHash: hashField('+6281234567890', encKey),
                 address: process.env.DEFAULT_STORE_ADDRESS || 'Alamat belum diisi',
                 originProvinceId: process.env.DEFAULT_STORE_PROVINCE_ID || '',
                 originProvinceName: process.env.DEFAULT_STORE_PROVINCE_NAME || '',
@@ -249,13 +251,15 @@ httpServer.listen(PORT, async () => {
         });
         const envStoreId = process.env.DEFAULT_STORE_ID;
         if (envStoreId && envStoreId !== 'store-1') {
+            const envPhone = process.env.DEFAULT_STORE_PHONE || '+6280000000000';
             await prisma.store.upsert({
                 where: { id: envStoreId },
                 update: {},
                 create: {
                     id: envStoreId,
                     name: process.env.DEFAULT_STORE_NAME || 'Default Store',
-                    phoneNumber: process.env.DEFAULT_STORE_PHONE || '+6280000000000',
+                    phoneNumber: envPhone,
+                    phoneNumberHash: hashField(envPhone, encKey),
                     address: process.env.DEFAULT_STORE_ADDRESS || 'Alamat belum diisi',
                     originProvinceId: process.env.DEFAULT_STORE_PROVINCE_ID || '',
                     originProvinceName: process.env.DEFAULT_STORE_PROVINCE_NAME || '',

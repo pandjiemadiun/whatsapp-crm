@@ -5,6 +5,7 @@ import { getWhatsAppConnectionStatus } from '../services/whatsapp-connection.ser
 import { prisma } from '../infrastructure/prisma.js';
 import { normalizePhone } from '../lib/normalize-phone.js';
 import { configService } from '../business/config.service.js';
+import { getEncryptionKey, hashField } from '../utils/encryption.js';
 const router = Router();
 // Apply store-owner auth to all whatsapp routes
 router.use(authMiddleware);
@@ -77,7 +78,8 @@ router.post('/connect', async (req, res) => {
         const rawPhone = req.body.phoneNumber || '';
         const phoneNumber = normalizePhone(rawPhone);
         if (phoneNumber) {
-            await prisma.store.update({ where: { id: storeId }, data: { phoneNumber } });
+            const encKey = await getEncryptionKey();
+            await prisma.store.update({ where: { id: storeId }, data: { phoneNumber, phoneNumberHash: hashField(phoneNumber, encKey) } });
         }
         // Check if device already exists and is connected
         const status = await gowaFetch(cfg, `/devices/${did}/status`);

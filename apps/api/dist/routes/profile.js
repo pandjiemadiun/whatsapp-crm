@@ -5,6 +5,7 @@ import { adapters } from '../adapters/container.js';
 import { hashPassword, verifyPassword } from '../utils/password.util.js';
 import { prisma } from '../infrastructure/prisma.js';
 import { promptBuilderService } from '../services/prompt-builder.service.js';
+import { getEncryptionKey, hashField } from '../utils/encryption.js';
 const router = Router();
 const upload = multer({
     storage: multer.memoryStorage(),
@@ -85,7 +86,10 @@ router.put('/', async (req, res) => {
         if (phoneNumber !== undefined) {
             if (!phoneNumber || !String(phoneNumber).trim())
                 return res.status(400).json({ error: 'Nomor HP tidak boleh dikosongkan' });
-            updateData.phoneNumber = String(phoneNumber).trim();
+            const phoneStr = String(phoneNumber).trim();
+            updateData.phoneNumber = phoneStr;
+            const encKey = await getEncryptionKey();
+            updateData.phoneNumberHash = hashField(phoneStr, encKey);
         }
         if (timezone !== undefined)
             updateData.timezone = timezone;

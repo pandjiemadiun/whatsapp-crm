@@ -3,6 +3,8 @@ import { messageProcessorService } from '../services/message-processor.service.j
 import { adapters } from '../adapters/container.js';
 import { prisma } from '../infrastructure/prisma.js';
 import { webhookLimiter } from '../middleware/rate-limiters.js';
+import { gowaTrustMiddleware } from '../middleware/gowa-trust.js';
+import { getEncryptionKey, hashField } from '../utils/encryption.js';
 
 const router = express.Router();
 
@@ -19,7 +21,8 @@ function normalizePhoneNumber(phoneNumber: string): string {
 }
 
 // POST /api/webhooks/gowa — Receive incoming messages from GOWA
-router.post('/gowa', webhookLimiter, async (req: Request, res: Response) => {
+// GOWA trust boundary (G2-B.2): only loopback sources allowed.
+router.post('/gowa', gowaTrustMiddleware, webhookLimiter, async (req: Request, res: Response) => {
   // Always respond 200 immediately to prevent retries
   res.status(200).json({ status: 'ok' });
 
@@ -58,9 +61,13 @@ router.post('/gowa', webhookLimiter, async (req: Request, res: Response) => {
       return;
     }
 
-    // Look up store by the bot's WhatsApp number
+    // Look up store by the bot's WhatsApp number.
+    // phoneNumber is encrypted at rest (AES-256-GCM, random IV), so we look up
+    // by the deterministic hash column instead of the encrypted value.
+    const key = await getEncryptionKey();
+    const botNumberHash = hashField(botNumberRaw, key);
     const store = await prisma.store.findFirst({
-      where: { phoneNumber: botNumberRaw, isActive: true, deletedAt: null },
+      where: { phoneNumberHash: botNumberHash, isActive: true, deletedAt: null },
     });
 
     if (!store) {

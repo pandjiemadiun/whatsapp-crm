@@ -12,6 +12,11 @@ model Store {
   name                  String
   slug                  String?  @unique
   phoneNumber           String
+  // Deterministic hash of phoneNumber for indexed lookup (phoneNumber is
+  // encrypted at rest via AES-256-GCM with random IV, so direct WHERE
+  // comparison is impossible). Used by the GOWA webhook to resolve the
+  // receiving store by bot phone number.
+  phoneNumberHash       String?  @unique
   profilePhotoUrl       String?
   description           String?
   businessCategory      String?

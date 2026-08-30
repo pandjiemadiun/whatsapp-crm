@@ -10,6 +10,7 @@ import { storeRegisterSchema, storeLoginSchema, updateProfileSchema } from '../s
 import { sanitize } from '../lib/sanitize.js';
 import { storeAuthLimiter } from '../middleware/rate-limiters.js';
 import { authMiddleware } from '../middleware/auth.js';
+import { getEncryptionKey, hashField } from '../utils/encryption.js';
 const router = express.Router();
 // Generate a unique per-store webhook secret (used for Fonnte webhook URL)
 function generateWebhookSecret() {
@@ -24,12 +25,14 @@ router.post('/register', validateRequest(storeRegisterSchema, 'body'), storeAuth
             return res.status(409).json({ error: 'Email already registered' });
         }
         const storeId = `store-${crypto.randomUUID().slice(0, 8)}`;
+        const key = await getEncryptionKey();
         const store = await prisma.store.create({
             data: {
                 id: storeId,
                 name: email.split('@')[0],
                 email,
                 phoneNumber,
+                phoneNumberHash: phoneNumber ? hashField(phoneNumber, key) : null,
                 address,
                 originProvinceId,
                 originProvinceName,
@@ -159,6 +162,7 @@ router.post('/login', validateRequest(storeLoginSchema, 'body'), storeAuthLimite
 router.put('/profile', authMiddleware, validateRequest(updateProfileSchema, 'body'), async (req, res) => {
     try {
         const storeId = req.user.storeId;
+        const key = await getEncryptionKey();
         const { name, timezone, phoneNumber, fonnteToken, fonnteNumber, acceptsTransfer, acceptsQris, acceptsCod, qrisImageUrl, shippingMode, shippingFlatInCity, shippingFlatOutCity } = getValidated(req);
         if (fonnteToken !== undefined && fonnteToken !== null && fonnteToken !== '') {
             const isValid = await fonnteService.validateToken(fonnteToken);
@@ -174,7 +178,9 @@ router.put('/profile', authMiddleware, validateRequest(updateProfileSchema, 'bod
         if (phoneNumber !== undefined) {
             if (!phoneNumber || !String(phoneNumber).trim())
                 return res.status(400).json({ error: 'Nomor HP tidak boleh dikosongkan' });
-            updateData.phoneNumber = String(phoneNumber).trim();
+            const phoneStr = String(phoneNumber).trim();
+            updateData.phoneNumber = phoneStr;
+            updateData.phoneNumberHash = hashField(phoneStr, key);
         }
         if (fonnteToken !== undefined)
             updateData.fonnteToken = fonnteToken === '' ? null : fonnteToken;
