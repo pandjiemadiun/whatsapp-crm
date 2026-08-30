@@ -53,6 +53,16 @@ router.post('/register', validateRequest(storeRegisterSchema, 'body'), storeAuth
 
     const storeId = `store-${crypto.randomUUID().slice(0, 8)}`;
     const key = await getEncryptionKey();
+
+    // Pre-check: phone number already registered (by hash, since phoneNumber is encrypted)
+    if (phoneNumber && key) {
+      const phoneHash = hashField(phoneNumber, key);
+      const existingPhone = await prisma.store.findFirst({ where: { phoneNumberHash: phoneHash } });
+      if (existingPhone) {
+        return res.status(409).json({ error: 'Nomor HP sudah terdaftar' });
+      }
+    }
+
     const store = await prisma.store.create({
       data: {
         id: storeId,
@@ -108,8 +118,15 @@ router.post('/register', validateRequest(storeRegisterSchema, 'body'), storeAuth
       },
     });
   } catch (error: any) {
-    // Unique constraint race (duplicate email created concurrently) → treat as already registered
+    // Unique constraint violation — distinguish email vs phone vs slug
     if (error?.code === 'P2002') {
+      const target = error?.meta?.target;
+      if (target && target.includes('phoneNumberHash')) {
+        return res.status(409).json({ error: 'Nomor HP sudah terdaftar' });
+      }
+      if (target && target.includes('slug')) {
+        return res.status(409).json({ error: 'Nama toko sudah digunakan' });
+      }
       return res.status(409).json({ error: 'Email already registered' });
     }
     adapters.logger.error('Registration failed', error as Error);
