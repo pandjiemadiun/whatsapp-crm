@@ -1,8 +1,8 @@
-# BUG TERBUKA — indeks temuan belum dibereskan (update 10 Agu 2026 16:45 UTC; REVISI 21 Agu 2026: +§VI shipping/Store NOT NULL/monitoring)
+# BUG TERBUKA — indeks temuan belum dibereskan (update 30 Agu 2026; +§TENANT-ISOLATION C1/C2 RESOLVED)
 
 > Daftar **temuan / bug / risiko yang belum dibereskan** sepanjang sesi
 > (P0–P4). Semua referensi ke `STATUS-V2.md`, `RAILS.md`, atau file:src:line
-> di commit HEAD `29b7297`.
+> di commit HEAD.
 >
 > **Kongsi (1) sudah ditutup oleh kerja P2/P3/P4** — tidak masuk daftar ini
 > agar tidak dobel:
@@ -10,7 +10,7 @@
 >   → **RESOLVED** (fungsi+hapus). Lihat `laporan-taskP4-fix.md`.
 > - P3: T1–T4 (workspace persist NO-OP, shape extractedEntities, legacy migrasi,
 >   last-write-wins RMW) → **RESOLVED** (commit c164729/3780453/eb74929/099967a/fd08ba3).
-> - P2: truth boundary `validateCartOpsAgainstDb` di semua titik eksekusi → **RESOLVED**.
+> - P2: truth boundary `validateCartOpsAds` di semua titik eksekusi → **RESOLVED**.
 > - P2: eskalasi ke pemilik toko (TASK C1) → **RESOLVED** (commit 718c375).
 > - 9/8 10:45: FLAGSHIP multi-add → **RESOLVED** (fast-path guard).
 > - T1 workspace NO-OP → bagian dari P3 (RESOLVED).
@@ -28,6 +28,7 @@
   HTTP 200 sehingga gateway TIDAK fallback ke Groq.
 - **Fix:** `interpreter.ts` `maxTokens: 250 -> 1024` (selaras `GPT_OSS_MAX_TOKENS_FLOOR`
   di `groq.adapter.ts`) + `extractJson()` hardening (toleransi markdown fence).
+  di `groq.adapter.ts`) + `extractJson()` hardening (toleransi markdown fence).
 - **Status:** ✅ RESOLVED — commit `81ea8a6` (`fix(chat): interpreter maxTokens 250->1024
   + extractJson hardening`). Verifikasi E2E via PWA `/message` (balasan normal, bukan
   dead-end) + 40/40 test pass (interpreter/reasoning-v2/pwa-checkout).
@@ -38,7 +39,58 @@
 
 ---
 
-## I. BUG PRODUKSI (nyata, user terdampak)
+## 0A. TENANT ISOLATION — cross-tenant injection + GOWA webhook unprotected (30 Agu 2026) — RESOLVED
+
+> **Incident:** Deliberate re-audit of merchant (Store) tenant isolation found two
+> CRITICAL findings. Both verified via live cross-tenant attack (Store A → Store B)
+> before fix. Admin routes (adminAuthMiddleware) confirmed out of scope — separate
+> auth system, global access by design (owner-approved).
+
+### C1 — Cross-tenant message injection (IDOR) — RESOLVED
+
+- **Route:** `POST /api/messages/handle` (merchant-facing, authMiddleware)
+- **Root cause:** `processCustomerMessage` (`conversation.service.ts:73`) used
+  `prisma.conversation.upsert({ where: { id: conversationId } })` keyed by PK alone.
+  If a conversation already existed under a DIFFERENT storeId, the upsert matched
+  by PK and silently processed the message in the wrong tenant's context.
+- **Impact:** Any merchant could inject messages into any other merchant's WhatsApp
+  conversation by supplying the victim's `conversationId`. Verified: injected message
+  appeared in victim's conversation history and triggered AI reply to victim's customer.
+- **Fix:**
+  - Ownership check BEFORE upsert: if conversation exists and storeId mismatches,
+    throw `ApiError(403)`.
+  - Added `storeId` to WHERE clause of all internal conversation
+    update/findUnique calls (defense-in-depth): `updateConversationStats`,
+    `markHumanTakeover`, `getConversationWithContext`, `updateConversationStatus`,
+    `findByIdWithHistory`.
+  - Applied same pattern to cross-cutting services: `fallback.service.ts`,
+    `handoff.service.ts`, `message-processor.service.ts`, `scheduleFollowUps.ts`.
+  - Added `ApiError` handling in `/api/messages/handle` route to return 403.
+- **Status:** ✅ RESOLVED — commit `9852477`. Verified: cross-tenant injection returns
+  403; same-store messages still work; 480 regression tests pass.
+
+### C2 — GOWA webhook completely unprotected — RESOLVED
+
+- **Route:** `POST /api/webhooks/gowa` (non-session, highest-risk path)
+- **Root cause (a):** `gowaTrustMiddleware` (`src/middleware/gowa-trust.ts`) existed
+  but was never mounted on the route — endpoint was fully open to external forgery.
+- **Root cause (b):** Store lookup compared plaintext `botNumberRaw` against
+  `phoneNumber`, but `phoneNumber` is encrypted at rest (AES-256-GCM, random IV).
+  Lookup always failed ("No store found for bot number") — accidentally preventing
+  exploitation, but would become critical if encryption were ever fixed.
+- **Impact:** Anyone who could reach the API could inject messages into any store's
+  conversation by supplying the store's phone number as `device_id`. No auth, no
+  IP restriction.
+- **Fix:**
+  - (a) Mounted `gowaTrustMiddleware` on `/api/webhooks/gowa` (loopback-only).
+  - (b) Added `phoneNumberHash` column (deterministic HMAC-SHA256 via existing
+    `hashField` helper) for indexed lookup. Updated all store write paths (create +
+    profile updates) to set the hash. GOWA webhook now looks up by hash.
+- **Status:** ✅ RESOLVED — commit `e0715f8`. Verified: external requests rejected by
+  middleware; legitimate loopback requests find correct store by hash; unknown phones
+  correctly rejected.
+
+---
 
 | ID | Bug | Lokasi | Severity | Note |
 |----|-----|--------|----------|------|
@@ -148,13 +200,20 @@
 | VI-2 | **Monitoring single-instance**: `/api/admin/metrics/system` in-memory → TIDAK akurat di multi-instance pm2. | Low–Med | Gap diketahui; aman untuk single-instance saat ini. |
 | VI-3 | **RajaOngkir/Komerce dependency risk**: caching hasil cost (Redis 7d) + quota guard — risiko ban disengaja diterima owner; interface swap-able. | Low (owner-accepted) | Tidak ada follow-up wajib. |
 | VI-4 | **DIST dirty (III-1 berulang)**: source cluster `2a93924..2e64c0a` ter-commit tapi `dist/` belum di-rebuild → working tree berisi dist modified. | High (infra, MITIGASI) | Sebelum deploy: `cd apps/api && npm run build` lalu commit `dist/`. |
-| VI-5 | **BACKUP_ALERT_EMAIL no sender**: env `BACKUP_ALERT_EMAIL` sudah terisi (pandjie@yahoo.com) tapi TIDAK ADA email sender terpasang di manapun di `src` (no SMTP/nodemailer/mail service). `backup.config.ts:50` membaca → `notificationEmail`, `notifyOnFailure:true`, tapi tidak ada konsumen yang mengirim email → alert kegagalan backup TIDAK terkirim. Gap baru temuan G2-H UNIT audit. | Medium (silent-failure risk) | Perlu implementasi sender + wiring ke failure path `backup.service.ts` (task terpisah, lihat PROJECT-STATE §6.10). |
+| VI-5 | **BACKUP_ALERT_EMAIL no sender**: env `BACKUP_ALERT_EMAIL` sudah terisi (pandjie@yahoo.com) tapi TIDAK ADA email sender terpasang di manapun di `src` (no SMTP/nodemailer/mail service). `backup.config.ts:50` membaca → `notificationEmail`, `notifyOnFailure:true`, tapi tidak ada konsumen yang mengirim email → alert kegagalan backup TIDAK terkirim. Gap baru temuan G2-H UNIT audit. | Medium (silent-failure risk) | ✅ **RESOLVED (interim)** — ditambah nodemailer SMTP sender (`src/services/mailer.service.ts`) + wiring ke `backup.service.ts` failure path. OWNER HARUS ISI SMTP_USER/APP_PASSWORD di .env; jika tidak ada, log warning dan skip (tidak crash). |
 
 ### VI-E. RESOLVED (G2-H release readiness — 22 Agu 2026)
 - **Shipping CI gap (VI-1) — `e16679d`**: `test:shipping` script + step CI setelah `test:payment` (pola II-6/II-7, MUST pass 0 failure); plus fix hardcoded quota date (`wibDateKey()` dipakai test agar seed key cocok WIB nyata). ✅ RESOLVED.
 - **Backup restore rehearsal (`0d29aaf`) — DITEMUKAN via rehearsal NYATA, bukan cuma dry-run**: `restoreDatabase` pipa `pg_dump --format=custom` (binary) ke `psql` yang TIDAK bisa baca custom format → full restore SELALU gagal. Diganti `pg_restore --clean --if-exists` (idempoten); `pg_terminate_backend` kill-step tetap `psql`. Plus bookkeeping manifest pakai upsert (bukan update) + `backup:create` clean exit (`prisma.$disconnect()` + `process.exit(0)`). Bukti: full restore ke sandbox DB terpisah EXIT 0, row-count + id-checksum orders/order_items/stores/products/customers COCOK sumber, tanpa data loss. ✅ RESOLVED — ini bukti kenapa rehearsal restore penting: dry-run tidak menangkap format mismatch ini.
 - **generalLimiter dead-code (`10be048`)**: `generalLimiter` (15m/1000/IP) sebelumnya didefinisikan tapi TIDAK PERNAH dipasang (dead code). Kini di-mount sebagai global safety net di `index.ts` (setelah body-parser/maintenance, sebelum route; `/api/health` + `/r` dikecualikan). ✅ RESOLVED.
 - **Rate-limiter gaps 11 endpoint publik (`10be048`)**: 11 endpoint publik no-auth tanpa proteksi (`/checkout`, `/payment-proof-upload`, `/action`, `/payment-report`, `/subscribe`, `/unsubscribe`, `/handoff`, `/clear`, `/typing`, `/read`, `/history`) + redirect `/r/:storeId` kini dapat limiter (reuse existing: `orderMutationLimiter`, `conversationLimiter`, `pwaProductsLimiter`). ✅ RESOLVED.
+
+### VI-F. RESOLVED (29 Agu 2026) — Admin password reset mechanism (interim operator-only)
+- **Item [ADMIN-PASSWORD-RESET-MISSING]:** Tidak ada forgot-password / reset-password flow untuk admin accounts. Satu-satunya route reset password yang ada adalah `POST /api/admin/stores/:storeId/reset-password` (`src/routes/admin/stores.ts:252`) yang hanya reset password STORE (PWA/customer-facing), bukan admin. Jika super_admin password hilang, tidak ada recovery path selalu membuat akun baru via bootstrap mode. **Severity: Medium (owner currently has no admin account recovery path).**
+  - **Status:** ✅ **RESOLVED (interim)** — ditambah:
+    - `POST /api/admin/auth/reset-password-operator` — route HTTP yang memungkinkan super_admin reset password admin lain. Mempakai `adminAuthMiddleware` + `requireAdminRole(['super_admin'])`. Semua token admin yang lama direvokasi otomatis.
+    - `scripts/reset-admin-password.ts` — CLI script untuk reset password secara langsung dari VPS (untuk kasus owner fully locked-out). Menggunakan bcrypt 10 rounds, memerlukan konfirmasi manual (atau `--yes` flag).
+  - **Nota:** Ini adalah solusi *interim* yang hanya untuk operator/super_admin. Tidak ada flow self-service email. Full "forgot password" dengan email reset token tetap diperlukan sebagai task terpisah yang diblokir oleh tidak ada infrastructure email-sender. Lihat RAILS.md §6 (email-sender infrastructure NOT DONE).
 
 ---
 
@@ -213,9 +272,12 @@
   - **Konteks:** Temuan dari ADMIN-TENANT-ISOLATION-AUDIT-BASELINE.md Finding 6. Tidak ada caller internal (cron/healthcheck/service-to-service) yang menggunakan route ini — verified via grep seluruh codebase.
   - **Status:** ✅ RESOLVED — commit `ae40461`. `adminAuthMiddleware` ditambahkan ke semua 4 route. GET routes (read-only metrics/config) cukup `adminAuthMiddleware` (any authenticated admin). POST `/:storeId` (mutates engine version untuk seluruh store) ditambahkan `requireAdminRole(['super_admin'])` — konsisten dengan pola `config.ts` PUT/DELETE + `backups.ts` restore/delete yang sama-sama memerlukan super_admin untuk aksi destruktif. Verified via live curl: 401 tanpa auth, 200/403 dengan auth sesuai role.
 
-### IX-B. OPEN (non-blocking, explicitly deferred per owner decision)
-- **Item [ADMIN-STORE-SCOPING]:** Admin tidak punya store-ownership scoping — setiap admin (termasuk super_admin) bisa akses/modifikasi data semua store tanpa filter. Reference: ADMIN-TENANT-ISOLATION-AUDIT-BASELINE.md Finding 1-4. **Status: DEFERRED, revisit if/when a second admin is added.** Admin panel saat ini internal-only (owner's own team, confirmed oleh owner) — membangun RBAC sekarang adalah solving for user yang belum ada. Owner separately setting up Cloudflare Access (infra-level, di luar repo ini) sebagai lapisan tambahan di depan /admin — ini adalah owner's own action, bukan bagian dari commit repo.
-- **Item [ADMIN-PASSWORD-RESET-MISSING]:** Tidak ada forgot-password / reset-password flow untuk admin accounts. Satu-satunya route reset password yang ada adalah `POST /api/admin/stores/:storeId/reset-password` (`src/routes/admin/stores.ts:252`) yang hanya reset password STORE (PWA/customer-facing), bukan admin. Jika super_admin password hilang, tidak ada recovery path selalu membuat akun baru via bootstrap mode. **Severity: Medium (owner currently has no admin account recovery path).** Status: OPEN, perlu implementasi sendiri (task terpisah).
+### IX-B. RESOLVED — admin password reset mechanism (interim operator-only)
+- **Item [ADMIN-PASSWORD-RESET-MISSING]:** Tidak ada forgot-password / reset-password flow untuk admin accounts. Satu-satunya route reset password yang ada adalah `POST /api/admin/stores/:storeId/reset-password` (`src/routes/admin/stores.ts:252`) yang hanya reset password STORE (PWA/customer-facing), bukan admin. Jika super_admin password hilang, tidak ada recovery path selalu membuat akun baru via bootstrap mode. **Severity: Medium (owner currently has no admin account recovery path).**
+  - **Status:** ✅ **RESOLVED (interim solution)** — ditambah:
+    - `POST /api/admin/auth/reset-password-operator` — route HTTP yang memungkinkan super_admin reset password admin lain. Mempakai `adminAuthMiddleware` + `requireAdminRole(['super_admin'])`. Semua token admin yang lama direvokasi otomatis.
+    - `scripts/reset-admin-password.ts` — CLI script untuk reset password secara langsung dari VPS (untuk kasus owner fully locked-out). Menggunakan bcrypt 10 rounds, memerlukan konfirmasi manual (atau `--yes` flag).
+  - **Catatan:** Ini adalah solusi *interim* yang hanya untuk operator/super_admin. Tidak ada flow self-service email. Full "forgot password" dengan email reset token tetap diperlukan sebagai task terpisah yang diblokir oleh tidak ada infrastructure email-sender. Lihat RAILS.md §6 (email-sender infrastructure NOT DONE).
 
 ### IX-C. VERIFIED — no internal caller for engine.ts routes
 - Exhaustive grep `engine/metrics`, `engine/`, `/api/admin/engine` across `src/` dan `apps/dashboard/` mengembalikan **0 result**. Tidak ada cron, healthcheck, atau service-to-service call yang menggunakan route ini. Aman untuk menambahkan auth tanpa breaking internal integration.
