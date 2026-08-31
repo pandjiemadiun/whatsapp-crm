@@ -1,4 +1,4 @@
-# BUG TERBUKA — indeks temuan belum dibereskan (update 30 Agu 2026; +§TENANT-ISOLATION C1/C2 RESOLVED)
+# BUG TERBUKA — indeks temuan belum dibereskan (update 31 Agu 2026; +§MERCHANT-PUSH RESOLVED)
 
 > Daftar **temuan / bug / risiko yang belum dibereskan** sepanjang sesi
 > (P0–P4). Semua referensi ke `STATUS-V2.md`, `RAILS.md`, atau file:src:line
@@ -13,6 +13,8 @@
 > - P2: truth boundary `validateCartOpsAds` di semua titik eksekusi → **RESOLVED**.
 > - P2: eskalasi ke pemilik toko (TASK C1) → **RESOLVED** (commit 718c375).
 > - 9/8 10:45: FLAGSHIP multi-add → **RESOLVED** (fast-path guard).
+> - 31/8: VAPID push covers both customer-side (existing) and merchant-side (new),
+>   scoped correctly per Admin/Merchant terminology → **RESOLVED** (commit 55216e0/1f0c215).
 > - T1 workspace NO-OP → bagian dari P3 (RESOLVED).
 
 ---
