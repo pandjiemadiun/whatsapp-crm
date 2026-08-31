@@ -2,7 +2,7 @@
 
 > **Dokumen ini dibuat untuk onboarding ke project baru (Claude/AI coding agent).**
 > Semua klaim status di bawah diverifikasi terhadap **source code, test, dan git log aktual**
-> di working tree `/home/ubuntu/garuda` pada **2026-08-22** (HEAD `ea1f0c2`). Tidak ada klaim
+> di working tree `/home/ubuntu/garuda` pada **2026-08-31** (HEAD `fc2e6cf`). Tidak ada klaim
 > yang diambil mentah dari roadmap/STATUS lama tanpa cross-check ke kode.
 >
 > **ATURAN RAILS.md BERLAKU:** tidak ada kode yang diubah dalam pembuatan dokumen ini
@@ -10,7 +10,7 @@
 >
 > **⚠️ INSIDEN PROSES (baca §10):** cluster besar (P6-1/P6-2/P6-3, P4-2/P4-3, P8-1/P8-2,
 > P6.4/P6.5, III-1-B hook, III-2-A/B purge, P8-CI-FIX) sudah di-kerjakan & di-push di sesi
-> SEBELUMNYA TANPA dilaporkan real-time dengan bukti RAILS §1.2. Dokumen ini menutup gap
+> SEBELUMNYA TANPA dilaporkan real-time (insiden DOC-SYNC, lihat PROJECT-STATE-REPORT §10.2 + RAILS §6.x POST-HOC). Dokumen ini menutup gap
 > tersebut pasca TASK VERIFY-CLUSTER + DOCS-SYNC 19 Agu 2026. **INSIDEN SERUPA BERULANG di
 > sesi 21 Agu 2026** (cluster G2-G monitoring + shipping-cost full-stack + Store NOT NULL,
 > range `2a93924..2e64c0a`) — dikerjakan & di-push TANPA laporan real-time, ditutup post-hoc
@@ -189,6 +189,21 @@ pelajaran (jangan biarkan pekerjaan besar menggantung uncommitted) tidak hilang.
 | **G2-F** | Checkout/Order/Payment | **SELESAI TOTAL (F1–F6)** — F1 (schema+bugfix) SELESAI, F2 (payment-report/verify) SELESAI, F3 (PWA checkout) SELESAI, F4 (dashboard payment verification UI + `GET /orders/:id/valid-next-states`) SELESAI, F5 (CI coverage audit + golden dataset checkout/payment, mutation-tested) SELESAI, F6 (F6a: paymentRejectReason opsional di payment-verify + UI reject dialog; F6b: endpoint `cod-settle` + halaman dashboard COD terpisah) SELESAI (commit `50d4d25`). F6a/F6b ditemukan sebagai penutup item minor setelah F5 (reject-reason untuk audit + visibilitas COD). COD settlement ke `orderStatus`/fulfillment TETAP DEFERRED (lihat DECISION-COD-SETTLEMENT-DEFERRED.md) |
 | **G2-G** | Realtime + Scale Hardening | **AUDIT BASELINE SELESAI** (`AUDIT-BASELINE-G2-G.md`, `dd20696`); **monitoring dasar SELESAI** (`GET /api/admin/metrics/system`, `b18b6d5`, in-memory single-instance); breakdown sub-fase hardening BELUM diputuskan |
 | **G2-H** | Release Readiness | **PRAKTIS SELESAI** — audit 10-item closure ✅; rate-limiter gaps 11 endpoint publik ✅ (`10be048`); generalLimiter global safety net ✅ (sebelumnya dead code, `10be048`); backup restore rehearsal + fix ✅ (`0d29aaf`); smoke-fase4 Store fixture ✅ (`be8aff4`); SSL/HTTPS ✅ (certbot, expiry 2026-11-05, auto-renew aktif); VAPID/web-push env ✅ (FASE4); `test:shipping` CI ✅ (`e16679d`). **SISA 2 item DEFERRED:** (1) rotate seluruh secret (`VII-A`, DITUNDA sebelum go-live); (2) backup-alert sender — env `BACKUP_ALERT_EMAIL` terisi tapi TIDAK ADA sender terpasang (gap baru, Medium, lihat §6.10) |
+
+### 4.8 🟢 GO-LIVE READINESS (31 Agu 2026) — UPDATED STATUS
+
+| # | Area | Status | Evidence |
+|---|------|--------|----------|
+| 1 | Credential rotation | ⏸️ **DEFERRED** (ditunda sampai sebelum go-live) | Owner decision — secret masih valid di GitHub history lama |
+| 2 | SSL/HTTPS | ✅ **VERIFIED** | certbot, expiry 5 Nov 2026, auto-renew aktif |
+| 3 | Admin password recovery | ✅ **RESOLVED** (interim) | `POST /api/admin/auth/reset-password-operator` (super_admin only, token revocation) + `scripts/reset-admin-password.ts` CLI fallback |
+| 4 | Backup failure alerting | ✅ **RESOLVED** | `src/services/mailer.service.ts` (nodemailer SMTP) wired to `backup.service.ts` failure path. OWNER HARUS ISI SMTP_USER/APP_PASSWORD di .env |
+| 5 | Merchant push notifications | ✅ **LIVE** | Order/payment/message events → real device (Android, FCM 201 response verified). `StorePushSubscription` table, `merchant-push.service.ts`, `push.service.ts` shared helper |
+| 6 | Tenant isolation | ✅ **RE-AUDITED + FIXED** | 30 Aug deliberate re-audit found 2 CRITICAL bugs (cross-tenant message injection via `/api/messages/handle`, unprotected GOWA webhook). Both fixed same day. **Lesson: passing tests ≠ real isolation** — matches historical `actionsRouter` lesson in this file |
+| 7 | pm2 env audit | ✅ **CLEAN** | 2 minor findings: `GITHUB_PAT` + `WEBHOOK_SECRET` unused (cleanup candidates) |
+| 8 | External audit (Qwen) cross-check | ✅ **13/14 CLAIMS FALSE** | gitingest silently dropped `cart-authority.ts`, `action-registry.ts`, `conversation.service.ts` from digest (no warning). 1 claim valid: `message.handler.ts` dead code — now removed (`fc2e6cf`) |
+
+**Key lesson (matches §10.3 actionsRouter precedent):** Third-party audit tools can silently drop critical files from their digest. Always verify the tool's input actually contains the files you care about before trusting OR dismissing findings.
 
 ---
 
@@ -387,7 +402,17 @@ Syarat buka ulang: HANYA kalau ada kebutuhan operasional konkret (misal audit-tr
 lintas kanal, response contract disamakan untuk analytics) — BUKAN alasan "konsistensi arsitektur"
 semata. Belum ada sinyal kebutuhan itu saat ini.
 
-### 6.10 🟡 BACKUP_ALERT_EMAIL terisi tapi TIDAK ADA sender (gap baru, temuan G2-H UNIT audit — 22 Agu 2026)
+### 6.11 🟢 30–31 Agu 2026 — Tenant isolation re-audit + merchant push + dead code removal
+
+- **Tenant isolation re-audit (CRITICAL):** Owner-insisted deliberate re-audit found 2 real bugs:
+  - Cross-tenant message injection via `POST /api/messages/handle` (IDOR) — fixed (`9852477`).
+  - Unprotected GOWA webhook (no middleware + broken encrypted lookup) — fixed (`e0715f8`).
+  - Full regression: 480/480 tests pass. **Lesson: passing tests don't guarantee real isolation.**
+- **Merchant push notifications:** Shipped and verified on real device (FCM 201). Order/payment/message events (`55216e0`, `1f0c215`).
+- **Duplicate phone registration validation:** Pre-check + catch-block mapping (`0c7beb7`).
+- **message.handler.ts removal:** Confirmed dead code (zero callers) via two independent audits. Removed rather than deprecated (`fc2e6cf`).
+- **pm2 env audit:** Clean, 2 minor findings (GITHUB_PAT, WEBHOOK_SECRET unused).
+- **External audit (Qwen) cross-check:** 13/14 claims false (gitingest dropped critical files silently). 1 valid (message.handler.ts).
 
 - **Item:** `BACKUP_ALERT_EMAIL=pandjie@yahoo.com` sudah ditambahkan ke `.env` server (env-only, era `10be048`). Namun `backup.config.ts:50` hanya MEMBACA variabel → `backupConfig.notificationEmail`, dan `notifyOnFailure: true` (default), tapi TIDAK ADA satupun konsumen yang mengirim email: tidak ada SMTP / `nodemailer` / `transporter` / mail service di `src`.
 - **Dampak:** pada kegagalan backup, alert TIDAK akan benar-benar terkirim meski env terisi — silent failure. Ini gap terbuka baru (bukan regression), ditemukan saat audit wiring `BACKUP_ALERT_EMAIL`.

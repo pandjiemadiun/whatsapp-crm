@@ -1464,3 +1464,26 @@ Siapa yang setuju: owner (Panji), AI CLI (Kilo).
   - [ ] Commit source changes
   - [ ] Update `DECISION-CANCEL-ORDER-STATE-MACHINE.md` (amendment for handleCancelOrder → cancelOrder flow)
   - [ ] Push with verified diff stat
+
+---
+
+## §6. Real-time log (30–31 Agu 2026)
+
+### 02:00–05:50 UTC — Tenant isolation re-audit + merchant push + dead code removal
+
+- **Status:** ✅ Implementation complete, verified, pushed
+- **Commits pushed:** `9852477`, `e0715f8`, `0c7beb7`, `55216e0`, `1f0c215`, `fc2e6cf`
+- **Key changes:**
+  - **Tenant isolation re-audit (CRITICAL):** Owner-insisted deliberate re-audit found 2 real bugs:
+    - Cross-tenant message injection via `POST /api/messages/handle` (IDOR) — `processCustomerMessage` upserted conversation by PK alone, ignoring storeId mismatch. Fixed: ownership check BEFORE upsert (throw 403) + `storeId` added to WHERE clause of all internal conversation update/findUnique calls (`9852477`).
+    - Unprotected GOWA webhook — `gowaTrustMiddleware` existed but never mounted; store lookup compared plaintext against encrypted `phoneNumber`. Fixed: mounted middleware (loopback-only) + added `phoneNumberHash` column (HMAC-SHA256) for indexed lookup (`e0715f8`).
+  - **Duplicate phone registration validation:** Pre-check via `phoneNumberHash` + catch-block mapping for 409 vs 400 responses (`0c7beb7`).
+  - **Merchant push notifications:** `StorePushSubscription` table + `push.service.ts` (shared sendPush) + `merchant-push.service.ts` (order/payment/message listeners, dedup against admin socket presence). Dashboard: manifest.json, sw.js, MerchantNotificationPrompt. Verified on real device (FCM 201) (`55216e0`, `1f0c215`).
+  - **message.handler.ts removal:** Confirmed dead code (zero callers) via two independent audits (Qwen external + internal). Removed rather than deprecated-in-place given bypass-pipeline risk (`fc2e6cf`).
+- **Test coverage:** 480/480 regression tests pass (chat 271, golden 37, structured 118, payment 46, shipping 8).
+- **pm2 env audit:** Clean, 2 minor findings (GITHUB_PAT, WEBHOOK_SECRET unused).
+- **External audit (Qwen) cross-check:** 13/14 claims false (gitingest silently dropped `cart-authority.ts`, `action-registry.ts`, `conversation.service.ts` from digest with no warning). 1 valid (message.handler.ts dead code, now removed).
+
+### Lesson learned (matches §10.3 actionsRouter precedent):
+
+Passing tests ≠ real isolation. The tenant-isolation bugs were found via deliberate re-audit AFTER initial "all clear" reports. Third-party audit tools can silently drop critical files from their digest — always verify the tool's input actually contains the files you care about before trusting OR dismissing findings.

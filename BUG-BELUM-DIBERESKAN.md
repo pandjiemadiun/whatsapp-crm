@@ -1,322 +1,244 @@
-# BUG TERBUKA — indeks temuan belum dibereskan (update 31 Agu 2026; +§MERCHANT-PUSH RESOLVED)
+# BUG TERBUKA — indeks temuan belum dibereskan (update 31 Agu 2026)
 
 > Daftar **temuan / bug / risiko yang belum dibereskan** sepanjang sesi
 > (P0–P4). Semua referensi ke `STATUS-V2.md`, `RAILS.md`, atau file:src:line
 > di commit HEAD.
->
-> **Kongsi (1) sudah ditutup oleh kerja P2/P3/P4** — tidak masuk daftar ini
-> agar tidak dobel:
-> - P4.1: `extractAndSaveOrder` (I13 violation, provider drift, I8 gap, no-test)
->   → **RESOLVED** (fungsi+hapus). Lihat `laporan-taskP4-fix.md`.
-> - P3: T1–T4 (workspace persist NO-OP, shape extractedEntities, legacy migrasi,
->   last-write-wins RMW) → **RESOLVED** (commit c164729/3780453/eb74929/099967a/fd08ba3).
-> - P2: truth boundary `validateCartOpsAds` di semua titik eksekusi → **RESOLVED**.
-> - P2: eskalasi ke pemilik toko (TASK C1) → **RESOLVED** (commit 718c375).
-> - 9/8 10:45: FLAGSHIP multi-add → **RESOLVED** (fast-path guard).
-> - 31/8: VAPID push covers both customer-side (existing) and merchant-side (new),
->   scoped correctly per Admin/Merchant terminology → **RESOLVED** (commit 55216e0/1f0c215).
-> - T1 workspace NO-OP → bagian dari P3 (RESOLVED).
 
 ---
 
-## 0. BUG TERATASI (ditemukan saat testing G2-F3, 20 Agu 2026) — interpreter maxTokens truncation
+## 📋 RINGKASAN OPEN ITEMS
 
-- **Gejala:** SETIAP pesan chat balas `"Maaf kak, saya kurang paham. Bisa diulang?"`
-  (dead-end fallback `conversation.service.ts:711`) — chat praktis mati.
-- **Root cause:** model Gemini primary (`gemini-3.6-flash`) memancarkan ~140 "thinking"
-  tokens yang dihitung DALAM kuota `maxOutputTokens`. `interpreter.ts` (`runOneCall`)
-  memakai `maxTokens: 250` → JSON `InterpreterResultV2` ter-potong di tengah objek →
-  `JSON.parse` gagal → `runOneCall` return `null` → Stage 5 dead-end. Gemini tetap
-  HTTP 200 sehingga gateway TIDAK fallback ke Groq.
-- **Fix:** `interpreter.ts` `maxTokens: 250 -> 1024` (selaras `GPT_OSS_MAX_TOKENS_FLOOR`
-  di `groq.adapter.ts`) + `extractJson()` hardening (toleransi markdown fence).
-  di `groq.adapter.ts`) + `extractJson()` hardening (toleransi markdown fence).
-- **Status:** ✅ RESOLVED — commit `81ea8a6` (`fix(chat): interpreter maxTokens 250->1024
-  + extractJson hardening`). Verifikasi E2E via PWA `/message` (balasan normal, bukan
-  dead-end) + 40/40 test pass (interpreter/reasoning-v2/pwa-checkout).
-- **Dampak:** TIDAK ADA customer terdampak — website belum rilis (konteks severity, bukan
-  alasan skip proses). Ditemukan opportunistically saat testing G2-F3; di luar scope
-  TASK G2-F3 asli, tapi genuinely blocking sehingga langsung diperbaiki & diverifikasi
-  lengkap sebelum dilaporkan (exception RAILS §1.4).
+| ID | Deskripsi | Severity |
+|---|---|---|
+| VII-A | Rotate seluruh secret (ditunda sampai sebelum go-live) | High (ditunda) |
+| IX-D | CARTAUTHORITY-VARIANT-GUARD-DUPLICATION refactor | Low |
+| I-2 | Reply resolved terpotong ("adari?") | Low (kosmetik) |
+| III-3 | Tidak ada pre-commit hook / checklist otomatis | Medium |
+| III-6 | Golden dataset invarian I8–I15: masih test unit parsial | Medium |
+| II-4 | Test-data gap golden-dataset Case 1 (seed `woltel`/`brambang`) | Low |
+| II-5 | Test DB shared isolation lemah (row `store-f7140b5c` bocor) | Low (hygiene) |
+| VI-2 | Monitoring single-instance (tidak akurat multi-instance) | Low–Med |
+| III-1 | `dist/` ter-commit + deploy tanpa build otomatis | MITIGASI |
+| GITHUB_PAT | Env var unused (pm2 env audit 31 Agu) | Low (cleanup) |
+| WEBHOOK_SECRET | Env var unused (pm2 env audit 31 Agu) | Low (cleanup) |
 
 ---
 
-## 0A. TENANT ISOLATION — cross-tenant injection + GOWA webhook unprotected (30 Agu 2026) — RESOLVED
+## 🔴 OPEN / IN PROGRESS
 
-> **Incident:** Deliberate re-audit of merchant (Store) tenant isolation found two
-> CRITICAL findings. Both verified via live cross-tenant attack (Store A → Store B)
-> before fix. Admin routes (adminAuthMiddleware) confirmed out of scope — separate
-> auth system, global access by design (owner-approved).
+### High
 
-### C1 — Cross-tenant message injection (IDOR) — RESOLVED
+- **VII-A — Rotate seluruh secret (DITUNDA sampai sebelum GO-LIVE)**
+  - Semua secret yang pernah ada di `.env` `a417632` (ter-expose ke GitHub history lama) WAJIB di-rotate: `DATABASE_URL`, `REDIS_URL`, `GEMINI_API_KEY`, `GROQ_API_KEYS`, `GOWA_BASIC_AUTH_*`, `CLOUDINARY_*`, `BACKUP_ENCRYPTION_KEY`, `WEBHOOK_SECRET`, `STORAGE_PROVIDER`/`R2_*`, `FIELD_ENCRYPTION_KEY`, `CLOUDFLARE_WORKER_*`, `PUBLIC_API_URL`.
+  - **Kecuali:** `RAJAONGKIR_API_KEY` — TIDAK PERNAH ter-expose (baru ditambahkan owner SETELAH purge). Tidak perlu di-rotate.
+  - Status: 🟡 **OPEN / DITUNDA** — per keputusan owner, rotate ditunda sampai SEBELUM GO-LIVE (website belum rilis, belum ada trafik nyata). BUKAN diabaikan — wajib sebelum produksi bener-bener live. Risk: secret masih valid di GitHub history lama (sudah di-purge dari working tree & remote SEKARANG, tapi snapshot lama sudah pernah keluar).
 
-- **Route:** `POST /api/messages/handle` (merchant-facing, authMiddleware)
-- **Root cause:** `processCustomerMessage` (`conversation.service.ts:73`) used
-  `prisma.conversation.upsert({ where: { id: conversationId } })` keyed by PK alone.
-  If a conversation already existed under a DIFFERENT storeId, the upsert matched
-  by PK and silently processed the message in the wrong tenant's context.
-- **Impact:** Any merchant could inject messages into any other merchant's WhatsApp
-  conversation by supplying the victim's `conversationId`. Verified: injected message
-  appeared in victim's conversation history and triggered AI reply to victim's customer.
-- **Fix:**
-  - Ownership check BEFORE upsert: if conversation exists and storeId mismatches,
-    throw `ApiError(403)`.
-  - Added `storeId` to WHERE clause of all internal conversation
-    update/findUnique calls (defense-in-depth): `updateConversationStats`,
-    `markHumanTakeover`, `getConversationWithContext`, `updateConversationStatus`,
-    `findByIdWithHistory`.
-  - Applied same pattern to cross-cutting services: `fallback.service.ts`,
-    `handoff.service.ts`, `message-processor.service.ts`, `scheduleFollowUps.ts`.
-  - Added `ApiError` handling in `/api/messages/handle` route to return 403.
-- **Status:** ✅ RESOLVED — commit `9852477`. Verified: cross-tenant injection returns
-  403; same-store messages still work; 480 regression tests pass.
+### Medium
 
-### C2 — GOWA webhook completely unprotected — RESOLVED
+- **III-3 — Tidak ada pre-commit hook / checklist otomatis (tsc, build, test)**
+  - Lokasi: RAILS §1.164.
+  - Status: Medium. Manual tiap kali. Mitigasi utama sekarang adalah post-merge hook (III-1-B) + kebiasaan `git status` menyeluruh + `npm run build` sebelum klaim selesai.
 
-- **Route:** `POST /api/webhooks/gowa` (non-session, highest-risk path)
-- **Root cause (a):** `gowaTrustMiddleware` (`src/middleware/gowa-trust.ts`) existed
-  but was never mounted on the route — endpoint was fully open to external forgery.
-- **Root cause (b):** Store lookup compared plaintext `botNumberRaw` against
-  `phoneNumber`, but `phoneNumber` is encrypted at rest (AES-256-GCM, random IV).
-  Lookup always failed ("No store found for bot number") — accidentally preventing
-  exploitation, but would become critical if encryption were ever fixed.
-- **Impact:** Anyone who could reach the API could inject messages into any store's
-  conversation by supplying the store's phone number as `device_id`. No auth, no
-  IP restriction.
-- **Fix:**
-  - (a) Mounted `gowaTrustMiddleware` on `/api/webhooks/gowa` (loopback-only).
-  - (b) Added `phoneNumberHash` column (deterministic HMAC-SHA256 via existing
-    `hashField` helper) for indexed lookup. Updated all store write paths (create +
-    profile updates) to set the hash. GOWA webhook now looks up by hash.
-- **Status:** ✅ RESOLVED — commit `e0715f8`. Verified: external requests rejected by
-  middleware; legitimate loopback requests find correct store by hash; unknown phones
-  correctly rejected.
+- **III-6 — Golden dataset invarian I8–I15: masih test unit parsial, bukan 50-case permanen**
+  - Lokasi: STATUS-V2:44; RAILS "golden dataset + test invarian permanen I8-I15 — baru test unit parsial".
+  - Status: Medium (regression coverage). Next yang direncakan sejak 9/8.
 
----
+- **III-1 — `dist/` ter-commit + deploy tanpa build otomatis** (MITIGASI, bukan open)
+  - Root cause: pm2 jalan `dist/index.js`, deploy produksi bergantung `dist/` ter-commit tanpa build otomatis.
+  - Status: **MITIGASI** (III-1-B, commit `bcddfcd`, 19 Agu 2026): git hook `post-merge` auto-build terpasang. `dist/` MASIH ter-track di git (belum di-untrack) karena untrack ditunda sampai hook terbukti handal di deploy nyata. Pre-commit checklist (§1.164) tetap belum ada; mitigasi utama sekarang adalah post-merge hook + kebiasaan `git status` menyeluruh + `npm run build` sebelum klaim selesai.
 
-| ID | Bug | Lokasi | Severity | Note |
-|----|-----|--------|----------|------|
-| I-1 | **Qty 0 tampil di receipt** ("Brambang (0x)") | STATUS-V2:20; composer/Receipt | ~~Medium~~ ✅ **RESOLVED (STALE DOC, 19 Agu 2026)** | Verifikasi ulang source: SEMUA titik render cart/order ke customer SUDAH filter `qty<=0` — bukan bug lagi. (1) `fallback.service.ts:702` (`FIX B`, commit `f4ab025`) filter sebelum render `Rincian` `(qx)` di :730. (2) `conversation.service.ts:257` (`visibleCart`) + `renderCartSummary` filter `:1006` (commit `daa0d43` = P5.1 I-1a). (3) `composer-v2.ts:81` `displayQty = qty>0?qty:1` (P5.1 I-1a, commit `daa0d43`). Tidak ada perubahan kode — murni display-layer sudah beres; dokumen stale. |
-| I-2 | **Reply resolved terpotong** ("adari?") | STATUS-V2:21 (composer-v2) | Low (kosmetik) | Balasan terpotong di akhir; tidak memblok proses. |
-| I-3 | **`activeOrder`/`tryTotal` tidak diskriminatif `draft` vs `pending`** — dapat memilih baris `pending` (dari `createOrder`, harga dari LLM/ops) jadi order aktif, mirip pola phantom yang sama seperti `extractAndSaveOrder`. | conversation.service.ts:829 (activeOrder: `orderBy createdAt desc, notIn shipped/delivered/cancelled`); fallback.service.ts:649-661 (`tryTotal`/`lastOrder` fallback) | High (bisa double-count / pick stale) | **Satu-satunya temuan P4 yang masih relekan** setelah `extractAndSaveOrder` dihapus — sebab `createOrder` (:393) masih menulis `orderStatus:'pending'` (`items` price bisa null/lepas DB pada jalu LLM). Perlu: `activeOrder`/`tryTotal` eksklusif ambil `draft` (atau filter `draft` eksplisit). | ✅ **RESOLVED (P4.2, 11 Agu 2026)** — `activeOrder` dan `tryTotal`/`lastOrder` fallback sekarang query `draft` eksklusif dulu, fallback ke `pending`+lain HANYA bila tidak ada draft. Verifikasi: createOrder hanya dipanggil dari test, harganya valid DB (bukan phantom). Plus perbaiki bug pre-existing `JSON.parse(lastOrder.items as string)` (Prisma Json → JS array). Manual test: draft@36000 + pending@24000 → "total belanja" jawab Rp 36.000 (draft). |
+### Low
+
+- **IX-D — CARTAUTHORITY-VARIANT-GUARD-DUPLICATION (refactor kapan saja)**
+  - Guard `hasVariants && !variantId` ada di 2 tempat: (1) `cart-authority.ts` `resolvePriceAndStock` (single domain authority, commit `0425f8d`) dan (2) `action-registry.ts` `handleAddToCart` (~line 712, handler-layer defense-in-depth). Kedua guard KONSISTEN — sama-sama throw `ErrorCodes.VARIANT_REQUIRED` dengan `name: 'CartInvariantError'`. Tidak ada kontradiksi. Belum di-DRY jadi 1 helper function.
+  - Status: OPEN — refactor kapan saja kalau ada siklus maintenance CartAuthority. Tidak blocking.
+
+- **I-2 — Reply resolved terpotong ("adari?")**
+  - Lokasi: STATUS-V2:21 (composer-v2).
+  - Status: Low (kosmetik). Balasan terpotong di akhir; tidak memblok proses.
+
+- **II-4 — Test-data gap golden-dataset Case 1**
+  - Seed `store-golden-test` tidak punya `woltel`/`brambang`, hanya `beras`. Di bawah validasi DB (P2) produk tak ada diskipping → case "pass" lama jadi "fail".
+  - Lokasi: golden-dataset.test.ts:303; BASE_PRODUCTS.
+  - Status: Low (test-data, bukan logic). Owner-flagged 10 Agu: "pemilik putuskan" — butuh `woltel`/`brambang` ditambah ke seed atau BASE_PRODUCTS.
+
+- **II-5 — Test DB shared isolation lemah (row `ActionIdempotency` bocor lintas file)**
+  - Kasus nyata: `structured-actions.test.ts:1039` (P6.3.2) query `findMany({ where: { actionType: 'CANCEL_ORDER' } })` TANPA filter `storeId` → ketemu row asing `storeId='store-f7140b5c'` → false negative. Diselesaikan di P8-2 dengan scope assertion ke `storeId` file sendiri (commit `dd7e7f2`), TAPI ini cuma penambal sempit.
+  - Status: 🟡 **AUDITED — 0 assertion rawan ditemukan** (full-scan `src/tests/`, 19 Agu 2026). Root cause asli (cleanup per-prefix, row lintas-file survive) TETAP ADA secara teknis, TAPI currently harmless karena SELURUH assertion sekarang ter-scope `storeId`/`conversationId`/composite-unique. Downgrade ke **hygiene debt**: re-audit kalau ada file test BARU. JANGAN hapus row `store-f7140b5c` manual — itu milik test flow lain / canary.
+
+- **VI-2 — Monitoring single-instance**
+  - `/api/admin/metrics/system` in-memory → TIDAK akurat di multi-instance pm2.
+  - Status: Low–Med. Gap diketahui; aman untuk single-instance saat ini.
+
+- **GITHUB_PAT — Env var unused**
+  - Env var `GITHUB_PAT` ada di .env dan pm2 env, TIDAK PERNAH dibaca oleh code (pm2 env audit 31 Agu 2026).
+  - Status: Low (cleanup candidate). Tidak menyebabkan bug.
+
+- **WEBHOOK_SECRET — Env var unused**
+  - Env var `WEBHOOK_SECRET` ada di .env dan pm2 env, TIDAK PERNAH dibaca oleh code. Webhook secrets sekarang per-store di DB (pm2 env audit 31 Agu 2026).
+  - Status: Low (cleanup candidate). Tidak menyebabkan bug.
 
 ---
 
-## II. TEST / CI (gagal, blocker kualitas)
+## ⏸️ DEFERRED (deliberate, not a bug)
 
-| ID | Bug | Lokasi | Severity | Note |
-|----|-----|--------|----------|------|
-| II-1 | **reasoning-v2 test outdated** — kasus "Validator reject terminal (low confidence) → fallback, llmCalls=1, JANGAN retry" ekspektasi `fallback_reasoning_failed` tapi dapat `reasoned`. | reasoning-v2.test.ts:316; reasoning.ts:328-338 | High (1 failed test, part of baseline) | STATUS-V2:22. Awalnya test ekspektasi `fallback_reasoning_failed` tapi code return `reasoned` — ini **stale test assertion, BUKAN code bug**. ✅ **RESOLVED** — code `reasoning.ts:328-338` SUDAH return `reasoned` (outcome `reasoned`, `plannedActs=[]`, step `clarification_trigger`) untuk terminal I-V2-6 sejak commit `f4ab025` (8 Agu 2026, "feat(chat): engine v2 canary - storeId fix, resolved handler, few-shot multi-add, e2e tests + STATUS") yang MEMANG menambahkan blok `clarification_trigger` tersebut. Assertion test diperbaiki ke `reasoned` di commit `4fc6730` (15 Agu 2026, "fix(pwa): resolve 5 critical chat UI bugs") — commit itu HANYA mengubah assertion test + komentar doc, TIDAK ada perubahan logic code (`git show 4fc6730 -- reasoning.ts` hanya ubah komentar). Test deterministik PASS (bukan flaky): re-run `npx tsx --test reasoning-v2.test.ts` → "Validator reject terminal I-V2-6 (low selection confidence) → clarification_trigger ... ✔", 0 failure. Correction 20 Agu 2026 (G2-F2-DOCS-CORRECT): FIX-B SALAH simpulkan "FLAKY / TETAP OPEN" — saat FIX-B (20 Agu) test sudah assert `reasoned` (sudah di-fix di `4fc6730`, 15 Agu) sehingga deterministik PASS; tidak ada keterlibatan `container.ts:38` dan tidak ada flakiness. Penyebab awal = stale test assertion (sudah tertutup `4fc6730`), code tidak pernah rusak. |
-| II-2 | **engine-config-v2 suite gagal load** (STALE) — dulu laporkan `ReferenceError: Cannot access 'redisAdapter' before initialization` di `container.ts:38`. | container.ts:38; engine-config-v2.test.ts | ~~High~~ ✅ **RESOLVED (STALE DOC, 19 Agu 2026)** | Audit read-only: `engine-config-v2.test.ts` LULUS **6/6** konsisten (di-run 6x, full `test:chat` **267/267** tiap kali). TDZ `container.ts:38` **TIDAK direproduksi ulang**. Root cause dulu tidak bisa dikonfirmasi ulang; cycle import `container.ts`↔`cloudinary/r2/gowa.adapter.ts` tetap ada di source tapi benign (semua akses `adapters.` di dalam method, bukan top-level → tidak TDZ). Lihat III-10. — ✅ **RESOLVED** — root cause sudah ditangani FIX-5 (commit `6385322`, III-10, cycle import `container.ts`↔adapter diputus). Correction 20 Agu 2026: FIX-B sempat salah simpulkan "flaky" karena grep scope tidak mencakup file adapter yang sebenarnya diubah. |
-| II-3 | **Test bug golden-dataset Case B3-b** — `assert.equal` (strict `===`) pada array `audit.stagesReached`, selalu gagal (reference inequality). | golden-dataset.test.ts:726 | Low | PRE-EXISTING (commit HEAD 2ab32ef). Owner: "skip (b), jangan fix". |
-| II-4 | **Test-data gap golden-dataset Case 1** — seed `store-golden-test` tidak punya `woltel`/`brambang`, hanya `beras`. Di bawah validasi DB (P2) produk tak ada diskipping → case "pass" lama jadi "fail". | golden-dataset.test.ts:303; BASE_PRODUCTS | Low (test-data, bukan logic) | Owner-flagged 10 Agu: "pemilikputuskan" — butuh `woltel`/`brambang` ditambah ke seed atau BASE_PRODUCTS. |
-| II-5 | **Test DB shared / weak isolation — row `ActionIdempotency` dari auth.ts registration flow bocor ke assertion test lain** (P8-2). Kasus nyata: `structured-actions.test.ts:1039` (P6.3.2) query `findMany({ where: { actionType: 'CANCEL_ORDER' } })` TANPA filter `storeId` → ketemu row asing `storeId='store-f7140b5c'` (pattern `store-${crypto.randomUUID().slice(0,8)}` dari `src/routes/auth.ts:31`) → false negative (dianggap handler bikin record padahal handler benar: `executeAction` sudah `safeParse` sebelum handler/claim). Diselesaikan di P8-2 dengan scope assertion ke `storeId` file sendiri (commit `dd7e7f2`), TAPI ini cuma penambal sempit. | structured-actions.test.ts:1038-1039 (sebelum fix); src/routes/auth.ts:31; BUG-BELUM-DIBERESKAN II-5 | 🟡 **AUDITED — 0 assertion rawan ditemukan** (full-scan `src/tests/`, 19 Agu 2026). Root cause asli (cleanup per-prefix, row lintas-file `store-f7140b5c` survive) **TETAP ADA** secara teknis, TAPI currently harmless karena SELURUH assertion `actionIdempotency`/`order`/`orderItem` sekarang ter-scope `storeId` / `conversationId` / composite-unique (`storeId_customerId_actionType_actionId`). Downgrade dari "follow-up task terpisah" → **hygiene debt**: re-audit kalau ada file test BARU yang query `actionIdempotency`/`order` tanpa scope eksplisit. JANGAN hapus row `store-f7140b5c` manual — itu milik test flow lain / canary. |
-| II-6 | **P8 CI gate tidak men-cover structured-actions suite** — `.github/workflows/test.yml` cuma jalankan `test:chat` + `test:golden`; `structured-actions*.test.ts` (ADD/REMOVE/UPDATE/CANCEL/CONTACT_ADMIN + P0-P5 foundation, 115 test) TIDAK ter-cover CI → regresi cluster bisa lolos tidak terdeteksi (pola masalah P6 lama: golden dataset dulu juga begini sebelum P6.3). | `.github/workflows/test.yml`; task STATUS-SYNC 19 Agu 2026 | High (CI gap) | ✅ **RESOLVED (P8-CI-FIX, commit `c6be2d8`, 19 Agu 2026)** — `apps/api/package.json` tambah script `test:structured` (glob `src/tests/structured-actions*.test.ts`); `.github/workflows/test.yml` tambah step `Run test:structured` SETELAH `test:golden` (MUST pass, 0 failure). Verifikasi lokal: `npm run test:structured` → 115 tests / 7 suites pass. CI sekarang gate penuh: test:chat (baseline-tolerant) + test:golden + test:structured. |
-| II-7 | **G2-F test suites TIDAK ter-cover CI** — `payment.test.ts` (G2-F2, `src/business/tests/`), `pwa-checkout.test.ts` (G2-F3), `payment-verify-routes.e2e.test.ts` (G2-F4) TIDAK dijalankan CI sama sekali sejak dibuat: tidak masuk list explicit `test:golden`, tidak match glob `test:structured` (`structured-actions*`), dan `test:chat` (jest) hanya cover `src/services/chat/**`. Seluruh cluster fitur payment/checkout (F2+F3+F4) bisa regresi tanpa CI merah — pola sama persis II-6 / P8-CI-FIX. | `apps/api/package.json`; `.github/workflows/test.yml`; `src/business/tests/payment.test.ts`; `src/tests/pwa-checkout.test.ts`; `src/tests/payment-verify-routes.e2e.test.ts` | High (CI gap) | ✅ **RESOLVED (G2-F5, commit `e293040`, 20 Agu 2026)** — `apps/api/package.json` tambah script `test:payment` (list explicit 4 file: `payment.test.ts` + `pwa-checkout.test.ts` + `payment-verify-routes.e2e.test.ts` + `golden-payment.e2e.test.ts`); `.github/workflows/test.yml` tambah step `Run test:payment` SETELAH `Run test:structured` (MUST pass, 0 failure). Durasi gap: F2 ~4h28m (`ebc4637`, 01:46 UTC), F3 ~1h09m (`16a954b`, 05:05 UTC), F4 ~0h13m (`ed41e0c`, 06:02 UTC) — semua 20 Agu 2026. Verifikasi lokal full sequence: test:chat 270/270, test:golden 26/26, test:structured 115/115, test:payment 30/30 (exit 0 semua). |
+- **VII-A — Rotate seluruh secret** — ditunda sampai sebelum go-live (keputusan owner, lihat High section).
+- **WA convergence ke Action Registry** — DITUTUP, TIDAK DIPERLUKAN (22 Agu 2026). Keputusan owner: WA TIDAK akan dikonvergensi ke Action Registry/typed action contract. Action Registry didesain untuk aksi yang SUDAH diketahui tanpa interpretasi (tap tombol UI) — WA SELALU free-text dan SELALU butuh LLM. Proteksi yang WA butuhkan SUDAH ADA (idempotency lock P7 + truth boundary P2/I13). Lihat RAILS.md §6.9.
+- **VI-3 — RajaOngkir/Komerce dependency risk** — caching hasil cost (Redis 7d) + quota guard. Risiko ban disengaja diterima owner; interface swap-able. Low (owner-accepted).
 
 ---
 
-## III. INFRA / KEANDALAN / HYGIENE (bukan bug user langsung, tapi risk)
+## ✅ RESOLVED (archive)
 
-| ID | Risiko / Bug | Lokasi | Severity | Note |
-|----|--------------|--------|----------|------|
-| III-1 | **`dist/` ter-commit + deploy tanpa build otomatis** — stale `dist` bisa jalan di produksi. | RAILS §1.158; ecosystem.config.js:6 (`script:'dist/index.js'`); commit 5f502d1 (cleanup orphan dist) | High (infra) → **MITIGASI** | ✅ **MITIGASI (III-1-B, commit `bcddfcd`, 19 Agu 2026):** git hook `post-merge` auto-build terpasang (jalankan `npm run build` setelah merge/pull sehingga `dist/` selalu sync dengan source — lihat `RAILS.md` §4.1). `dist/` MASIH ter-track di git (belum di-untrack) karena untrack ditunda sampai hook terbukti handal di deploy nyata (VPS `vps3541799`) — jangan `git rm --cached` sembarangan sebelum yakin. Pre-commit checklist (§1.164) tetap belum ada; mitigasi utama sekarang adalah post-merge hook + kebiasaan `git status` menyeluruh + `npm run build` sebelum klaim selesai. |
-| III-2 | **`logs/*.log` ter-track di git** — berisiko data WA customer/nomor terlibat commit. | apps/api/logs/*.log; RAILS §1.160 | ~~High (keamanan)~~ ✅ Fase A + Fase B SELESAI (SHA `469804a`→`73f607b`; backup `/home/ubuntu/backups/garuda-backup-20260819.bundle`) | Sudah di-exclude + di-purge dari history. |
-| III-3 | **Tidak ada pre-commit hook / checklist otomatis** (tsc, build, test). | RAILS §1.164 | Medium | Manual tiap kali. |
-| III-4 | **P3 T5: fallback tier overlap** (v1↔v2↔shadow). | STATUS-V2:199-200 | ✅ **RESOLVED (FIX-3, 20 Agu 2026, commit `5e7ef42` — lihat git log)** | T5 asli (overlap `extractedEntities`) bukan masalah; intent-tier overlap V1 ditutup B3/B4. Sisa (`saveDiscussedItems` RMW polos) DITUTUP: sekarang pakai `atomicCasExtractedEntities` (P3.4 pola, CAS `updatedAt` + retry) — `fallback.service.ts` `saveDiscussedItems`. Race test 10/10 (bothSaved=10/10). §V (a) `trySop` `order_status` sudah dikerjakan di FIX-2 (RESOLVED). |
-| III-5 | **Race lastWrite-wins `appendMessage` lastMessages**. | STATUS-V2:200 | ✅ **RESOLVED (FIX-4, 20 Agu 2026, commit `353e883` — lihat git log)** | `appendMessage` (`conversation-context.service.ts`) sekarang pakai `atomicCasMessages` (P3.4 pola, CAS `updatedAt` + retry) — race RMW `lastMessages` tertutup. History durabel tetap aman (`conversation.service.ts:1246`). Race test 10/10 (noLost=10/10). RISK LOW (kualitas konteks, bukan data loss), tertutup. |
-| III-6 | **Golden dataset invarian I8–I15: masih test unit parsial**, bukan 50-case permanen. | STATUS-V2:44; RAILS "golden dataset + test invarian permanen I8-I15 — baru test unit parsial" | Medium (regression coverage) | Next yang direncakan sejak 9/8. |
-| III-7 | **I11: kamus slang normalizer** (`toralin`→`total`) typo lolos ke tier total. | STATUS-V2:42 (normalizer.ts) | ✅ **RESOLVED (FIX-1, 19 Agu 2026, commit `e6c7157` — lihat git log)** | Klaim literal STALE (sudah di dict+test). Edge case case-sensitivity DITUTUP: lookup typo sekarang lowercase (`normalizer.ts:153`), test baru `"Toralin brp"`→`"total berapa"` (`normalizer.test.ts`). RISK LOW, tertutup. |
-| III-8 | **I12: guard nama produk di normalizer**. | STATUS-V2:43 | ✅ **RESOLVED (FIX-1, 19 Agu 2026, commit `e6c7157` — lihat git log)** | Guard `fuzzyMatchProduct` + lookup typo sekarang case-insensitive; TAMBAH multi-word product guard (frasa utuh di-guard, tidak dimutasi). Test baru `normalize('ada Ready Pack',['Ready Pack'])`→`'ada Ready Pack'`. Caller `conversation.service.ts:616` aman. RISK LOW–MED, tertutup. |
-| III-9 | **`LEASE_FINAL_MS = 750` (action-registry.ts:22) adalah 750 MILIDETIK, bukan 750 detik** — kontrak PROJECT-CONTRACT-STRUCTURED-ACTIONS.md §6A.5 menargetkan lease 30–60 detik. Mismatch kemungkinan warisan implementasi P0 lama; ditemukan saat baca line untuk audit idempotency P7. Dampak: lease recovery claim macet terlalu singkat (750ms) → concurrency tinggi bisa claim ganda dalam jendela sempit, atau recovery CLAIMED terlalu agresif. **DI LUAR SCOPE P7** (RAILS §1.4) — jangan diperbaiki di P7. | apps/api/src/business/action-registry.ts:22; DOCS/CONTRACT/PROJECT-CONTRACT-STRUCTURED-ACTIONS.md §6A.5 | Low–Medium (idempotency edge) | ✅ **RESOLVED** — `LEASE_FINAL_MS` 750ms→30000ms (30s), owner-decided interim value sesuai batas bawah kontrak §6A.5 (III-9, 19 Agu 2026). Belum berbasis pengukuran nyata (tidak ada benchmark p99 `executeOps()` di repo) — kalau nanti ada data production, boleh dikoreksi berbasis bukti, bukan sekarang. |
-| III-10 | **Cycle import `container.ts` ↔ 3 adapter** (latent, currently benign). | container.ts:5-7; cloudinary.adapter.ts; r2.adapter.ts; gowa.adapter.ts | Low (latent) | ✅ **RESOLVED (FIX-5, 20 Agu 2026, commit `6385322` — lihat git log)** — cycle DIPUTUS dari sisi adapter: `import { adapters } from '../container.js'` di-ubah jadi dynamic `await import('../container.js')` di dalam method (`getAdapters()`), pola sama seperti `engine-config.ts:getRedis()`. `container.ts` tetap static (tidak diubah). `test:chat` 6x konsisten 270/270 — tak ada regresi load-order. Correction 20 Agu 2026 (G2-F2-DOCS-CORRECT): hash `60eb1f3` di entri lama adalah stale/dangling; hash benar di `main` adalah `6385322`. |
+### Sesi 30–31 Agu 2026
+
+- **C1 — Cross-tenant message injection (IDOR)** — RESOLVED
+  - Route: `POST /api/messages/handle` (merchant-facing, authMiddleware).
+  - Root cause: `processCustomerMessage` (`conversation.service.ts:73`) used `prisma.conversation.upsert({ where: { id: conversationId } })` keyed by PK alone. If a conversation already existed under a DIFFERENT storeId, the upsert matched by PK and silently processed the message in the wrong tenant's context.
+  - Impact: Any merchant could inject messages into any other merchant's WhatsApp conversation by supplying the victim's `conversationId`. Verified: injected message appeared in victim's conversation history and triggered AI reply to victim's customer.
+  - Fix: Ownership check BEFORE upsert (throw `ApiError(403)`). Added `storeId` to WHERE clause of all internal conversation update/findUnique calls. Applied same pattern to cross-cutting services. Added `ApiError` handling in `/api/messages/handle` route.
+  - Status: ✅ RESOLVED — commit `9852477`. Verified: cross-tenant injection returns 403; same-store messages still work; 480 regression tests pass.
+
+- **C2 — GOWA webhook completely unprotected** — RESOLVED
+  - Route: `POST /api/webhooks/gowa` (non-session, highest-risk path).
+  - Root cause (a): `gowaTrustMiddleware` (`src/middleware/gowa-trust.ts`) existed but was never mounted. Root cause (b): Store lookup compared plaintext against encrypted `phoneNumber` (AES-256-GCM, random IV) — lookup always failed.
+  - Fix: (a) Mounted `gowaTrustMiddleware` on `/api/webhooks/gowa` (loopback-only). (b) Added `phoneNumberHash` column (HMAC-SHA256) for indexed lookup. Updated all store write paths.
+  - Status: ✅ RESOLVED — commit `e0715f8`. Verified: external requests rejected; legitimate loopback requests find correct store.
+
+- **Merchant-side push notifications** — RESOLVED
+  - New `StorePushSubscription` table (multi-device per store, FK-scoped). `push.service.ts` (shared sendPush + ensureVapidConfigured). `merchant-push.service.ts`: listeners for `order.created`, `order.payment_verification_pending`, `message.created` (customer→admin). Dedupes against admin socket presence. Explicit storeId assertion before each send.
+  - Dashboard: manifest.json, sw.js, MerchantNotificationPrompt component.
+  - Status: ✅ RESOLVED — commits `55216e0`, `1f0c215`. Verified on real device (Android, FCM 201 response).
+
+- **Duplicate phone registration validation** — RESOLVED
+  - Pre-check: compute `phoneNumberHash` before insert, reject with 409 "Nomor HP sudah terdaftar" if already registered. Catch-block distinguishes phone vs slug vs email conflicts.
+  - Status: ✅ RESOLVED — commit `0c7beb7`.
+
+- **message.handler.ts dead code removal** — RESOLVED
+  - File `apps/api/src/business/message.handler.ts` (committed 52976b4, 18 Aug) was confirmed dead code via two independent audits (Qwen external + internal verification). Zero importers across src + tests. Structurally dangerous if ever wired in (calls `adapters.llm.chat()` directly, bypasses entire pipeline). Removed rather than deprecated-in-place.
+  - Status: ✅ RESOLVED — commit `fc2e6cf`.
+
+- **pm2 env audit** — clean, 2 minor findings flagged (GITHUB_PAT, WEBHOOK_SECRET unused).
+
+- **Qwen external audit cross-check** — 13/14 claims false (gitingest silently dropped cart-authority.ts, action-registry.ts, conversation.service.ts from digest with no warning). 1 claim valid (message.handler.ts dead code, now removed). Lesson: verify third-party audit tool inputs contain critical files before trusting/dismissing findings.
+
+- **Qwen external audit — A1/A2/A3/A4 verification** — all STALE CLAIMS:
+  - A1 (BUG-12 finalizeDraftOrder missing storeId): `cart-authority.ts:466` includes `storeId` in WHERE.
+  - A2 (BUG-13 raw status bypass): all status changes go through `transitionOrder()` (`order-transition.ts:8-10` single source of truth).
+  - A3 (RACE-03 stock race): atomic CAS `updateMany({ where: { stock: { gte: qty } }, decrement })` confirmed at `cart-authority.ts:507-510` and `521-524`.
+  - A4 (BUG-11 no stock validation): stock validated BEFORE finalization at `cart-authority.ts:479-496`.
+
+- **Qwen external audit — B1-B10 verification** — all PASS (confirmed fixed):
+  - B1 (BUG-01 V2 memory): `updateExtractedEntities` uses `atomicCas` + takes `ExtractedEntity[]` (not WorkspaceV2 shape).
+  - B2 (BUG-02 extractAndSaveOrder): removed (0 results).
+  - B3 (BUG-03/04 qty<=0): `fallback.service.ts:717` filters before subtotal.
+  - B4 (BUG-06/07/08/09 fallback fixes): all present.
+  - B5 (BUG-14 cart dual representation): CartAuthority single source.
+  - B6 (RACE-01/02 atomicCas + V2→V1 guard): atomicCas + canonical mirror pattern.
+  - B7 (RACE-04 fallback tier writes): `atomicCasExtractedEntities` (canonical writer only).
+  - B8 (AMB-02 engine.ts auth): `adminAuthMiddleware` + `requireAdminRole`.
+  - B9 (UNFINISHED-04 dist tracked): deliberate, logs clean.
+  - B10 (UNFINISHED-09 test failures): reasoning-v2 13/13 pass, engine-config-v2 6/6 pass.
+
+- **Qwen external audit — C1-C4 verification**:
+  - C1 (ORPHANS): modifyCart/syncCartStateToDraftOrder ACTIVE; api_new.ts/adminApi_new.ts don't exist; AIProviderManager ACTIVE; message.handler.ts was dead code (now removed).
+  - C2 (ORPHAN-06 dashboard): handleExport/ConfirmDialog/confirmDelete don't exist in AuditLogViewer.tsx/PlatformConfig.tsx.
+  - C3 (AMB-05 GOWA protection): only `gowaTrustMiddleware` (IP restriction) active. HMAC explicitly NOT implemented (owner decision D3 HOLD).
+  - C4 (UNFINISHED-02/03/05/06): all still open as expected.
+
+### Sesi 29 Agu 2026
+
+- **I-3 — activeOrder/tryTotal tidak diskriminatif draft vs pending** — RESOLVED (P4.2, 11 Agu 2026)
+  - `activeOrder` dan `tryTotal`/`lastOrder` fallback sekarang query `draft` eksklusif dulu, fallback ke `pending`+lain HANYA bila tidak ada draft. Plus perbaiki bug pre-existing `JSON.parse(lastOrder.items as string)`.
+
+- **PV-P2c full stack — WA variant support** — RESOLVED
+  - TEXT (`71ba429`): inquiry `hasVariants` redirect ke storefront. LLM-A (`a454ec1`): skema LLM `variant` = deskriptif teks. LLM-B (`ba2acf5`): `CartAuthority.resolveVariantByLabel` (DB-driven). E2E live-proven.
+
+- **Stock Integrity Fix (PV-P1-08)** — RESOLVED
+  - `cart-authority.checkout()`: atomic decrement via `updateMany` CAS (`stock >= qty`), `autoCancelAt` timestamped. `order.service.cancelOrder()`: stock restore. `scheduleAutoCancel.ts`: 15-min cron.
+
+- **Tenant Isolation Fix** — RESOLVED
+  - GET `/api/products/:productId` dihapus (unscoped). Penggunaan: 0 caller, diganti `/api/pwa/:storeSlug/products/:productId`.
+
+- **SSL/HTTPS** — VERIFIED (certbot, expiry 5 Nov 2026, auto-renew aktif).
+
+### Sesi 28 Agu 2026
+
+- **Admin security cluster** — RESOLVED
+  - IX-A: public registration exposure (`b64babf`) + engine.ts unauthenticated routes (`ae40461`). Bootstrap-once gating + `adminAuthMiddleware` + `requireAdminRole`.
+  - IX-B: admin password reset mechanism (interim operator-only) — `POST /api/admin/auth/reset-password-operator` + `scripts/reset-admin-password.ts`.
+  - IX-C: no internal caller for engine.ts routes (verified).
+
+### Sesi 27 Agu 2026
+
+- **PV-P2 variant support** — RESOLVED
+  - VIII-A: `executeOps` price bug + `resolvePriceAndStock` tx-consistency (`4c2e4f2`).
+
+### Sesi 22 Agu 2026
+
+- **Insiden `.env` ter-track di git history** — RESOLVED
+  - Purge via `git filter-repo` + force-push. `.env` recovered from `/proc/<pid>/environ`. Detail di RAILS.md §6.
+  - VII-B: RAJAONGKIR_* hilang dari pm2 env → SUDAH diatasi manual (owner tambahkan ke .env).
+
+- **G2-H Release Readiness** — PRAKTIS SELESAI
+  - Shipping CI gap (`e16679d`), backup restore rehearsal (`0d29aaf`), generalLimiter global safety net (`10be048`), rate-limiter gaps 11 endpoint (`10be048`), VAPID/web-push env (FASE4), `test:shipping` CI (`e16679d`).
+  - VI-5: BACKUP_ALERT_EMAIL no sender → RESOLVED (interim: nodemailer SMTP sender `src/services/mailer.service.ts` + wiring ke `backup.service.ts`).
+
+### Sesi 21 Agu 2026
+
+- **Shipping-cost full-stack (RajaOngkir Komerce)** — RESOLVED (`490e853..2e64c0a`)
+  - Origin store + destination customer + berat order → pilihan kurir via Komerce → `Order.shippingCost`/`shippingService`. RajaOngkir = kalkulator ongkir (BUKAN tracking) → Opsi (B) COD RESMI DITUTUP.
+
+- **Store NOT NULL registration** — RESOLVED (`03bce76..d3c7855`)
+  - `Store.phoneNumber`/`address`/`origin*` NOT NULL; register wajib phone/address/lokasi; null-write fix (`d3c7855`).
+
+- **Monitoring dasar (G2-G)** — RESOLVED
+  - `AUDIT-BASELINE-G2-G.md` (`dd20696`), `GET /api/admin/metrics/system` (`b18b6d5`).
+
+### Sesi 19 Agu 2026
+
+- **II-6 — P8 CI gate tidak men-cover structured-actions suite** — RESOLVED (commit `c6be2d8`)
+  - `test:structured` script + step CI. 115 tests / 7 suites pass.
+
+- **II-7 — G2-F test suites TIDAK ter-cover CI** — RESOLVED (commit `e293040`)
+  - `test:payment` script + step CI. 30 tests pass.
+
+- **III-4 — P3 T5 fallback tier overlap** — RESOLVED (FIX-3, commit `5e7ef42`)
+  - `saveDiscussedItems` sekarang pakai `atomicCasExtractedEntities` (CAS `updatedAt` + retry).
+
+- **III-5 — Race appendMessage lastMessages** — RESOLVED (FIX-4, commit `353e883`)
+  - `appendMessage` pakai `atomicCasMessages` (CAS `updatedAt` + retry).
+
+- **III-7 — I11 kamus slang normalizer** — RESOLVED (FIX-1, commit `e6c7157`)
+  - Lookup typo sekarang lowercase (`normalizer.ts:153`).
+
+- **III-8 — I12 guard nama produk di normalizer** — RESOLVED (FIX-1, commit `e6c7157`)
+  - Guard `fuzzyMatchProduct` + multi-word product guard.
+
+- **III-9 — LEASE_FINAL_MS = 750** — RESOLVED (19 Agu 2026)
+  - `LEASE_FINAL_MS` 750ms→30000ms (30s), owner-decided interim value.
+
+- **III-10 — Cycle import container.ts ↔ 3 adapter** — RESOLVED (FIX-5, commit `6385322`)
+  - Cycle diputus dari sisi adapter (dynamic `await import`).
+
+- **II-1 — reasoning-v2 test outdated** — RESOLVED (stale test assertion, commit `4fc6730`)
+  - Code `reasoning.ts:328-338` SUDAH return `reasoned` sejak `f4ab025`. Assertion test diperbaiki ke `reasoned`.
+
+- **II-2 — engine-config-v2 suite gagal load** — RESOLVED (STALE DOC, 19 Agu 2026)
+  - `engine-config-v2.test.ts` LULUS 6/6. TDZ `container.ts:38` TIDAK direproduksi ulang. Root cause ditangani FIX-5 (cycle import diputus).
+
+### Sesi 10–18 Agu 2026
+
+- **P4.1 — extractAndSaveOrder** — RESOLVED (fungsi dihapus).
+- **P3 T1–T4** — RESOLVED (commit c164729/3780453/eb74929/099967a/fd08ba3).
+- **P2 truth boundary validateCartOpsAds** — RESOLVED.
+- **P2 eskalasi ke pemilik toko (TASK C1)** — RESOLVED (commit 718c375).
+- **FLAGSHIP multi-add** — RESOLVED (fast-path guard).
+- **I-1 — Qty 0 di receipt** — RESOLVED (stale doc, already filtered).
+- **III-2 — logs/*.log ter-track** — RESOLVED (di-exclude + di-purge dari history).
 
 ---
-
-## IV. STATUS ringkasan (temuan P4.0 yang dicatat di §4 laporan-audit)
-
-| # | Temuan P4.0 | Status @ 29b7297 |
-|---|-------------|------------------|
-| 1 | I13 violation di `extractAndSaveOrder` (price null, items tak tervalidasi DB) | ✅ **RESOLVED** — fungsi dihapus (P4.1). |
-| 2 | Provider/config drift (Gemini vs Groq, tanpa jsonMode) | ✅ **RESOLVED** — fungsi dihapus. |
-| 3 | I8 accounting gap (LLM ke-3 tak increment counter) | ✅ **RESOLVED** — fungsi dihapus. |
-| 4 | `activeOrder`/`tryTotal` tidak diskriminatif `draft` vs `pending` | ⏳ **TERBUKA** → masuk I-3 di atas. |
-| 5 | Tidak ada test real untuk `extractAndSaveOrder` (hanya no-op mock) | ✅ **RESOLVED** — fungsi+mock dihapus; golden tetap pass. |
-
----
-
-## V. Rekomendasi urutan (prioritas)
-
-1. **I-3 (draft-vs-pending discrimination)** — ditutupkan *sebenarnya* oleh penghapusan
-   `extractAndSaveOrder`, tapi **tetap terbuka lewat `createOrder`**. Prioritas tinggi:
-   buat `activeOrder`/`tryTotal` eksklusif pilih `draft`, atau tag order `pending`
-   yang pernah punya harga-DB-only. Tanpa ini, pola phantom **bisa kembali** lewat
-   jalur LLM lain.
-2. **II-2 (engine-config-v2 suite)** — urut inisialisasi `redisAdapter` di
-   `container.ts:38`; blokir 1 suite test.
-3. **III-1 / III-2 (dist + logs di-track)** — paling penting untuk *keandalan &
-   keamanan* jangka panjang; butuh pre-commit hook (§1.164).
-4. **I-1 (qty 0 receipt)** — cepat (filter), visible ke customer.
-5. Sisa kosmetik / test-data (I-2, II-1, II-3, II-4, III-4/5/6/7/8).
-
-### V-a/b. NEW FINDING — audit lanjutan (bukan dikerjakan sekarang)
-
-- **(a) `trySop` order_status gate gap** (dari III-4): ✅ **RESOLVED (FIX-2, 19 Agu 2026, commit `e50de65`)** — kategori `'order_status'` DIHAPUS dari `trySop` (`fallback.service.ts`) karena redundant; `tryOrderStatus` (jalur dengan gate `isOrderStatusIntent`) sudah jalan LEBIH AWAL di chain dan menangani kasus itu. Tidak ada test yang bergantung pada `trySop` menjawab `order_status`. Regresi ditambah di `tier-match.test.ts` (keyword eks- trySop tetap true via `isOrderStatusIntent`).
-- **(b) normalizer case-sensitivity** (gabung III-7 edge + III-8 multi-word): ✅ **RESOLVED di `84ad070`** — lihat III-7/III-8 (sudah RESOLVED). Tidak ada sisa follow-up.
 
 > Catatan: daftar ini **tidak** memasukkan `extractAndSaveOrder` (sudah dibereskan
 > P4.1) ataupun T1–T4 P3 / eskalasi C1 / multi-add FLAGSHIP / truth-boundary P2
-> (semua sudah resolved & ter-commit, lihat STATUS-V2.md).
-
----
-
-## VI. SESSION 21 AGU 2026 — shipping full-stack / Store NOT NULL / monitoring
-
-> Cluster `2a93924..2e64c0a` dikerjakan & di-push TANPA laporan real-time (insiden
-> DOCS-SYNC, lihat PROJECT-STATE-REPORT §10.2 + RAILS §6.x POST-HOC). Di bawah ini
-> ringkasan bug/finding per kategori. Bukti RAILS §5 ada di pesan commit masing-masing.
-
-### VI-A. RESOLVED (shipping-cost full-stack, RajaOngkir Komerce) — `490e853..2e64c0a`
-- Origin store (`Store.originProvinceId/Name`, `originCityId/Name`, `originSubdistrictId/Name`) + dashboard cascading dropdown ✅.
-- `RajaOngkirLocationAdapter` (province/city/subdistrict, 30d cache) + **PUBLIC** `GET /api/pwa-locations/*` + `pwaLocationsLimiter` (30 req/15m) ✅.
-- `Product.weight` (gram, NOT NULL default 0) + magic-paste + dashboard form wajib Berat ✅.
-- `Order` destination fields (nullable, backward-compatible) + PWA cascading dropdown ✅.
-- UNIT1–UNIT6: `Order.shippingCost`/`shippingService` + `getOrderWeightGrams` + `GET /shipping-options` + `POST /select-shipping` (server-recomputed) + auto-reset ongkir + PWA checkout UI + receipt ✅.
-- **Konteks COD:** ini yang memicu evaluasi RajaOngkir sbg kandidat Opsi (B) fulfillment → TERNYATA kalkulator ongkir, BUKAN tracking → Opsi (B) RESMI DITUTUP (`09b257a`, DECISION-COD-SETTLEMENT-DEFERRED.md).
-
-### VI-B. RESOLVED (Store NOT NULL registration, pre-launch) — `03bce76..d3c7855`
-- `Store.phoneNumber`/`address`/`origin*` NOT NULL (migration isi placeholder, prod baru 0 row) ✅.
-- `storeRegisterSchema` wajib phone (format HP ID)/address/origin* (`.trim()` tolak whitespace → 400); `/login` auto-create dihapus ✅.
-- Dashboard `RegisterSaaS.tsx` wajib No. HP + Alamat + 3 dropdown kaskade ✅.
-- 13 file test `store.upsert` tambah dummy valid NOT NULL store ✅.
-- **Null-write fix (`d3c7855`):** `PUT /api/auth/profile` + `PUT /api/profile` — field wajib DIKIRIM tapi kosong → 400 "tidak boleh dikosongkan"; tidak dikirim (undefined) → skip (bukan `|| null` crash). ✅ RESOLVED.
-
-### VI-C. RESOLVED (monitoring dasar, G2-G) — `dd20696`/`b18b6d5`
-- `AUDIT-BASELINE-G2-G.md` (realtime/scale baseline) ✅.
-- `GET /api/admin/metrics/system` (admin-auth): memory/uptime/requests (in-memory rolling window), dipisah dari `/api/health` ✅.
-
-### VI-D. OPEN / KNOWN (tidak blocking, task terpisah)
-| ID | Item | Severity | Note |
-|----|------|----------|------|
-| VI-1 | **SHIPPING-CI-GAP**: test suite shipping TIDAK ter-cover CI — **RESOLVED** (`e16679d`): `test:shipping` script + step CI setelah `test:payment` (MUST pass 0 failure); plus fix hardcoded quota date pakai `wibDateKey()`. | Resolved | `npm run test:shipping` (8/8 pass). |
-| VI-2 | **Monitoring single-instance**: `/api/admin/metrics/system` in-memory → TIDAK akurat di multi-instance pm2. | Low–Med | Gap diketahui; aman untuk single-instance saat ini. |
-| VI-3 | **RajaOngkir/Komerce dependency risk**: caching hasil cost (Redis 7d) + quota guard — risiko ban disengaja diterima owner; interface swap-able. | Low (owner-accepted) | Tidak ada follow-up wajib. |
-| VI-4 | **DIST dirty (III-1 berulang)**: source cluster `2a93924..2e64c0a` ter-commit tapi `dist/` belum di-rebuild → working tree berisi dist modified. | High (infra, MITIGASI) | Sebelum deploy: `cd apps/api && npm run build` lalu commit `dist/`. |
-| VI-5 | **BACKUP_ALERT_EMAIL no sender**: env `BACKUP_ALERT_EMAIL` sudah terisi (pandjie@yahoo.com) tapi TIDAK ADA email sender terpasang di manapun di `src` (no SMTP/nodemailer/mail service). `backup.config.ts:50` membaca → `notificationEmail`, `notifyOnFailure:true`, tapi tidak ada konsumen yang mengirim email → alert kegagalan backup TIDAK terkirim. Gap baru temuan G2-H UNIT audit. | Medium (silent-failure risk) | ✅ **RESOLVED (interim)** — ditambah nodemailer SMTP sender (`src/services/mailer.service.ts`) + wiring ke `backup.service.ts` failure path. OWNER HARUS ISI SMTP_USER/APP_PASSWORD di .env; jika tidak ada, log warning dan skip (tidak crash). |
-
-### VI-E. RESOLVED (G2-H release readiness — 22 Agu 2026)
-- **Shipping CI gap (VI-1) — `e16679d`**: `test:shipping` script + step CI setelah `test:payment` (pola II-6/II-7, MUST pass 0 failure); plus fix hardcoded quota date (`wibDateKey()` dipakai test agar seed key cocok WIB nyata). ✅ RESOLVED.
-- **Backup restore rehearsal (`0d29aaf`) — DITEMUKAN via rehearsal NYATA, bukan cuma dry-run**: `restoreDatabase` pipa `pg_dump --format=custom` (binary) ke `psql` yang TIDAK bisa baca custom format → full restore SELALU gagal. Diganti `pg_restore --clean --if-exists` (idempoten); `pg_terminate_backend` kill-step tetap `psql`. Plus bookkeeping manifest pakai upsert (bukan update) + `backup:create` clean exit (`prisma.$disconnect()` + `process.exit(0)`). Bukti: full restore ke sandbox DB terpisah EXIT 0, row-count + id-checksum orders/order_items/stores/products/customers COCOK sumber, tanpa data loss. ✅ RESOLVED — ini bukti kenapa rehearsal restore penting: dry-run tidak menangkap format mismatch ini.
-- **generalLimiter dead-code (`10be048`)**: `generalLimiter` (15m/1000/IP) sebelumnya didefinisikan tapi TIDAK PERNAH dipasang (dead code). Kini di-mount sebagai global safety net di `index.ts` (setelah body-parser/maintenance, sebelum route; `/api/health` + `/r` dikecualikan). ✅ RESOLVED.
-- **Rate-limiter gaps 11 endpoint publik (`10be048`)**: 11 endpoint publik no-auth tanpa proteksi (`/checkout`, `/payment-proof-upload`, `/action`, `/payment-report`, `/subscribe`, `/unsubscribe`, `/handoff`, `/clear`, `/typing`, `/read`, `/history`) + redirect `/r/:storeId` kini dapat limiter (reuse existing: `orderMutationLimiter`, `conversationLimiter`, `pwaProductsLimiter`). ✅ RESOLVED.
-
-### VI-F. RESOLVED (29 Agu 2026) — Admin password reset mechanism (interim operator-only)
-- **Item [ADMIN-PASSWORD-RESET-MISSING]:** Tidak ada forgot-password / reset-password flow untuk admin accounts. Satu-satunya route reset password yang ada adalah `POST /api/admin/stores/:storeId/reset-password` (`src/routes/admin/stores.ts:252`) yang hanya reset password STORE (PWA/customer-facing), bukan admin. Jika super_admin password hilang, tidak ada recovery path selalu membuat akun baru via bootstrap mode. **Severity: Medium (owner currently has no admin account recovery path).**
-  - **Status:** ✅ **RESOLVED (interim)** — ditambah:
-    - `POST /api/admin/auth/reset-password-operator` — route HTTP yang memungkinkan super_admin reset password admin lain. Mempakai `adminAuthMiddleware` + `requireAdminRole(['super_admin'])`. Semua token admin yang lama direvokasi otomatis.
-    - `scripts/reset-admin-password.ts` — CLI script untuk reset password secara langsung dari VPS (untuk kasus owner fully locked-out). Menggunakan bcrypt 10 rounds, memerlukan konfirmasi manual (atau `--yes` flag).
-  - **Nota:** Ini adalah solusi *interim* yang hanya untuk operator/super_admin. Tidak ada flow self-service email. Full "forgot password" dengan email reset token tetap diperlukan sebagai task terpisah yang diblokir oleh tidak ada infrastructure email-sender. Lihat RAILS.md §6 (email-sender infrastructure NOT DONE).
-
----
-
-## VII. INSIDEN KEAMANAN `.env` TER-TRACK DI GIT HISTORY (22 Agu 2026)
-
-> Diverifikasi INDEPENDEN via `git` + filesystem (bukan narasi). Bukti:
-> `git log --all --oneline -- .env` SEKARANG **KOSONG** (purge sukses);
-> `git ls-files | grep -x .env` **KOSONG** (tidak tracked); `.gitignore` berisi `.env`;
-> `git log origin/main -3` = `ea1f0c2` (merge) → `8ba77c9` → `da1b2e1`.
-> History lama: `.env` pernah di-commit di `a417632` ("Webhook secret validation + migrasi
-> VPS 7 Agustus"), yang ADALAH ancestor `origin/main` → secret TER-PUSH ke GitHub.
-> Purge via `git filter-repo --path .env --invert-paths --force` + force-push
-> (`6385322...3d86fe2 main -> main forced update`); remote clone-fresh verified BERSIH.
-> `.env` asli di-recovery dari `/proc/<pid>/environ` proses `api` yang masih hidup, lalu
-> backup ke `/home/ubuntu/backups/env-recovered-20260821.env` (chmod 600, LUAR git).
-> Detail lengkap di RAILS.md §6 (entri 22 Agu 2026).
-
-### VII-A. OPEN — Rotate seluruh secret (DITUNDA sampai sebelum GO-LIVE)
-- **Item:** Semua secret yang pernah ada di `.env` `a417632` (ter-expose ke GitHub history
-  lama) WAJIB di-rotate: `DATABASE_URL`, `REDIS_URL`, `GEMINI_API_KEY`, `GROQ_API_KEYS`,
-  `GOWA_BASIC_AUTH_*`, `CLOUDINARY_*`, `BACKUP_ENCRYPTION_KEY`, `WEBHOOK_SECRET`,
-  `STORAGE_PROVIDER`/`R2_*`, `FIELD_ENCRYPTION_KEY`, `CLOUDFLARE_WORKER_*`, `PUBLIC_API_URL`.
-- **Kecuali:** `RAJAONGKIR_API_KEY` — **TIDAK PERNAH ter-expose** (tidak ada di `a417632`,
-  dan tidak ada di env proses hidup saat recovery; baru ditambahkan owner ke `.env` SETELAH
-  purge). Tidak perlu di-rotate karena tidak pernah masuk git history.
-- **Status:** 🟡 **OPEN / DITUNDA** — per keputusan owner, rotate ditunda sampai SEBELUM
-  GO-LIVE (website belum rilis, belum ada trafik nyata). BUKAN diabaikan — wajib sebelum
-  produksi bener-bener live. Risk: secret masih valid di GitHub history lama (sudah di-purge
-  dari working tree & remote SEKARANG, tapi snapshot lama sudah pernah keluar).
-
-### VII-B. OPEN — RAJAONGKIR_* hilang dari pm2 env, perlu owner tambahkan manual
-- **Item:** Saat recovery `.env` dari `/proc/<pid>/environ`, variabel `RAJAONGKIR_API_KEY`
-  dan `RAJAONGKIR_DAILY_QUOTA` **TIDAK ADA** di env proses hidup (belum pernah di-inject ke
-  pm2 env; modul ongkir belum pernah jalan di produksi).
-- **Status:** ✅ **SUDAH diatasi manual** — owner menambahkan `RAJAONGKIR_API_KEY` ke
-  `/home/ubuntu/garuda/.env` (dan `RAJAONGKIR_DAILY_QUOTA=100`), `.env` sekarang 27 baris
-  lengkap. CATATAN: `pm2 restart` tanpa `--update-env` mempertahankan env lama di memory —
-  kalau pm2 di-restart penuh / server reboot, pastikan `.env` (atau `ecosystem.config.js`)
-  menyuplai `RAJAONGKIR_*` supaya modul ongkir produksi punya kredensial.
-
-## VIII. SESSION 27 AGU 2026 — PV-P2 variant support (post-PV-P2 fix)
-
-### VIII-A. RESOLVED (`4c2e4f2` + this fix commit) — executeOps price bug + resolvePriceAndStock tx-consistency
-- **Item [PV-P2-FINDING-001]:** `executeOps` add/update branch di `cart-authority.ts:570-618` menulis `result.unitPrice` (parent product price dari `resolveProductById`) ke `OrderItem.unitPrice`, bukan harga varian. Untuk varian dengan harga berbeda dari parent, harga yang terpersist salah.
-- **Item tambahan (ditemukan saat analisa):** `resolvePriceAndStock` (1) tidak filter `isActive/deletedAt` untuk produk non-varian — regresi terhadap §8 kontrak (byte-identical behavior untuk `hasVariants=false`); (2) baca via `prisma` global, bukan `tx` yang sedang jalan di `executeOps`/`addLine`/`checkout` — inkonsisten dengan pola `resolveProductById` yang menerima `tx`.
-- **Konteks severity:** Tidak ada customer terdampak (fitur varian belum diluncurkan). Bug ini blocking PV-P2 karena varian dengan harga beda dari parent tidak bisa diuji tanpa perbaikan ini.
-- **Status:** ✅ RESOLVED — commit `4c2e4f2` (PV-P2) memperbaiki executeOps pakai `resolvePriceAndStock` untuk authPrice. Commit ini (PV-P2-FIX) menambahkan parameter `tx` opsional ke `resolvePriceAndStock` (pakai `tx ?? prisma`), filter `isActive/deletedAt` untuk produk + parent product check untuk varian, dan update semua caller (`addLine`, `executeOps`, `checkout`) untuk meneruskan `tx`.
-
-## IX. SESSION 28 AGU 2026 — Admin security cluster (public registration + engine.ts unauthenticated)
-
-### IX-A. RESOLVED (`b64babf` + `ae40461`) — public registration exposure + engine.ts unauthenticated routes
-- **Item 1 [ADMIN-REGISTRATION-EXPOSURE]:** POST /api/admin/auth/register terbuka ke publik internet tanpa gate — confirmed live via curl mengembalikan 201 untuk unauthenticated request. Kombinasi dengan temuan AUDIT-BASELINE (admin tidak punya store-ownership scoping — Finding 1-4) berarti siapapun di internet bisa self-register sebagai admin dan dapat akses global ke semua merchant stores. 3 baris `admin_users`Existing diaudit: `metrics-test@garuda.local`, `m2@garuda.local`, `exposure-check-DO-NOT-USE@example.invalid` — None belonged to owner, semua di-deactivate (`isActive=false`, tidak di-hard-delete, audit trail preserved). Owner kemudian registrasi akun super_admin baru (`pandjie@yahoo.com`).
-  - **Konteks:** Terbongkar saat verifikasi live POST /register mengembalikan 201 untuk email test `exposure-check-DO-NOT-USE@example.invalid`.
-  - **Status:** ✅ RESOLVED — commit `b64babf`. Bootstrap-once gating: route TERBUKA hanya ketika belum ada super_admin aktif (count=0), kemudian LOCKED permanen. Saat bootstrap mode, role WAJIB diset `super_admin` terlepas dari apa yang dikirim di request body. Setelah super_admin pertama ter-create, route memerlukan `adminAuthMiddleware` + `requireAdminRole(['super_admin'])`. Verified via live curl: 201 di bootstrap state dengan role forced, 401 di locked state.
-- **Item 2 [ENGINE-TS-UNAUTH]:** `src/routes/admin/engine.ts` (4 route yang mengontrol versi AI engine yang memproses pesan customer — v1 vs v2, canary metrics) sama sekali TIDAK ada auth middleware-nya, masuknya langsung dari `app.use('/api/admin/engine', ...)` tanpa `adminAuthMiddleware`.
-  - **Konteks:** Temuan dari ADMIN-TENANT-ISOLATION-AUDIT-BASELINE.md Finding 6. Tidak ada caller internal (cron/healthcheck/service-to-service) yang menggunakan route ini — verified via grep seluruh codebase.
-  - **Status:** ✅ RESOLVED — commit `ae40461`. `adminAuthMiddleware` ditambahkan ke semua 4 route. GET routes (read-only metrics/config) cukup `adminAuthMiddleware` (any authenticated admin). POST `/:storeId` (mutates engine version untuk seluruh store) ditambahkan `requireAdminRole(['super_admin'])` — konsisten dengan pola `config.ts` PUT/DELETE + `backups.ts` restore/delete yang sama-sama memerlukan super_admin untuk aksi destruktif. Verified via live curl: 401 tanpa auth, 200/403 dengan auth sesuai role.
-
-### IX-B. RESOLVED — admin password reset mechanism (interim operator-only)
-- **Item [ADMIN-PASSWORD-RESET-MISSING]:** Tidak ada forgot-password / reset-password flow untuk admin accounts. Satu-satunya route reset password yang ada adalah `POST /api/admin/stores/:storeId/reset-password` (`src/routes/admin/stores.ts:252`) yang hanya reset password STORE (PWA/customer-facing), bukan admin. Jika super_admin password hilang, tidak ada recovery path selalu membuat akun baru via bootstrap mode. **Severity: Medium (owner currently has no admin account recovery path).**
-  - **Status:** ✅ **RESOLVED (interim solution)** — ditambah:
-    - `POST /api/admin/auth/reset-password-operator` — route HTTP yang memungkinkan super_admin reset password admin lain. Mempakai `adminAuthMiddleware` + `requireAdminRole(['super_admin'])`. Semua token admin yang lama direvokasi otomatis.
-    - `scripts/reset-admin-password.ts` — CLI script untuk reset password secara langsung dari VPS (untuk kasus owner fully locked-out). Menggunakan bcrypt 10 rounds, memerlukan konfirmasi manual (atau `--yes` flag).
-  - **Catatan:** Ini adalah solusi *interim* yang hanya untuk operator/super_admin. Tidak ada flow self-service email. Full "forgot password" dengan email reset token tetap diperlukan sebagai task terpisah yang diblokir oleh tidak ada infrastructure email-sender. Lihat RAILS.md §6 (email-sender infrastructure NOT DONE).
-
-### IX-C. VERIFIED — no internal caller for engine.ts routes
-- Exhaustive grep `engine/metrics`, `engine/`, `/api/admin/engine` across `src/` dan `apps/dashboard/` mengembalikan **0 result**. Tidak ada cron, healthcheck, atau service-to-service call yang menggunakan route ini. Aman untuk menambahkan auth tanpa breaking internal integration.
-
-### IX-D. OPEN (non-blocking, refactor kapan saja) — CARTAUTHORITY-VARIANT-GUARD-DUPLICATION
-- **Item [CARTAUTHORITY-VARIANT-GUARD-DUPLICATION]:** Guard `hasVariants && !variantId` ada di 2 tempat: (1) `cart-authority.ts` `resolvePriceAndStock` (single domain authority, commit `0425f8d`) dan (2) `action-registry.ts` `handleAddToCart` (~line 712, handler-layer defense-in-depth). Kedua guard KONSISTEN — sama-sama throw `ErrorCodes.VARIANT_REQUIRED` dengan `name: 'CartInvariantError'`. Tidak ada kontradiksi. Belum di-DRY jadi 1 helper function (`assertVariantSelected(product, variantId)` dipanggil dari 2 tempat).
-- **Severity:** Low (non-blocking — kedua guard sudah konsisten, hanya duplikasi logic).
-- **Status:** OPEN — refactor kapan saja kalau ada siklus maintenance CartAuthority. Tidak blocking PV-P2c atau task lain.
-
-## X. PV-P2c full stack — WA variant support RESOLVED (E2E live-proven)
-
-**Gap sebelumnya:** WA chat belum pernah menyentuh varian — produk `hasVariants` dibalas generik/"masukkan ke keranjang", dan LLM tidak pernah resolve teks varian (warna/ukuran) ke `variantId` (I13: LLM tak tahu `variantId`). Ditutup end-to-end per-unit:
-1. **PV-P2c-TEXT** (`71ba429`): `fallback.service.ts` `tryProduct` — produk `hasVariants` pada *inquiry* ("ada sepatu?") diarahkan ke storefront web `PUBLIC_PWA_URL || 'https://qlobot.web.id'` → `/c/<slug>`, **bukan** ajakan "masukkan ke keranjang"; marker disambiguasi "(ada varian)".
-2. **PV-P2c-LLM-A** (`a454ec1`): skema LLM (`DraftCartOp.variant` di `types-v2.ts`, `INTERPRETER_SCHEMA` di `interpreter.ts`, `FEW_SHOTS`[8..10] + rule `n` di `prompts-v2.ts`) — LLM mengeluarkan deskriptif teks varian (mis. "merah size L"), **bukan `variantId`** (I13).
-3. **PV-P2c-LLM-B** (`ba2acf5`): `CartAuthority.resolveVariantByLabel` (DB-driven, scoped per tenant+produk via `product_variants.attributes`+`sku`) + injection di `executeOps` add-path; `conversation.service.ts:314` map `variant: e.metadata?.variant ?? null`; single error surface lewat `resolvePriceAndStock` (`VARIANT_REQUIRED`). Unit `cart-authority.test.ts` (4) + golden T1‑T4/7b‑7e.
-
-**E2E live (curl `POST /api/messages/handle`, api pm2 online, store Canary `store-f7140b5c`, LLM key dari env api):**
-- (a) `"ada sepatu?"` → `source:"product"`, balasan mengandung `https://qlobot.web.id/c/store-f7140b5c` + "(ada varian)", **tidak** mengandung "masukkan ke keranjang".
-- (b) `"saya mau sepatu merah size L"` → `source:"ai"`, balasan `🛒 Ditambahkan ke keranjang: sepatu x1`; draft `OrderItem` conversation `e2e-conv-b` punya `variantId=b619cdf8-e533-41f9-ab6c-69da089175f7` (attrs `{"size":"L","color":"merah"}`) — `resolveVariantByLabel` match teks LLM → variantId.
-- Setup E2E: seed test product `Sepatu` (hasVariants) + variant `merah/size L` pada Canary Store (sebelumnya 0 produk).
-
-**Status:** ✅ RESOLVED — PV-P2c full stack (TEXT+LLM-A+LLM-B) `71ba429`…`a5289ae` (dist rebuild). §IX-D (guard-duplication) tetap OPEN (di luar scope ini).
-
----
-
-## VI. STOCK INTEGRITY FIX (29 Agu 2026) — RESOLVED ✅
-
-| ID | Bug | Lokasi | Severity | Note |
-|----|-----|--------|----------|------|
-| VI-1 | **Stock tidak pernah di-decrement di checkout** → 2x race win, oversell | `cart-authority.ts:checkout()` | High | ✅ **RESOLVED** — checkout sekarang di-wrapper dalam `$transaction` dengan atomic decrement via `updateMany({ where: { stock: { gte: qty } }, data: { decrement } })` (CAS). Stock tidak bisa kurang dari 0 oleh concurrent checkout. |
-| VI-2 | **Stock tidak pernah dikembalikan saat order dibatalkan** — terus mengurang per [cancel] | `order.service.ts:cancelOrder()`, `routes/orders.ts:PUT /:id/status` | High | ✅ **RESOLVED** — ditambah `restoreStockForOrderItems()` pada setiap cancel path (structured action via handleCancelOrder, admin PUT status, order.service.cancelOrder). |
-| VI-3 | **Tidak ada auto-expire untuk order menunggu bayar** — order "macet" tak pernah dibatalkan | schema.prisma (`autoCancelAt`), `bootstrap/scheduleAutoCancel.ts` | Medium | ✅ **RESOLVED** — 15-min cron `scheduleAutoCancel()` mencari order dengan `autoCancelAt < now`, `paymentStatus != 'pending_verification'`, auto-cancels + stock restore. Configurable via `ORDER_AUTO_CANCEL_HOURS` (default 24h). |
-
----
-
-## VII. TENANT ISOLATION FIX (29 Agu 2026) — RESOLVED ✅
-
-| ID | Risiko | Lokasi | Severity | Note |
-|----|--------|--------|----------|------|
-| VII-1 | **GET /:id produk tidak tenant-scoped** — leak detail produk antar toko | `routes/products.ts:GET /:productId` | High | ✅ **RESOLVED** — endpoint dihapus (`delete unscoped GET /:productId`). Penggunaan dipantau: 0 caller di production, telah diganti oleh `/api/pwa/:storeSlug/products/:productId`. |
+> (semua sudah resolved & ter-commit).
