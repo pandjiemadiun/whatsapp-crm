@@ -59,6 +59,11 @@ export declare const resetPasswordSchema: z.ZodObject<{
     tempPassword: z.ZodOptional<z.ZodString>;
 }, z.core.$strip>;
 export type ResetPasswordInput = z.infer<typeof resetPasswordSchema>;
+export declare const adminResetPasswordSchema: z.ZodObject<{
+    adminEmail: z.ZodString;
+    newPassword: z.ZodString;
+}, z.core.$strip>;
+export type AdminResetPasswordInput = z.infer<typeof adminResetPasswordSchema>;
 export declare const updateStatusSchema: z.ZodObject<{
     status: z.ZodEnum<{
         resolved: "resolved";

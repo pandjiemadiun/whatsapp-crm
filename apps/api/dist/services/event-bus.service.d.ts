@@ -11,7 +11,7 @@
  *    retry, atau pub/sub eksternal.
  *  - Untuk single VPS: EventBus + Socket.IO (in-proc subscribe) sudah cukup.
  */
-export type ChatbotEventType = 'message.created' | 'typing.started' | 'typing.stopped' | 'conversation.handoff' | 'conversation.resumed' | 'conversation.resolved' | 'conversation.updated' | 'notification.created' | 'device.status.changed';
+export type ChatbotEventType = 'message.created' | 'typing.started' | 'typing.stopped' | 'conversation.handoff' | 'conversation.resumed' | 'conversation.resolved' | 'conversation.updated' | 'notification.created' | 'device.status.changed' | 'order.created' | 'order.payment_verification_pending';
 export interface EventEnvelope<D = unknown> {
     event: ChatbotEventType;
     storeId: string;

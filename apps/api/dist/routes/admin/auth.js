@@ -3,10 +3,12 @@ import crypto from 'crypto';
 import { adapters } from '../../adapters/container.js';
 import { hashPassword, verifyPassword } from '../../utils/password.util.js';
 import { adminAuthMiddleware } from '../../middleware/adminAuth.js';
+import { requireAdminRole } from '../../middleware/adminAuthGuard.js';
 import { prisma } from '../../infrastructure/prisma.js';
 import { validateRequest, getValidated } from '../../middleware/validate-request.js';
-import { loginSchema, registerAdminSchema } from '../../schemas/index.js';
+import { loginSchema, registerAdminSchema, adminResetPasswordSchema } from '../../schemas/index.js';
 import { adminAuthLimiter } from '../../middleware/rate-limiters.js';
+import { logAction } from '../../business/auditLog.service.js';
 // Bootstrap gate: allows ONE unauthenticated registration when no super_admin exists,
 // then locks forever (requires existing super_admin to create new admins).
 async function bootstrapRegistrationGate(req, res, next) {
@@ -163,6 +165,63 @@ router.get('/me', adminAuthMiddleware, async (req, res) => {
     catch (error) {
         adapters.logger.error('Admin fetch profile failed', error);
         res.status(500).json({ error: error?.message || 'Failed to fetch profile' });
+    }
+});
+// ─── POST /api/admin/auth/reset-password-operator — Operator-only password reset ───
+// This is NOT a self-service flow. Intended for:
+// - super_admin to reset another admin's password
+// - CLI script fallback when locked out (no valid session)
+router.post('/reset-password-operator', validateRequest(adminResetPasswordSchema, 'body'), adminAuthLimiter, adminAuthMiddleware, requireAdminRole(['super_admin']), async (req, res) => {
+    try {
+        const { adminEmail, newPassword } = getValidated(req);
+        const targetAdmin = await prisma.adminUser.findUnique({
+            where: { email: adminEmail },
+        });
+        if (!targetAdmin || targetAdmin.deletedAt) {
+            return res.status(404).json({ error: 'Admin user not found' });
+        }
+        if (!targetAdmin.isActive) {
+            return res.status(400).json({ error: 'Admin account is inactive' });
+        }
+        const hashedPassword = await hashPassword(newPassword);
+        await prisma.adminUser.update({
+            where: { id: targetAdmin.id },
+            data: { passwordHash: hashedPassword },
+        });
+        // Log the reset action (who reset whose password)
+        // Get a storeId for the log entry (use first active store or system marker)
+        const systemStore = await prisma.store.findFirst({ where: { deletedAt: null }, select: { id: true } });
+        await logAction({
+            storeId: systemStore?.id || 'system',
+            action: 'password_reset',
+            entity: 'admin_user',
+            entityId: targetAdmin.id,
+            adminId: req.admin.adminId,
+            changes: { targetAdminEmail: targetAdmin.email },
+        });
+        // Invalidate all existing tokens for this admin (force re-login)
+        await prisma.adminAuthToken.updateMany({
+            where: { adminUserId: targetAdmin.id, revokedAt: null },
+            data: { revokedAt: new Date() },
+        });
+        adapters.logger.info('Admin password reset', {
+            byAdminId: req.admin.adminId,
+            byAdminEmail: req.admin.email,
+            targetAdminId: targetAdmin.id,
+            targetAdminEmail: targetAdmin.email,
+        });
+        res.json({
+            success: true,
+            message: 'Password reset successfully. User will need to log in again.',
+            data: {
+                adminId: targetAdmin.id,
+                email: targetAdmin.email,
+            },
+        });
+    }
+    catch (error) {
+        adapters.logger.error('Admin password reset failed', error);
+        res.status(500).json({ error: error?.message || 'Password reset failed' });
     }
 });
 export default router;

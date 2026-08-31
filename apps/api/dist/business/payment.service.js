@@ -2,6 +2,7 @@ import { prisma } from '../infrastructure/prisma.js';
 import { ApiError } from '../errors/ApiError.js';
 import { ErrorCodes } from '../constants/errorCodes.js';
 import { transitionOrder, InvalidOrderTransitionError } from './order-transition.js';
+import { eventBus } from '../services/event-bus.service.js';
 /**
  * PaymentService (G2-F2) — verifikasi pembayaran manual transfer/QRIS.
  *
@@ -47,6 +48,17 @@ export class PaymentService {
                     paymentReportedAt: new Date(),
                 },
                 include: { orderItems: { orderBy: { createdAt: 'asc' } } },
+            });
+            // Emit payment pending event AFTER successful update.
+            eventBus.publish({
+                event: 'order.payment_verification_pending',
+                storeId,
+                data: {
+                    orderId,
+                    storeId,
+                    total: updated.totalPrice ?? undefined,
+                },
+                ts: Date.now(),
             });
             return updated;
         }
