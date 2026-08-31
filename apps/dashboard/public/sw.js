@@ -53,7 +53,17 @@ self.addEventListener('push', (event) => {
     requireInteraction: false,
     vibrate: [100, 50, 100],
   };
-  event.waitUntil(self.registration.showNotification(title, options));
+
+  // Notify all clients about the push event (for E2E verification)
+  event.waitUntil(
+    (async () => {
+      const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+      for (const client of clients) {
+        client.postMessage({ type: 'PUSH_RECEIVED', payload: data });
+      }
+      await self.registration.showNotification(title, options);
+    })(),
+  );
 });
 
 self.addEventListener('notificationclick', (event) => {

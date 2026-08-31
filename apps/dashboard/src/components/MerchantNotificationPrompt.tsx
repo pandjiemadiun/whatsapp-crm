@@ -1,14 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import api from '../services/api';
 import { urlBase64ToUint8Array } from '../utils/vapid';
 
 /**
- * Merchant-side Web Push opt-in. Triggered by explicit user action (button click).
- * Flow:
- *  1. Notification.requestPermission()
- *  2. serviceWorker.ready -> pushManager.subscribe(VAPID public key)
- *  3. POST /api/push/subscribe { subscription } (authMiddleware -> storeId)
- *  4. postMessage identity to SW for subscription refresh.
+ * Merchant-side Web Push opt-in. Triggered by explicit user action (button click)
+ * when permission is 'default', or auto-subscribes when permission is already 'granted'.
  */
 
 interface MerchantNotificationPromptProps {
@@ -26,20 +22,14 @@ export default function MerchantNotificationPrompt({ vapidPublicKey }: MerchantN
     }
   }, []);
 
-  const showPrompt =
-    typeof Notification !== 'undefined' &&
-    typeof navigator !== 'undefined' &&
-    'serviceWorker' in navigator &&
-    'PushManager' in window &&
-    !!vapidPublicKey &&
-    permission === 'default' &&
-    !subscribed;
-
-  const enable = async () => {
+  const enable = useCallback(async () => {
     setLoading(true);
     try {
-      const p = await Notification.requestPermission();
-      setPermission(p);
+      let p = Notification.permission;
+      if (p === 'default') {
+        p = await Notification.requestPermission();
+        setPermission(p);
+      }
       if (p !== 'granted') return;
 
       const reg = await navigator.serviceWorker.ready;
@@ -48,7 +38,7 @@ export default function MerchantNotificationPrompt({ vapidPublicKey }: MerchantN
         applicationServerKey: urlBase64ToUint8Array(vapidPublicKey!) as unknown as BufferSource,
       });
 
-      await api.post('/push/subscribe', { subscription: sub });
+      await api.post('/auth/push/subscribe', { subscription: sub });
 
       // Hand identity + token to SW for subscription refresh.
       const user = JSON.parse(localStorage.getItem('garuda_user') || '{}');
@@ -64,9 +54,31 @@ export default function MerchantNotificationPrompt({ vapidPublicKey }: MerchantN
     } finally {
       setLoading(false);
     }
-  };
+  }, [vapidPublicKey]);
 
-  if (!showPrompt) return null;
+  // Auto-subscribe if permission already granted (e.g. test environments).
+  useEffect(() => {
+    if (
+      vapidPublicKey &&
+      Notification?.permission === 'granted' &&
+      !subscribed &&
+      'serviceWorker' in navigator &&
+      'PushManager' in window
+    ) {
+      enable();
+    }
+  }, [vapidPublicKey, subscribed, enable]);
+
+  const showPrompt =
+    typeof Notification !== 'undefined' &&
+    typeof navigator !== 'undefined' &&
+    'serviceWorker' in navigator &&
+    'PushManager' in window &&
+    !!vapidPublicKey &&
+    permission === 'default' &&
+    !subscribed;
+
+  if (!showPrompt && !loading) return null;
 
   return (
     <button

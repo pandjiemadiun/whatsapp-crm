@@ -64,7 +64,7 @@ export default function DashboardLayout() {
 
   // ── Fetch VAPID public key for merchant push ──
   useEffect(() => {
-    api.get('/push/vapid-public-key')
+    api.get('/auth/push/vapid-public-key')
       .then((res) => setVapidPublicKey(res.data?.publicKey ?? null))
       .catch(() => {});
   }, []);
