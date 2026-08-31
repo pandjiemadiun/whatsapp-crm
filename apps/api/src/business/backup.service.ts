@@ -11,6 +11,7 @@ import { ErrorCodes } from '../constants/errorCodes.js';
 import fs from 'fs/promises';
 import fsSync from 'fs';
 import { prisma } from '../infrastructure/prisma.js';
+import { sendBackupFailureAlert } from '../services/mailer.service.js';
 const execAsync = promisify(exec);
 
 const TMP_DIR = path.join(os.tmpdir(), 'garuda-backup-tmp');
@@ -128,6 +129,20 @@ export class BackupService {
         },
       }).catch(() => {});
       adapters.logger.error(`[Backup FAILED] ${type} backup`, error as Error);
+
+      // Send failure alert email if configured
+      if (backupConfig.notifyOnFailure && backupConfig.notificationEmail) {
+        try {
+          await sendBackupFailureAlert(
+            error as Error,
+            `[Backup FAILED] ${type} backup (${filename})`
+          );
+        } catch (alertError) {
+          adapters.logger.error('[Backup Alert] Failed to send alert email', alertError as Error);
+          // Don't throw - we don't want to mask the original backup error
+        }
+      }
+
       throw error;
     }
   }
