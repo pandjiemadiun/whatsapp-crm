@@ -11,11 +11,18 @@ import { sanitize } from '../lib/sanitize.js';
 import { storeAuthLimiter } from '../middleware/rate-limiters.js';
 import { authMiddleware } from '../middleware/auth.js';
 import { getEncryptionKey, hashField } from '../utils/encryption.js';
+import { getVapidConfig } from '../config/vapid.config.js';
+import { eventBus } from '../services/event-bus.service.js';
 const router = express.Router();
 // Generate a unique per-store webhook secret (used for Fonnte webhook URL)
 function generateWebhookSecret() {
     return crypto.randomBytes(24).toString('hex');
 }
+// GET /api/push/vapid-public-key — Expose VAPID public key for merchant push subscription.
+router.get('/push/vapid-public-key', (_req, res) => {
+    const cfg = getVapidConfig();
+    res.json({ publicKey: cfg?.publicKey ?? null });
+});
 // POST /api/auth/register — Register with email + password
 router.post('/register', validateRequest(storeRegisterSchema, 'body'), storeAuthLimiter, async (req, res) => {
     try {
@@ -289,6 +296,144 @@ router.post('/profile/qris-image', authMiddleware, upload.single('image'), async
     catch (error) {
         adapters.logger.error('QRIS image upload failed', error);
         res.status(400).json({ error: error?.message || 'Failed to upload QRIS image' });
+    }
+});
+// POST /api/push/subscribe — Store (merchant) push subscription.
+// Auth required. storeId derived from bearer token (never from body).
+// Supports multiple subscriptions per store (multi-device/tab).
+router.post('/push/subscribe', authMiddleware, async (req, res) => {
+    try {
+        const storeId = req.user.storeId;
+        const { subscription } = req.body;
+        if (!subscription ||
+            typeof subscription.endpoint !== 'string' ||
+            !subscription.keys ||
+            typeof subscription.keys.auth !== 'string' ||
+            typeof subscription.keys.p256dh !== 'string') {
+            return res.status(400).json({ error: 'Valid PushSubscription (endpoint, auth, p256dh) required' });
+        }
+        await prisma.storePushSubscription.upsert({
+            where: { storeId_endpoint: { storeId, endpoint: subscription.endpoint } },
+            update: {
+                auth: subscription.keys.auth,
+                p256dh: subscription.keys.p256dh,
+                userAgent: req.headers['user-agent'] ?? null,
+            },
+            create: {
+                storeId,
+                endpoint: subscription.endpoint,
+                auth: subscription.keys.auth,
+                p256dh: subscription.keys.p256dh,
+                userAgent: req.headers['user-agent'] ?? null,
+            },
+        });
+        res.json({ success: true });
+    }
+    catch (error) {
+        adapters.logger.error('Merchant push subscribe error', error);
+        res.status(500).json({ error: 'Failed to save subscription' });
+    }
+});
+// POST /api/push/unsubscribe — Remove a merchant push subscription.
+router.post('/push/unsubscribe', authMiddleware, async (req, res) => {
+    try {
+        const storeId = req.user.storeId;
+        const { endpoint } = req.body;
+        if (!endpoint || typeof endpoint !== 'string') {
+            return res.status(400).json({ error: 'endpoint required' });
+        }
+        await prisma.storePushSubscription.deleteMany({ where: { storeId, endpoint } });
+        res.json({ success: true });
+    }
+    catch (error) {
+        adapters.logger.error('Merchant push unsubscribe error', error);
+        res.status(500).json({ error: 'Failed to remove subscription' });
+    }
+});
+// --- Test-only endpoints for E2E push verification ---
+// These emit real EventBus events for manual/E2E testing. Protected by a test secret.
+function testAuth(req, res) {
+    const secret = req.headers['x-test-secret'];
+    if (secret !== process.env.TEST_E2E_SECRET) {
+        res.status(403).json({ error: 'Forbidden' });
+        return false;
+    }
+    return true;
+}
+// POST /api/test/trigger-order-created — emit order.created for a store (by email).
+router.post('/test/trigger-order-created', async (req, res) => {
+    if (!testAuth(req, res))
+        return;
+    try {
+        const { email } = req.body;
+        if (!email)
+            return res.status(400).json({ error: 'email required' });
+        const store = await prisma.store.findUnique({ where: { email, deletedAt: null }, select: { id: true } });
+        if (!store)
+            return res.status(404).json({ error: 'Store not found' });
+        eventBus.publish({
+            event: 'order.created',
+            storeId: store.id,
+            data: { orderId: `test-${Date.now()}`, storeId: store.id, itemCount: 2, total: 100000 },
+            ts: Date.now(),
+        });
+        res.json({ success: true, storeId: store.id, event: 'order.created' });
+    }
+    catch (error) {
+        res.status(500).json({ error: error?.message || 'Failed' });
+    }
+});
+// POST /api/test/trigger-payment-pending — emit order.payment_verification_pending.
+router.post('/test/trigger-payment-pending', async (req, res) => {
+    if (!testAuth(req, res))
+        return;
+    try {
+        const { email } = req.body;
+        if (!email)
+            return res.status(400).json({ error: 'email required' });
+        const store = await prisma.store.findUnique({ where: { email, deletedAt: null }, select: { id: true } });
+        if (!store)
+            return res.status(404).json({ error: 'Store not found' });
+        eventBus.publish({
+            event: 'order.payment_verification_pending',
+            storeId: store.id,
+            data: { orderId: `test-pay-${Date.now()}`, storeId: store.id, total: 50000 },
+            ts: Date.now(),
+        });
+        res.json({ success: true, storeId: store.id, event: 'order.payment_verification_pending' });
+    }
+    catch (error) {
+        res.status(500).json({ error: error?.message || 'Failed' });
+    }
+});
+// POST /api/test/trigger-customer-message — emit message.created (customer→admin).
+router.post('/test/trigger-customer-message', async (req, res) => {
+    if (!testAuth(req, res))
+        return;
+    try {
+        const { email } = req.body;
+        if (!email)
+            return res.status(400).json({ error: 'email required' });
+        const store = await prisma.store.findUnique({ where: { email, deletedAt: null }, select: { id: true } });
+        if (!store)
+            return res.status(404).json({ error: 'Store not found' });
+        eventBus.publish({
+            event: 'message.created',
+            storeId: store.id,
+            data: {
+                id: `test-msg-${Date.now()}`,
+                conversationId: `test-conv-${store.id}`,
+                sender: 'customer',
+                content: 'Halo, ini pesan test dari customer',
+                storeId: store.id,
+                customerName: 'Customer Test',
+            },
+            ts: Date.now(),
+        });
+        res.json({ success: true, storeId: store.id, event: 'message.created' });
+    }
+    catch (error) {
+        res.status(500).json({ error: error?.message || 'Failed' });
     }
 });
 export default router;
