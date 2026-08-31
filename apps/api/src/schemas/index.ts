@@ -79,6 +79,14 @@ export const resetPasswordSchema = z.object({
 
 export type ResetPasswordInput = z.infer<typeof resetPasswordSchema>;
 
+// ─── ADMIN PASSWORD RESET SCHEMA (operator-only, no email flow) ───
+export const adminResetPasswordSchema = z.object({
+  adminEmail: z.string().regex(/^[^\s@]+@[^\s@]+\.[^\s@]+$/, 'Invalid email format'),
+  newPassword: z.string().min(6, 'Password must be at least 6 characters').max(128, 'Password must not exceed 128 characters'),
+});
+
+export type AdminResetPasswordInput = z.infer<typeof adminResetPasswordSchema>;
+
 // ─── CONVERSATION SCHEMAS ───
 
 export const updateStatusSchema = z.object({
