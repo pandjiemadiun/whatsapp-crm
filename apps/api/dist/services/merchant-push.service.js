@@ -27,14 +27,10 @@ async function clearExpiredSubscription(storeId, endpoint) {
 async function sendToStore(storeId, message, eventTag) {
     // Tenant isolation assertion: only send to the store that owns the event.
     const subs = await getStoreSubscriptions(storeId);
-    if (!subs.length) {
-        adapters.logger.info('merchant push: no subscriptions', { storeId, tag: eventTag });
+    if (!subs.length)
         return;
-    }
     // Dedup: if merchant dashboard is online for this store, skip push.
-    const online = realtimeService.isStoreOnline(storeId);
-    adapters.logger.info('merchant push: checking', { storeId, tag: eventTag, subs: subs.length, online });
-    if (online) {
+    if (realtimeService.isStoreOnline(storeId)) {
         adapters.logger.info('merchant push skipped (store online)', { storeId, tag: eventTag });
         return;
     }
