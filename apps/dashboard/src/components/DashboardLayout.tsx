@@ -8,6 +8,7 @@ import {
 import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
 import QloBotMark from './QloBotMark';
+import MerchantNotificationPrompt from './MerchantNotificationPrompt';
 
 // ── NAV GROUPS ──
 const navGroups: Array<{ label: string; items: Array<{ label: string; path: string; icon: React.ElementType }> }> = [
@@ -59,6 +60,14 @@ export default function DashboardLayout() {
   const [pendingCount, setPendingCount] = useState(0);
   const [lowStockCount, setLowStockCount] = useState(0);
   const [notificationOpen, setNotificationOpen] = useState(false);
+  const [vapidPublicKey, setVapidPublicKey] = useState<string | null>(null);
+
+  // ── Fetch VAPID public key for merchant push ──
+  useEffect(() => {
+    api.get('/push/vapid-public-key')
+      .then((res) => setVapidPublicKey(res.data?.publicKey ?? null))
+      .catch(() => {});
+  }, []);
 
   const ORDER_PENDING = ['pending', 'waiting_payment', 'waiting_address', 'draft'];
 
@@ -248,9 +257,12 @@ if (wa.status === 'fulfilled') {
                     {notificationCount}
                   </span>
                 )}
-              </button>
+               </button>
 
-              {/* Dropdown */}
+               {/* Merchant push opt-in */}
+               <MerchantNotificationPrompt vapidPublicKey={vapidPublicKey} />
+
+               {/* Dropdown */}
               {notificationOpen && (
                 <div className="fixed inset-x-4 top-[60px] z-50 sm:absolute sm:inset-x-auto sm:top-full sm:right-0 sm:mt-2 sm:w-72 bg-white dark:bg-dcard border border-line dark:border-dline rounded-xl shadow-lg p-2 space-y-1">
   {notificationCount === 0 ? (
