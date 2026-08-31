@@ -24,11 +24,6 @@ const ENCRYPTED_MODELS: Array<{
 /** Exact phrase admin must type to confirm rotation. */
 export const ROTATION_CONFIRM_PHRASE = 'ROTATE ENCRYPTION KEY';
 
-function isLikelyEncrypted(value: string | null | undefined): boolean {
-  if (!value) return false;
-  return value.includes(':') && value.split(':').length === 3;
-}
-
 interface ModelDryRun {
   rowCount: number;
   encryptedFieldCount: number;
@@ -198,16 +193,9 @@ export class KeyRotationService {
             const encrypted = row[field];
             if (!encrypted) continue;
 
-            // Decrypt with OLD key
-            const decrypted = decryptField(encrypted, oldKeyBuffer);
-
-            // Detect decryption failure: result unchanged AND was encrypted format
-            if (decrypted === encrypted && isLikelyEncrypted(encrypted)) {
-              throw new Error(
-                `Decryption failed: ${model}.${field} (id=${row.id}) — current key cannot decrypt. ` +
-                `Aborting entire rotation. Restore from backup if needed.`
-              );
-            }
+            // Decrypt with OLD key — throws FieldDecryptionError on failure
+            // (wrong key or corrupt data), aborting the entire rotation.
+            const decrypted = decryptField(encrypted, oldKeyBuffer, { model, field, recordId: row.id });
 
             // If value was plaintext (not encrypted), re-encrypt with new key too
             const reencrypted = encryptField(decrypted, newKeyBuffer);

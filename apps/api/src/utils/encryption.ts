@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { FieldDecryptionError, type DecryptFieldContext } from '../errors/FieldDecryptionError.js';
 
 /**
  * Application-level field encryption (Phase 1.10 — G2).
@@ -142,9 +143,11 @@ export function encryptField(plaintext: string | null | undefined, key: Buffer |
  * Dekripsi string yang dienkripsi oleh encryptField.
  * @param encrypted - string format "iv:tag:ciphertext"
  * @param key - Buffer key (32 bytes). Jika null, kembalikan apa adanya.
+ * @param ctx - optional model/field/record context for error reporting.
  * @returns plaintext asli, atau null jika input null
+ * @throws FieldDecryptionError on decryption failure (wrong key / corrupt data)
  */
-export function decryptField(encrypted: string | null | undefined, key: Buffer | null): string | null {
+export function decryptField(encrypted: string | null | undefined, key: Buffer | null, ctx?: DecryptFieldContext): string | null {
   if (!encrypted || encrypted === null) return null;
   if (!key) return encrypted;
 
@@ -167,8 +170,9 @@ export function decryptField(encrypted: string | null | undefined, key: Buffer |
     const decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
     return decrypted.toString('utf8');
   } catch {
-    // Jika dekripsi gagal (key beda, data corrupt), kembalikan nilai asli
-    return encrypted;
+    // Jangan kembalikan ciphertext mentah — throw agar caller tahu data tidak bisa didekripsi.
+    // Pesan error TIDAK menyertakan ciphertext, key, atau plaintext.
+    throw new FieldDecryptionError(ctx?.model ?? 'unknown', ctx?.field ?? 'unknown', ctx?.recordId);
   }
 }
 

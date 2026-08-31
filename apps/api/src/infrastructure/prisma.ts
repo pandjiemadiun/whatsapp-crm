@@ -85,9 +85,10 @@ prisma.$use(async (params, next) => {
     // ── Decrypt on read: findUnique, findFirst, findMany ──
     const decryptResult = (obj: Record<string, unknown> | null): Record<string, unknown> | null => {
       if (!obj || typeof obj !== 'object') return obj;
+      const recordId = (obj as Record<string, unknown>).id as string | undefined;
       for (const field of sensitive) {
         if (obj[field] !== undefined && typeof obj[field] === 'string') {
-          obj[field] = decryptField(obj[field] as string, key);
+          obj[field] = decryptField(obj[field] as string, key, { model, field, recordId });
         }
       }
       return obj;
