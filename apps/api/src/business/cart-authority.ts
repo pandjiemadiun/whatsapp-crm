@@ -29,6 +29,7 @@ import { adapters } from '../adapters/container.js';
 import { productService } from './product.service.js';
 import { transitionOrder } from './order-transition.js';
 import { ErrorCodes } from '../constants/errorCodes.js';
+import { eventBus } from '../services/event-bus.service.js';
 import type { ConfirmedItem } from '../domain/types.js';
 import type { CartOp } from '../domain/types.js';
 
@@ -453,6 +454,9 @@ export class CartAuthority {
    *   AutoCancel cron) by reversing the same per-item decrement.
    */
   async checkout(conversationId: string, storeId: string): Promise<string> {
+    let orderTotal = 0;
+    let orderItemCount = 0;
+
     const orderId = await prisma.$transaction(async (tx) => {
       const order = await tx.order.findFirst({
         where: {
@@ -544,7 +548,24 @@ export class CartAuthority {
       //    (OrderItem rows are immutable snapshot; confirmedItems was scratchpad)
       await this.syncConfirmedItemsJson(tx as any, conversationId, []);
 
+      // Capture values for event emission (order is in scope here).
+      orderTotal = order.totalPrice ?? order.orderItems.reduce((s: number, i: { subtotal: number }) => s + (i.subtotal ?? 0), 0);
+      orderItemCount = order.orderItems.length;
+
       return order.id;
+    });
+
+    // Emit order.created AFTER transaction commits (so push listeners see the order).
+    eventBus.publish({
+      event: 'order.created',
+      storeId,
+      data: {
+        orderId,
+        storeId,
+        total: orderTotal,
+        itemCount: orderItemCount,
+      },
+      ts: Date.now(),
     });
 
     return orderId;

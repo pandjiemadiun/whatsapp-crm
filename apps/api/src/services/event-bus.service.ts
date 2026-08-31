@@ -23,7 +23,9 @@ export type ChatbotEventType =
   | 'conversation.resolved'
   | 'conversation.updated'
   | 'notification.created'
-  | 'device.status.changed'; // FASE 6 — didefinisikan, belum dipublish di FASE 1
+  | 'device.status.changed' // FASE 6 — didefinisikan, belum dipublish di FASE 1
+  | 'order.created'
+  | 'order.payment_verification_pending';
 
 export interface EventEnvelope<D = unknown> {
   event: ChatbotEventType;

@@ -53,6 +53,7 @@ import { startHealthCheckInterval } from './business/health.service.js';
 import { messageProcessorService } from './services/message-processor.service.js';
 import { realtimeService } from './services/realtime.service.js';
 import { notificationService } from './services/notification.service.js';
+import { merchantPushService } from './services/merchant-push.service.js';
 import { healthMonitorService } from './services/health-monitor.service.js';
 import { scheduleBackups } from './bootstrap/scheduleBackups.js';
 import { scheduleFollowUps } from './bootstrap/scheduleFollowUps.js';
@@ -207,6 +208,10 @@ realtimeService.init(httpServer, corsAllowedOrigins);
 // FASE 4 — Web Push notification SIGNAL service. Subscribes to `message.created`;
 // push is secondary to Socket.IO (no duplicate). Does not touch the delivery engine.
 notificationService.init();
+
+// Merchant-side push — subscribes to order.created, order.payment_verification_pending,
+// message.created (customer→admin). Scoped by storeId, dedupes against admin socket presence.
+merchantPushService.init();
 
 httpServer.listen(PORT, async () => {
   logger.info(`🚀 GARUDA API running on port ${PORT}`);

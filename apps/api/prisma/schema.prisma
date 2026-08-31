@@ -61,6 +61,7 @@ magicPasteRuns        MagicPasteRun[]
   bankAccounts          BankAccount[]
   sops                  Sop[]
   customers             Customer[]
+  pushSubscriptions     StorePushSubscription[]
 
   @@map("stores")
 }
@@ -490,6 +491,25 @@ model Customer {
   @@unique([storeId, phone])
   @@index([storeId])
   @@map("customers")
+}
+
+// Merchant (Store) push subscriptions — one row per subscribed browser/device.
+// A store may have multiple tabs/devices subscribed simultaneously.
+// Scoped strictly by storeId (tenant isolation).
+model StorePushSubscription {
+  id          String   @id @default(uuid())
+  storeId     String
+  endpoint    String
+  auth        String
+  p256dh      String
+  userAgent   String?
+  createdAt   DateTime @default(now())
+
+  store       Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, endpoint])
+  @@index([storeId])
+  @@map("store_push_subscriptions")
 }
 
 model SystemSetting {

@@ -11,6 +11,7 @@ import { sanitize } from '../lib/sanitize.js';
 import { storeAuthLimiter } from '../middleware/rate-limiters.js';
 import { authMiddleware, AuthenticatedRequest } from '../middleware/auth.js';
 import { getEncryptionKey, hashField } from '../utils/encryption.js';
+import { getVapidConfig } from '../config/vapid.config.js';
 
 const router = express.Router();
 
@@ -18,6 +19,12 @@ const router = express.Router();
 function generateWebhookSecret(): string {
   return crypto.randomBytes(24).toString('hex');
 }
+
+// GET /api/push/vapid-public-key — Expose VAPID public key for merchant push subscription.
+router.get('/push/vapid-public-key', (_req: Request, res: Response) => {
+  const cfg = getVapidConfig();
+  res.json({ publicKey: cfg?.publicKey ?? null });
+});
 
 // POST /api/auth/register — Register with email + password
 router.post('/register', validateRequest(storeRegisterSchema, 'body'), storeAuthLimiter, async (req: Request, res: Response) => {
@@ -332,6 +339,66 @@ router.post('/profile/qris-image', authMiddleware, upload.single('image'), async
   } catch (error: any) {
     adapters.logger.error('QRIS image upload failed', error as Error);
     res.status(400).json({ error: error?.message || 'Failed to upload QRIS image' });
+  }
+});
+
+// POST /api/push/subscribe — Store (merchant) push subscription.
+// Auth required. storeId derived from bearer token (never from body).
+// Supports multiple subscriptions per store (multi-device/tab).
+router.post('/push/subscribe', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const storeId = req.user!.storeId;
+    const { subscription } = req.body as {
+      subscription?: { endpoint?: string; keys?: { auth?: string; p256dh?: string } };
+    };
+
+    if (
+      !subscription ||
+      typeof subscription.endpoint !== 'string' ||
+      !subscription.keys ||
+      typeof subscription.keys.auth !== 'string' ||
+      typeof subscription.keys.p256dh !== 'string'
+    ) {
+      return res.status(400).json({ error: 'Valid PushSubscription (endpoint, auth, p256dh) required' });
+    }
+
+    await prisma.storePushSubscription.upsert({
+      where: { storeId_endpoint: { storeId, endpoint: subscription.endpoint } },
+      update: {
+        auth: subscription.keys.auth,
+        p256dh: subscription.keys.p256dh,
+        userAgent: req.headers['user-agent'] ?? null,
+      },
+      create: {
+        storeId,
+        endpoint: subscription.endpoint,
+        auth: subscription.keys.auth,
+        p256dh: subscription.keys.p256dh,
+        userAgent: req.headers['user-agent'] ?? null,
+      },
+    });
+
+    res.json({ success: true });
+  } catch (error: any) {
+    adapters.logger.error('Merchant push subscribe error', error as Error);
+    res.status(500).json({ error: 'Failed to save subscription' });
+  }
+});
+
+// POST /api/push/unsubscribe — Remove a merchant push subscription.
+router.post('/push/unsubscribe', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const storeId = req.user!.storeId;
+    const { endpoint } = req.body as { endpoint?: string };
+    if (!endpoint || typeof endpoint !== 'string') {
+      return res.status(400).json({ error: 'endpoint required' });
+    }
+
+    await prisma.storePushSubscription.deleteMany({ where: { storeId, endpoint } });
+    res.json({ success: true });
+  } catch (error: any) {
+    adapters.logger.error('Merchant push unsubscribe error', error as Error);
+    res.status(500).json({ error: 'Failed to remove subscription' });
   }
 });
 
