@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
-import { Shield, LogOut, LayoutDashboard, Store, Settings, ClipboardList, Archive, Smartphone, Package, Menu, X, Info, Loader2, BarChart3 } from 'lucide-react';
+import { Shield, LogOut, LayoutDashboard, Store, Settings, ClipboardList, Archive, Smartphone, Package, Menu, X, Info, Loader2, BarChart3, Database } from 'lucide-react';
 import { useAdminAuth } from '../../contexts/AdminAuthContext';
 import adminApi from '../../services/adminApi';
 
@@ -10,6 +10,7 @@ const navItems = [
   { label: 'Products', path: '/admin/products', icon: Package },
   { label: 'GOWA', path: '/admin/gowa', icon: Smartphone },
   { label: 'Config', path: '/admin/config', icon: Settings },
+  { label: 'AI Providers', path: '/admin/ai-providers', icon: Database },
   { label: 'Analytics', path: '/admin/analytics', icon: BarChart3 },
   { label: 'Audit Log', path: '/admin/audit-logs', icon: ClipboardList },
   { label: 'Backups', path: '/admin/backups', icon: Archive },
