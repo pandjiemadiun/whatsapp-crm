@@ -14,7 +14,7 @@
 > di laporan lalu hilang. Setiap baris WAJIB punya kolom "Trigger" — kondisi
 > konkret kapan item ini harus ditagih kembali, bukan "nanti" yang kabur.
 >
-> **Update terakhir:** 1 Sep 2026.
+> **Update terakhir:** 2 Sep 2026.
 
 ---
 
@@ -22,7 +22,6 @@
 
 | # | Item | Dari task/kontrak | Kenapa di-defer | Trigger untuk ditagih |
 |---|------|-------------------|------------------|------------------------|
-| 1 | **PV-P3 — Magic-paste variant extraction belum mulai.** LLM prompt magic-paste (`product.service.ts:1479-1535`) tidak punya rule untuk varian; teks seperti "Kaos merah/biru, size S/M/L" tidak punya field tujuan — didrop atau nyasar ke description. `ProductVariant` model + dashboard CRUD manual (P0/P1/P2) SUDAH ada; hanya jalur magic-paste yang belum wired. | `PROJECT-CONTRACT-PRODUCT-VARIANTS.md` §5 | Sengaja diurutkan TERAKHIR — "paling mahal", butuh P0-P2 stabil dulu (sudah terpenuhi sekarang) | Owner minta magic-paste bisa deteksi varian saat entri produk baru — **sudah ditagih 1 Sep 2026**, jadi task berikutnya setelah tracker ini dibuat |
 | 2 | Billing / pricing model — TIDAK ADA sama sekali di codebase | `GO-LIVE-BUSINESS-READINESS.md` #1 | Keputusan bisnis, bukan teknis — belum diputuskan free/paid/trial/per-message | Sebelum onboarding merchant riil pertama yang bukan test/canary |
 | 3 | Terms of Service / Privacy Policy — TIDAK ADA, padahal platform simpan PII terenkripsi (UU PDP applicable) | `GO-LIVE-BUSINESS-READINESS.md` #3 | Legal requirement, tapi butuh keputusan/draft di luar kode | Sebelum onboarding merchant riil pertama (legal blocker, bukan opsional) |
 | 4 | VII-A — Rotate seluruh secret (Groq/Gemini/DB/dll, pernah ter-expose di GitHub history lama) | `BUG-BELUM-DIBERESKAN.md` §VII-A | Ditunda sampai sebelum go-live, website belum ada trafik nyata (keputusan owner) | Sebelum go-live sungguhan (traffic nyata pertama) |
@@ -59,3 +58,9 @@
   apakah ada defer lama yang triggernya sudah terpenuhi tapi belum ditagih.
 - **Item yang sudah selesai** → pindahkan ke bagian bawah sebagai
   "✅ RESOLVED" dengan tanggal + commit, JANGAN dihapus (audit trail).
+
+## ✅ RESOLVED
+
+| # | Item | Resolved | Commit(s) |
+|---|------|----------|-----------|
+| 1 | PV-P3 — Magic-paste variant extraction. Best-effort LLM parsing (variants[] with attributes/price/stock per option, threshold: ≥2 distinct prices or distinct stock+shared price), preview+edit step before save (ConfirmCreateModal), transactional create (atomic Product+ProductVariant write, P2002→clean 409, no partial rows), merchant variantOverrides take precedence over raw LLM output. No hard gate (unlike needsWeightInput) — always produces an editable preview, never blocks creation. | 2 Sep 2026 | `adba501` (Unit 1 — parsing), `7950533` (Unit 2 — transactional create + dashboard preview/edit + e2e a-g, regression 271/37/118/46/8) |
