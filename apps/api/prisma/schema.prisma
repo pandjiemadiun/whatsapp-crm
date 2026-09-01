@@ -53,6 +53,7 @@ model Store {
   conversations         Conversation[]
   faqs                  FAQ[]
   knowledge             Knowledge[]
+  storeDocuments        StoreDocument[]
   orders                Order[]
   settings              StoreSetting[]
   productCategories     ProductCategory[]
@@ -119,6 +120,7 @@ model FAQ {
   keywords              String[]
   category              String?
   priority              Int      @default(1)
+  source                String?
   embedding             String?
   matchCount            Int      @default(0)
   isActive              Boolean  @default(true)
@@ -149,6 +151,45 @@ model Knowledge {
   store                 Store    @relation(fields: [storeId], references: [id])
   @@index([storeId])
   @@map("knowledge_base")
+}
+
+// PV-P1 — Onboarding Wizard contract §3.1: StoreDocument.
+//
+// Invariant (enforced in service layer, not DB constraint): rows with
+// status='published' must never have `content` updated. Edits after publish
+// create a new row (version+1, status='draft'). Max 1 published row per
+// (storeId, type) at any time. Enforcement lands in P4 (Review/edit/publish
+// flow), NOT this task.
+model StoreDocument {
+  id                    String              @id @default(uuid())
+  storeId               String
+  type                  StoreDocumentType
+  version               Int                 @default(1)
+  content               String
+  status                StoreDocumentStatus @default(draft)
+  generatedFromAnswers  Json?
+  generatedAt           DateTime?
+  publishedAt           DateTime?
+  editedAt              DateTime            @updatedAt
+  createdAt             DateTime            @default(now())
+
+  store                 Store               @relation(fields: [storeId], references: [id])
+  orders                Order[]
+
+  @@unique([storeId, type, version])
+  @@index([storeId, type, status])
+  @@map("store_documents")
+}
+
+enum StoreDocumentType {
+  tos
+  sop
+}
+
+enum StoreDocumentStatus {
+  draft
+  published
+  superseded
 }
 
 model Conversation {
@@ -264,6 +305,10 @@ model Order {
   // Set atomically at checkout (stock decrement); consumed by the 15-min
   // AutoCancel cron. NULL = order under 7-day manual window / terminal state.
   autoCancelAt          DateTime?
+  // PV-P1: TOS document captured at checkout (wizard-generated StoreDocument).
+  // Nullable — legacy orders have none; no backfill required.
+  tosDocumentId         String?
+  tosDocument           StoreDocument? @relation(fields: [tosDocumentId], references: [id])
 
   store                 Store    @relation(fields: [storeId], references: [id])
   conversation          Conversation @relation(fields: [conversationId], references: [id])
