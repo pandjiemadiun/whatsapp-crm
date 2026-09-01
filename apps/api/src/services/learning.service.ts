@@ -1,5 +1,7 @@
 import { prisma } from '../infrastructure/prisma.js';
 import { groqAdapter } from '../adapters/ai/groq.adapter.js';
+import { aiProviderResolver } from './ai-provider-resolver.service.js';
+import type { AIProvider } from '../adapters/ai/types.js';
 import { adapters } from '../adapters/container.js';
 
 /**
@@ -139,7 +141,12 @@ Aturan:
 - Output HANYA JSON valid: [{"question":"...","answer":"...","frequency":3}]`;
 
   try {
-    const result = await groqAdapter.generate(prompt, {
+    // Unit 5: 'batch_task' role — resolver-backed, falls back to the groqAdapter
+    // singleton when no active AIProviderConfig row exists for 'batch_task'
+    // (default OFF: no rows => groqAdapter, identical to prior behavior).
+    const batchTaskProviders = await aiProviderResolver.getProvidersForRole('batch_task');
+    const llm: AIProvider = batchTaskProviders.length > 0 ? batchTaskProviders[0] : groqAdapter;
+    const result = await llm.generate(prompt, {
       temperature: 0.2,
       maxTokens: 500,
       jsonMode: true,

@@ -195,7 +195,11 @@ describe('ai-providers CRUD (real prisma, prefixed cleanup)', () => {
     assert.equal(state.status, 404);
   });
 
-  test('DELETE removes the row', async () => {
+  test('DELETE removes a row when the role has other active providers', async () => {
+    // Unit 5 Part 6: a role with >=2 active providers may be deleted freely.
+    const other = await prisma.aIProviderConfig.create({
+      data: { name: `${PREFIX}del-sibling`, format: 'openai_compatible', baseUrl: 'https://o.example/v1', apiKey: RAW_KEY, model: 'gpt-4o', role: 'other', priority: 1, isActive: true },
+    });
     const created = await prisma.aIProviderConfig.create({
       data: { name: `${PREFIX}del`, format: 'openai_compatible', baseUrl: 'https://o.example/v1', apiKey: RAW_KEY, model: 'gpt-4o', role: 'other', priority: 1, isActive: true },
     });
@@ -203,6 +207,9 @@ describe('ai-providers CRUD (real prisma, prefixed cleanup)', () => {
     assert.equal(state.status, 200);
     const gone = await prisma.aIProviderConfig.findUnique({ where: { id: created.id } });
     assert.equal(gone, null, 'row must be deleted');
+    // the sibling active provider for the same role must be untouched
+    const stillThere = await prisma.aIProviderConfig.findUnique({ where: { id: other.id } });
+    assert.ok(stillThere, 'other active provider for the role must remain');
   });
 });
 
@@ -342,6 +349,47 @@ describe('ai-providers module surface', () => {
     assert.equal(maskKey('sk-xyz123456'), '********3456');          // last4 preserved, rest masked (len 12 => 8 stars)
     assert.equal(maskKey('short').slice(-4), 'hort');               // last4 preserved
     assert.equal(maskKey('sk-xyz123456').includes('xyz123456'), false, 'raw secret must not be a substring');
+  });
+});
+
+describe('ai-providers DELETE guard (Unit 5 Part 6)', () => {
+  test('409 when deleting the only active provider for its role (row NOT deleted)', async () => {
+    const created = await prisma.aIProviderConfig.create({
+      data: { name: `${PREFIX}only-active`, format: 'openai_compatible', baseUrl: 'https://o.example/v1', apiKey: RAW_KEY, model: 'gpt-4o', role: 'other', priority: 1, isActive: true },
+    });
+    const { res, state } = await callHandler(deleteProvider, { params: { id: created.id } });
+    assert.equal(state.status, 409);
+    const body = jsonBodyOf(state);
+    assert.equal(body.code, 'DELETE_LAST_ACTIVE_PROVIDER', 'must surface a machine-readable code');
+    assert.ok(String(body.error).includes('only active provider for role'), 'must name the role in the message');
+    // row must NOT be deleted
+    const stillThere = await prisma.aIProviderConfig.findUnique({ where: { id: created.id } });
+    assert.ok(stillThere, 'row must NOT be deleted on 409');
+  });
+
+  test('delete succeeds when >1 active provider for the role', async () => {
+    const a = await prisma.aIProviderConfig.create({
+      data: { name: `${PREFIX}two-a`, format: 'openai_compatible', baseUrl: 'https://o.example/v1', apiKey: RAW_KEY, model: 'gpt-4o', role: 'other', priority: 1, isActive: true },
+    });
+    const b = await prisma.aIProviderConfig.create({
+      data: { name: `${PREFIX}two-b`, format: 'openai_compatible', baseUrl: 'https://o.example/v1', apiKey: RAW_KEY, model: 'gpt-4o', role: 'other', priority: 1, isActive: true },
+    });
+    const { res, state } = await callHandler(deleteProvider, { params: { id: a.id } });
+    assert.equal(state.status, 200);
+    const gone = await prisma.aIProviderConfig.findUnique({ where: { id: a.id } });
+    assert.equal(gone, null, 'deleted row must be gone');
+    const sibling = await prisma.aIProviderConfig.findUnique({ where: { id: b.id } });
+    assert.ok(sibling, 'the other active provider for the role must remain');
+  });
+
+  test('deleting an inactive row always succeeds even when it is the only one', async () => {
+    const created = await prisma.aIProviderConfig.create({
+      data: { name: `${PREFIX}inactive-only`, format: 'openai_compatible', baseUrl: 'https://o.example/v1', apiKey: RAW_KEY, model: 'gpt-4o', role: 'other', priority: 1, isActive: false },
+    });
+    const { res, state } = await callHandler(deleteProvider, { params: { id: created.id } });
+    assert.equal(state.status, 200, 'inactive row deletion must not be guarded');
+    const gone = await prisma.aIProviderConfig.findUnique({ where: { id: created.id } });
+    assert.equal(gone, null, 'inactive row must be deleted');
   });
 });
 

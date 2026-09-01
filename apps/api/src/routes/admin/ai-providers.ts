@@ -17,16 +17,20 @@
  *    middleware in infrastructure/prisma.ts (SENSITIVE_FIELDS: AIProviderConfig.apiKey),
  *    so a findUnique/findMany here yields the PLAINTEXT key in memory only.
  *
- * DELETE guard (owner question — deliberated, not silently decided):
- *  - DELETE /:id is intentionally permissive: no "last active provider for a
- *    role" guard. isActive + priority ordering is the admin's responsibility.
- *  - Rationale: a hard guard would block legitimate cleanup/migration flows
- *    (admin may be rotating away from a role). The resolver (Unit 3a) already
- *    fails-loud on empty lists; the gateway (Unit 3b) warns + falls back to the
- *    default singleton when a role has no active providers — so a missing role
- *    surfaces as a logged warn, not a silent outage. A "protect the last active
- *    chat_primary/chat_fallback" guard is deferred (cheap: pre-delete read + 409)
- *    and flagged here as future work.
+ * DELETE guard (Unit 5 Part 6 — implemented):
+ *  - DELETE /:id checks, before deleting, whether this row is the LAST ACTIVE
+ *    provider for its role (count of OTHER active rows same role). If that
+ *    count === 0, returns 409 (cannot delete into a hard empty-active-role state).
+ *  - Deleting an already-inactive row, or a role with >1 active provider, is
+ *    always allowed (rotation/migration flows keep working).
+ *  - Note: chat_gatekeeper rows are currently cosmetic (gatekeeper stays pinned
+ *    to groqAdapter — see Option B in the Unit 5 report); the guard still applies
+ *    generically to every role including chat_gatekeeper/batch_task.
+ *  - The resolver (Unit 3a) fails-loud on empty role lists and the gateway
+ *    (Unit 3b) warns + falls back to the default singleton when a role has no
+ *    active providers — so even without the guard a missing role surfaces as a
+ *    logged warn rather than a silent outage; the 409 simply makes the admin
+ *    intent explicit upfront.
  *
  * Test-connection design (owner question — reported):
  *  - POST /test-connection     -> test DRAFT (format/baseUrl/apiKey/model) BEFORE saving.
@@ -73,6 +77,7 @@ export const providerRoleSchema = z.enum([
   'chat_primary',
   'chat_fallback',
   'chat_gatekeeper',
+  'batch_task',
   'wizard',
   'other',
 ]);
@@ -273,6 +278,25 @@ export const deleteProvider = async (req: AuthenticatedAdminRequest, res: Respon
   const { id } = req.params;
   const existing = await prisma.aIProviderConfig.findUnique({ where: { id } });
   if (!existing) return res.status(404).json({ error: 'Provider not found' });
+
+  // Unit 5 Part 6: do not delete yourself into a hard empty-active-role state.
+  // Active row only — deleting an inactive row (or a role that already has 0
+  // active providers) is always fine.
+  if (existing.isActive) {
+    const othersActive = await prisma.aIProviderConfig.count({
+      where: { role: existing.role, isActive: true, id: { not: id } },
+    });
+    if (othersActive === 0) {
+      return res.status(409).json({
+        success: false,
+        error:
+          `Cannot delete the only active provider for role '${existing.role}' — ` +
+          `deactivate it or add a replacement first.`,
+        code: 'DELETE_LAST_ACTIVE_PROVIDER',
+      });
+    }
+  }
+
   await prisma.aIProviderConfig.delete({ where: { id } });
   adapters.logger.warn('AIProviderConfig deleted', {
     id, name: existing.name, format: existing.format, role: existing.role,

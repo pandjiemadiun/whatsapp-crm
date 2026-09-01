@@ -3,6 +3,7 @@ import { geminiAdapter } from '../adapters/ai/gemini.adapter.js';
 import { redisAdapter } from '../adapters/cache/redis.adapter.js';
 import { adapters } from '../adapters/container.js';
 import { configService } from './config.service.js';
+import { aiProviderResolver } from '../services/ai-provider-resolver.service.js';
 import { prisma } from '../infrastructure/prisma.js';
 const APP_START_TIME = Date.now();
 
@@ -22,6 +23,13 @@ interface SystemStatus {
     redis: DependencyStatus;
     groq: DependencyStatus;
     gemini: DependencyStatus;
+    /** Dynamic AIProviderConfig-backed providers (per role). Present when
+     *  llm.useDynamicProviders is ON; omitted/empty when OFF. Added in Unit 5. */
+    aiProviders?: Record<string, {
+      providers: string[];
+      healthy: boolean;
+      error?: string;
+    }>;
   };
   metrics: {
     totalStores: number;
@@ -49,12 +57,13 @@ export class HealthService {
       return cache.data;
     }
 
-    const [dbStatus, redisStatus, groqStatus, geminiStatus, metrics] = await Promise.all([
+    const [dbStatus, redisStatus, groqStatus, geminiStatus, metrics, aiProvidersStatus] = await Promise.all([
       this.checkDatabase(),
       this.checkRedis(),
       this.checkGroq(),
       this.checkGemini(),
       this.getMetrics(),
+      this.checkAiProviders(),
     ]);
 
     const deps = {
@@ -62,6 +71,7 @@ export class HealthService {
       redis: redisStatus,
       groq: groqStatus,
       gemini: geminiStatus,
+      aiProviders: aiProvidersStatus,
     };
 
     let overall: 'ok' | 'degraded' | 'down';
@@ -136,6 +146,41 @@ export class HealthService {
     } catch (error) {
       return { status: 'error', error: (error as Error).message };
     }
+  }
+
+  /**
+   * Unit 5 — health for dynamic AIProviderConfig-backed providers.
+   * Shape choice: a SEPARATE `aiProviders` section on the dependencies object
+   * (merged alongside groq/gemini, which are NOT removed). Gated on the
+   * feature flag: when OFF (default, no DB rows) returns {} with no DB read,
+   * preserving the existing health response exactly.
+   */
+  async checkAiProviders(): Promise<Record<string, {
+    providers: string[];
+    healthy: boolean;
+    error?: string;
+  }>> {
+    const enabled = (await configService.getConfig('llm.useDynamicProviders')) === 'true';
+    if (!enabled) return {};
+
+    const roles = ['chat_primary', 'chat_fallback', 'chat_gatekeeper', 'batch_task', 'wizard', 'other'];
+    const out: Record<string, { providers: string[]; healthy: boolean; error?: string }> = {};
+    for (const role of roles) {
+      try {
+        const providers = await aiProviderResolver.getProvidersForRole(role);
+        if (providers.length === 0) continue;
+        const healthResults = await Promise.allSettled(
+          providers.map((p) => (p.isHealthy ? p.isHealthy() : Promise.resolve(true))),
+        );
+        const healthy = healthResults.every(
+          (r) => r.status === 'fulfilled' && r.value === true,
+        );
+        out[role] = { providers: providers.map((p) => p.getName()), healthy };
+      } catch (err) {
+        out[role] = { providers: [], healthy: false, error: (err as Error).message };
+      }
+    }
+    return out;
   }
 
   async getMetrics() {

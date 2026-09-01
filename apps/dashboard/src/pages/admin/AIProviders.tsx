@@ -18,7 +18,7 @@ import adminApi from '../../services/adminApi';
 import { useAdminAuth } from '../../contexts/AdminAuthContext';
 
 type ProviderFormat = 'openai_compatible' | 'gemini_native';
-type ProviderRole = 'chat_primary' | 'chat_fallback' | 'chat_gatekeeper' | 'wizard' | 'other';
+type ProviderRole = 'chat_primary' | 'chat_fallback' | 'chat_gatekeeper' | 'batch_task' | 'wizard' | 'other';
 
 interface ProviderRow {
   id: string;
@@ -59,6 +59,7 @@ const ROLE_OPTIONS: { value: ProviderRole; label: string }[] = [
   { value: 'chat_primary', label: 'chat_primary — main speaker' },
   { value: 'chat_fallback', label: 'chat_fallback — retry after primary' },
   { value: 'chat_gatekeeper', label: 'chat_gatekeeper — intent extraction' },
+  { value: 'batch_task', label: 'batch_task — FAQ clustering / follow-ups' },
   { value: 'wizard', label: 'wizard — onboarding' },
   { value: 'other', label: 'other' },
 ];

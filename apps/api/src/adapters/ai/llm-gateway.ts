@@ -123,10 +123,11 @@ export class LLMGateway {
    * (customer chat is NOT disrupted; the cutover is safe by default).
    *
    * NOTE: the gatekeeper is intentionally NOT resolved here. extractIntent is a
-   * GroqAdapter-specific method (groq.adapter.ts:329) — not on AIProvider and not
-   * implemented by the Unit-2 generic adapters — so swapping the gatekeeper would
-   * silently degrade intent extraction (every message -> fallback). Gatekeeper
-   * cutover is deferred to Unit 5.
+   * GroqAdapter-specific method (groq.adapter.ts:329) — not on AIProvider and
+   * not implemented by the Unit-2 generic adapters — so swapping the gatekeeper
+   * would silently degrade intent extraction (every message -> COMPLEX_CONVERSATION).
+   * Unit 5 chose Option B: gatekeeper stays pinned to the groqAdapter singleton
+   * and `chat_gatekeeper` AIProviderConfig rows are cosmetic for now.
    */
   private async resolveEffectiveProviders(): Promise<{ primary: AIProvider; fallback: AIProvider }> {
     if (!(await this.isDynamicProvidersEnabled())) {
@@ -405,6 +406,16 @@ export class LLMGateway {
   /**
    * Fast Intent & Entity Gatekeeper via Groq (gatekeeper provider).
    * Returns fallback intent on failure — never throws.
+   *
+   * Unit 5 decision — Option B: this is the resolved `this.gatekeeper`
+   * singleton and is NOT swapped by resolveEffectiveProviders(). extractIntent
+   * is GroqAdapter-specific (groq.adapter.ts:329) and not on the AIProvider
+   * interface, so resolving it from a `chat_gatekeeper` AIProviderConfig row
+   * would either require adding extractIntent to the shared interface
+   * (Option A) or implementing Groq-style intent extraction on every adapter.
+   * Option B was chosen to avoid a silent COMPLEX_CONVERSATION-for-everything
+   * regression (the Unit 3b bug) and to keep the shared interface clean.
+   * `chat_gatekeeper` rows are therefore cosmetic for now.
    */
   async extractIntent(
     message: string,
