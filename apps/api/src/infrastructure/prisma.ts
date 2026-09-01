@@ -30,6 +30,14 @@ const SENSITIVE_FIELDS: Record<string, string[]> = {
   Customer: ['phone', 'name'],
   Order: ['shippingAddress', 'notes'],
   BankAccount: ['accountNumber', 'accountName'],
+  // Unit 3a: AIProviderConfig fields. apiKey is AES-256-GCM ciphertext
+  // (apps/api/src/utils/encryption.ts#encryptField). Auto-encrypted on
+  // create/update and auto-decrypted on read by this $use middleware.
+  // Writers (seed-ai-providers-from-env.mts + Platform Config in Unit 4) must
+  // store apiKey in PLAINTEXT — the middleware encrypts. Pre-encrypting before
+  // a Prisma write causes DOUBLE encryption (the original seed did this;
+  // fixed in Unit 3a so the resolver reads a single-decrypted key).
+  AIProviderConfig: ['apiKey'],
 };
 
 /** Periodic key refresh tiap 10 menit */

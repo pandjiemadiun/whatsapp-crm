@@ -17,19 +17,21 @@
  *   - Groq   -> role='chat_fallback' + role='chat_gatekeeper' (fallback speaker +
  *               intent-extraction gatekeeper)
  *
- * apiKey is stored AES-256-GCM encrypted via encryptField() (apps/api/src/utils/
- * encryption.ts), with the key resolved through getEncryptionKey() which itself
- * lives in that same encryption module (FIELD_ENCRYPTION_KEY from
- * system_settings -> Cloudflare Worker -> env). This is the project's existing
- * field-encryption pattern (same one used for PII such as phoneNumber in the
- * Prisma `$use` middleware at apps/api/src/infrastructure/prisma.ts).
+ * ENCRYPTION (Unit 3a): apiKey is persisted in PLAINTEXT by this script. The
+ * Prisma $use field-encryption middleware (SENSITIVE_FIELDS: AIProviderConfig.apiKey
+ * in apps/api/src/infrastructure/prisma.ts) encrypts apiKey on create/update and
+ * decrypts on read automatically. This script must NOT call encryptField() — doing
+ * so would DOUBLE-encrypt (the original Unit-1 seed pre-encrypted before the
+ * middleware existed; Unit 3a registered apiKey in SENSITIVE_FIELDS, so the two
+ * would collide). The resolver (3a) reads back a single-decrypted key. If no
+ * FIELD_ENCRYPTION_KEY is available, the middleware pass-throughs (stores
+ * plaintext) — consistent with how every other sensitive field behaves.
  *
  * Idempotent: matches by `name` (there is no unique constraint on name by design)
  * and upserts — updates apiKey + config when a row exists, inserts otherwise.
  */
 import { prisma } from '../src/infrastructure/prisma.js';
 import { configService } from '../src/business/config.service.js';
-import { encryptField, getEncryptionKey } from '../src/utils/encryption.js';
 
 // Endpoint/format values the adapters expect today (see groq.adapter.ts:12,
 // gemini.adapter.ts:11). baseUrl is the "base" the Unit-3 adapter fills model +
@@ -69,22 +71,14 @@ async function upsertProvider(params: UpsertParams): Promise<boolean> {
     orderBy: { createdAt: 'desc' },
   });
 
-  const key = await getEncryptionKey();
-  if (!key) {
-    throw new Error(
-      `[seed] No FIELD_ENCRYPTION_KEY available — refusing to write apiKey for "${name}" in plaintext.`,
-    );
-  }
-  const encrypted = encryptField(apiKeyPlain, key);
-  if (!encrypted) {
-    throw new Error(`[seed] Failed to encrypt apiKey for provider "${name}"`);
-  }
-
+  // apiKey stored in PLAINTEXT — the field-encryption $use middleware encrypts
+  // on create/update (see Unit 3a note in this file's header). Do NOT
+  // pre-encrypt here or the middleware will double-encrypt.
   const data = {
     name,
     format,
     baseUrl,
-    apiKey: encrypted,
+    apiKey: apiKeyPlain,
     model,
     role,
     priority,
