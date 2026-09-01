@@ -1,0 +1,61 @@
+# DEFERRED WORK TRACKER
+
+> **Tujuan file ini:** satu sumber kebenaran untuk SEMUA keputusan defer/
+> penundaan scope yang disengaja di seluruh project — beda dari
+> `BUG-BELUM-DIBERESKAN.md` (yang mencampur bug + defer + resolved).
+> File ini KHUSUS untuk hal yang SENGAJA ditunda dengan alasan eksplisit,
+> supaya tidak ada lagi kasus seperti PV-P3 (magic-paste variant
+> extraction) — kontrak induknya ditandai "LOCKED/mostly done" padahal
+> satu sub-scope di dalamnya belum mulai sama sekali dan tidak
+> ter-track di mana pun.
+>
+> **Aturan wajib:** setiap TASK yang sengaja men-defer sebagian scope
+> HARUS menambah baris di sini pada sesi yang sama — bukan disebut sekali
+> di laporan lalu hilang. Setiap baris WAJIB punya kolom "Trigger" — kondisi
+> konkret kapan item ini harus ditagih kembali, bukan "nanti" yang kabur.
+>
+> **Update terakhir:** 1 Sep 2026.
+
+---
+
+## 🔴 Prioritas tinggi — blocking sebelum go-live atau berdampak signifikan
+
+| # | Item | Dari task/kontrak | Kenapa di-defer | Trigger untuk ditagih |
+|---|------|-------------------|------------------|------------------------|
+| 1 | **PV-P3 — Magic-paste variant extraction belum mulai.** LLM prompt magic-paste (`product.service.ts:1479-1535`) tidak punya rule untuk varian; teks seperti "Kaos merah/biru, size S/M/L" tidak punya field tujuan — didrop atau nyasar ke description. `ProductVariant` model + dashboard CRUD manual (P0/P1/P2) SUDAH ada; hanya jalur magic-paste yang belum wired. | `PROJECT-CONTRACT-PRODUCT-VARIANTS.md` §5 | Sengaja diurutkan TERAKHIR — "paling mahal", butuh P0-P2 stabil dulu (sudah terpenuhi sekarang) | Owner minta magic-paste bisa deteksi varian saat entri produk baru — **sudah ditagih 1 Sep 2026**, jadi task berikutnya setelah tracker ini dibuat |
+| 2 | Billing / pricing model — TIDAK ADA sama sekali di codebase | `GO-LIVE-BUSINESS-READINESS.md` #1 | Keputusan bisnis, bukan teknis — belum diputuskan free/paid/trial/per-message | Sebelum onboarding merchant riil pertama yang bukan test/canary |
+| 3 | Terms of Service / Privacy Policy — TIDAK ADA, padahal platform simpan PII terenkripsi (UU PDP applicable) | `GO-LIVE-BUSINESS-READINESS.md` #3 | Legal requirement, tapi butuh keputusan/draft di luar kode | Sebelum onboarding merchant riil pertama (legal blocker, bukan opsional) |
+| 4 | VII-A — Rotate seluruh secret (Groq/Gemini/DB/dll, pernah ter-expose di GitHub history lama) | `BUG-BELUM-DIBERESKAN.md` §VII-A | Ditunda sampai sebelum go-live, website belum ada trafik nyata (keputusan owner) | Sebelum go-live sungguhan (traffic nyata pertama) |
+
+## 🟡 Prioritas menengah — perlu ditagih tapi tidak blocking
+
+| # | Item | Dari task/kontrak | Kenapa di-defer | Trigger untuk ditagih |
+|---|------|-------------------|------------------|------------------------|
+| 5 | Multi-key rotation dalam SATU role provider (`chat_primary`/`chat_fallback`) — resolver cuma ambil provider top-1 per role, tidak rotasi antar-key kalau limit | LLM-PROVIDER-ABSTRACTION Unit 3b/4 | Owner memilih pindah ke OpenRouter (rotasi provider bawaan) sebagai solusi, bukan dibangun sendiri | Kalau OpenRouter free-tier (50 req/hari tanpa topup) ternyata tidak cukup dan builtin rotation dibutuhkan lagi |
+| 6 | `llm.useDynamicProviders` flag — masih default OFF, belum ada `AIProviderConfig` row aktif | LLM-PROVIDER-ABSTRACTION Unit 3-5 | Perlu soak-test dulu sebelum jadi default production | Setelah owner isi provider (mis. OpenRouter) via dashboard + test-connection sukses berkali-kali |
+| 7 | Track B — Wizard UI (P2) + LLM generation service (P3) belum mulai, baru P1 (schema) selesai | `PROJECT-CONTRACT-ONBOARDING-WIZARD.md` §6 | Sengaja dipisah per-unit dari P1; Track A (LLM provider abstraction) diprioritaskan duluan supaya wizard generation langsung pakai sistem provider dinamis | Setelah Track A settle (flag ON atau OpenRouter terpasang) — TIDAK ada alasan lain untuk menunda lebih lama |
+| 8 | Chat gatekeeper (`extractIntent`) tetap pinned ke `groqAdapter` singleton, TIDAK ikut resolver dinamis — `chat_gatekeeper` role di dashboard kosmetik | LLM-PROVIDER-ABSTRACTION Unit 5 Part 1 (Option B) | `extractIntent` bukan bagian interface `AIProvider`; Option A (bikin optional method) berisiko silent-degradation | Kalau ada kebutuhan konkret ganti gatekeeper dari Groq (bukan sekadar "biar konsisten") |
+| 9 | `adapters.llm.chat` (`manager.ts`) — dead code terkonfirmasi, TIDAK dihapus | LLM-PROVIDER-ABSTRACTION Unit 5 Part 5 | Di luar scope task (removal keputusan terpisah, sama pola `message.handler.ts` lama) | Kapan saja saat maintenance cycle `manager.ts` berikutnya |
+| 10 | Live-refresh `lastTestedAt`/`lastTestResult` di dashboard AI Providers — sekarang reload-only, tidak update otomatis setelah test | LLM-PROVIDER-ABSTRACTION Unit 4/5 | Cosmetic UX gap, bukan fungsional | Kalau owner merasa terganggu saat pakai dashboard sehari-hari |
+| 11 | IX-D — Guard `hasVariants && !variantId` duplikat di 2 tempat (`cart-authority.ts` + `action-registry.ts`), belum di-DRY | `BUG-BELUM-DIBERESKAN.md` §IX-D | Konsisten, tidak ada kontradiksi — refactor kosmetik | Siklus maintenance CartAuthority berikutnya |
+| 12 | Merchant onboarding wizard (guided setup UX untuk connect WA/tambah produk) — beda dari Track B wizard di atas (yang itu TOS/SOP/FAQ) | `GO-LIVE-BUSINESS-READINESS.md` #2 | Registrasi teknis sudah jalan, tapi UX guided untuk merchant non-teknis minimal | Kalau ada keluhan merchant riil kesulitan onboarding sendiri |
+
+## 🟢 Prioritas rendah — hygiene/cosmetic, aman ditunda lama
+
+| # | Item | Dari task/kontrak | Kenapa di-defer | Trigger untuk ditagih |
+|---|------|-------------------|------------------|------------------------|
+| 13 | III-6 — Golden dataset invarian I8-I15 masih test unit parsial, bukan 50-case permanen | `BUG-BELUM-DIBERESKAN.md` §III-6 | Regression coverage belum lengkap, tidak blocking | Kapan saja, prioritas rendah |
+| 14 | II-5 — Test DB shared isolation lemah (row lintas file test) | `BUG-BELUM-DIBERESKAN.md` §II-5 | Sudah di-audit "0 assertion rawan", downgrade ke hygiene debt | Kalau ada file test baru — re-audit saat itu |
+| 15 | `GITHUB_PAT`, `WEBHOOK_SECRET` — env var tidak terpakai, cleanup candidate | `BUG-BELUM-DIBERESKAN.md` (pm2 env audit 31 Agu) | Tidak menyebabkan bug, cuma clutter | Kapan saja, sekali jalan | 
+
+---
+
+## Cara pakai file ini
+
+- **Setiap TASK baru yang sengaja skip sebagian scope** → tambah baris di
+  tabel yang sesuai prioritas, WAJIB isi kolom Trigger dengan kondisi
+  konkret (bukan "nanti"/"someday").
+- **Sebelum mulai kontrak/fitur besar baru** → scan file ini dulu, cek
+  apakah ada defer lama yang triggernya sudah terpenuhi tapi belum ditagih.
+- **Item yang sudah selesai** → pindahkan ke bagian bawah sebagai
+  "✅ RESOLVED" dengan tanggal + commit, JANGAN dihapus (audit trail).
