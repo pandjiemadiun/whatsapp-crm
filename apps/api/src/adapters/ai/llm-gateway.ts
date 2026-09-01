@@ -30,6 +30,9 @@ import { groqAdapter } from './groq.adapter.js';
 import { shouldSkipProvider, triggerCooldown } from '../../services/provider-cooldown.js';
 import { logTokenUsage } from '../../services/token-usage-tracker.js';
 import type { TokenLogEntry } from '../../services/token-usage-tracker.js';
+import { configService } from '../../business/config.service.js';
+import { aiProviderResolver } from '../../services/ai-provider-resolver.service.js';
+import type { AIProviderResolverService } from '../../services/ai-provider-resolver.service.js';
 
 const TURN_DEADLINE_MS = 12_000;
 const MAX_ATTEMPTS = 3;
@@ -51,6 +54,10 @@ export class LLMGateway {
   };
   private turnDeadlineMs: number;
   private maxAttempts: number;
+  // Unit 3b: feature-flag-gated dynamic provider resolution (default OFF)
+  private resolver: AIProviderResolverService;
+  private dynamicFlagProvider: (() => Promise<boolean>) | undefined;
+  private dynamicFlagCache: { value: boolean; ts: number } | null = null;
 
   /** In-memory gateway-level circuit breaker (one owner for AI boundary) */
   private breaker = {
@@ -74,12 +81,83 @@ export class LLMGateway {
     } = groqAdapter,
     turnDeadlineMs: number = TURN_DEADLINE_MS,
     maxAttempts: number = MAX_ATTEMPTS,
+    resolver: AIProviderResolverService = aiProviderResolver,
+    dynamicFlagProvider: (() => Promise<boolean>) | undefined = undefined,
   ) {
     this.primary = primary;
     this.fallback = fallback;
     this.gatekeeper = gatekeeper;
     this.turnDeadlineMs = turnDeadlineMs;
     this.maxAttempts = maxAttempts;
+    this.resolver = resolver;
+    this.dynamicFlagProvider = dynamicFlagProvider;
+  }
+
+  // ─── Unit 3b: feature-flag-gated dynamic provider resolution ────────────
+  // Gate (default OFF): configService.getConfig('llm.useDynamicProviders') === 'true'.
+  // TTL-cached so the OFF hot path pays no DB read per request. Tests may inject
+  // `dynamicFlagProvider` to force ON/OFF without touching configService/system_settings.
+  private readonly DYNAMIC_FLAG_TTL_MS = 30_000;
+
+  /** Resolve the dynamic-provider flag. Absence of the key => OFF (never throws). */
+  private async isDynamicProvidersEnabled(): Promise<boolean> {
+    const now = Date.now();
+    if (this.dynamicFlagCache && now - this.dynamicFlagCache.ts < this.DYNAMIC_FLAG_TTL_MS) {
+      return this.dynamicFlagCache.value;
+    }
+    let enabled: boolean;
+    if (this.dynamicFlagProvider) {
+      enabled = await this.dynamicFlagProvider();
+    } else {
+      enabled = (await configService.getConfig('llm.useDynamicProviders')) === 'true';
+    }
+    this.dynamicFlagCache = { value: enabled, ts: now };
+    return enabled;
+  }
+
+  /**
+   * Resolve the primary/fallback adapter instances for this request.
+   * OFF (default): returns the original singletons -> OFF path runs UNCHANGED.
+   * ON: reads active AIProviderConfig rows via the resolver (3a), highest-priority
+   * first. Empty DB list for a role -> warn + fall back to the default singleton
+   * (customer chat is NOT disrupted; the cutover is safe by default).
+   *
+   * NOTE: the gatekeeper is intentionally NOT resolved here. extractIntent is a
+   * GroqAdapter-specific method (groq.adapter.ts:329) — not on AIProvider and not
+   * implemented by the Unit-2 generic adapters — so swapping the gatekeeper would
+   * silently degrade intent extraction (every message -> fallback). Gatekeeper
+   * cutover is deferred to Unit 5.
+   */
+  private async resolveEffectiveProviders(): Promise<{ primary: AIProvider; fallback: AIProvider }> {
+    if (!(await this.isDynamicProvidersEnabled())) {
+      return { primary: this.primary, fallback: this.fallback };
+    }
+
+    const primaryList = await this.resolver.getProvidersForRole('chat_primary');
+    const fallbackList = await this.resolver.getProvidersForRole('chat_fallback');
+
+    let primary: AIProvider;
+    if (primaryList.length > 0) {
+      primary = primaryList[0];
+    } else {
+      this.warnEmptyRole('chat_primary');
+      primary = this.primary;
+    }
+    let fallback: AIProvider;
+    if (fallbackList.length > 0) {
+      fallback = fallbackList[0];
+    } else {
+      this.warnEmptyRole('chat_fallback');
+      fallback = this.fallback;
+    }
+    return { primary, fallback };
+  }
+
+  private warnEmptyRole(role: string): void {
+    console.warn(
+      `[LLMGateway] dynamic providers ON but role '${role}' returned 0 active ` +
+        `AIProviderConfig rows; falling back to default singleton provider.`,
+    );
   }
 
   // ─── Circuit breaker (gateway-level, one owner) ─────────────────────────
@@ -171,6 +249,15 @@ export class LLMGateway {
     options?: AIGenerateOptions,
     intent: string = 'general',
   ): Promise<AIResponse> {
+    // ── Unit 3b: feature-flag-gated dynamic provider resolution (default OFF) ──
+    // OFF (default): resolveEffectiveProviders() returns the original singletons,
+    // and the circuit-breaker/retry/fallback loop below runs UNCHANGED.
+    // ON: primary/fallback come from AIProviderConfig rows via the resolver (3a).
+    //   The gatekeeper is NOT swapped: extractIntent is GroqAdapter-specific
+    //   (groq.adapter.ts:329), not on AIProvider; swapping it would silently
+    //   degrade intent extraction. Gatekeeper cutover is deferred to Unit 5.
+    const { primary, fallback } = await this.resolveEffectiveProviders();
+
     // Circuit breaker gate
     if (this.isCircuitOpen()) {
       throw new CircuitOpenError(
@@ -178,8 +265,8 @@ export class LLMGateway {
       );
     }
 
-    const primaryName = this.primary.getName();
-    const fallbackName = this.fallback.getName();
+    const primaryName = primary.getName();
+    const fallbackName = fallback.getName();
     let lastError: AIProviderError | null = null;
 
     const providers: Array<{
@@ -187,8 +274,8 @@ export class LLMGateway {
       provider: AIProvider;
       key: 'primary' | 'fallback';
     }> = [
-      { name: primaryName, provider: this.primary, key: 'primary' },
-      { name: fallbackName, provider: this.fallback, key: 'fallback' },
+      { name: primaryName, provider: primary, key: 'primary' },
+      { name: fallbackName, provider: fallback, key: 'fallback' },
     ];
 
     for (const { name, provider, key } of providers) {
