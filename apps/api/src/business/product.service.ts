@@ -1017,6 +1017,69 @@ private async extractWithLLM(text: string, storeId?: string): Promise<MagicPaste
       if (parsed.weight != null && typeof parsed.weight !== 'number') {
         parsed.weight = null;
       }
+
+      // PV-P3 — sanitize LLM's variants[] (best-effort, TIDAK blocking).
+      // Shape valid: tiap entry punya `attributes` (object string->string, ≥1 key,
+      // key+value non-empty) + `price` (angka > 0 & < 10.000.000). Entry
+      // rusak/non-objek/missing-price/missing-attributes → DROP (tidak crash).
+      // Jika LLM tidak kembalikan `variants` (produk non-varian) → tetap
+      // `undefined` (regression: simple-product parsing tidak berubah sama sekali).
+      if (Array.isArray(parsed.variants)) {
+        const ok: Array<{
+          attributes: Record<string, string>;
+          price: number;
+          stock: number | null;
+          sku: string | null;
+        }> = [];
+        for (const v of parsed.variants) {
+          if (!v || typeof v !== 'object') continue;
+          const vany = v as Record<string, unknown>;
+
+          // attributes: wajib object string->string, minimal 1 kunci bernama
+          let attrs: Record<string, string> | null = null;
+          const rawAttr = vany.attributes;
+          if (rawAttr && typeof rawAttr === 'object' && !Array.isArray(rawAttr)) {
+            attrs = {};
+            let good = true;
+            for (const [k, val] of Object.entries(rawAttr)) {
+              if (val == null) { good = false; break; }
+              const ks = String(k).toLowerCase();
+              if (ks === '') { good = false; break; }
+              attrs[ks] = String(val).toLowerCase();
+            }
+            if (!good || Object.keys(attrs).length === 0) attrs = null;
+          }
+
+          // price: normalisasi string->angka via normalizePriceText, lalu validasi rentang
+          let price: number | null = null;
+          const vp = vany.price;
+          const num = typeof vp === 'string'
+            ? this.normalizePriceText(vp)
+            : typeof vp === 'number'
+            ? vp
+            : null;
+          if (num != null && num > 0 && num < 10_000_000) price = num;
+
+          if (attrs !== null && price !== null) {
+            ok.push({
+              attributes: attrs,
+              price,
+              stock: typeof vany.stock === 'number' ? (vany.stock as number) : null,
+              sku: typeof vany.sku === 'string' ? (vany.sku as string) : null,
+            });
+          }
+        }
+        parsed.variants = ok;
+      }
+
+      // variantConfidence: normalisasi ke number|null
+      if (typeof parsed.variantConfidence === 'string') {
+        const n = parseFloat(parsed.variantConfidence);
+        parsed.variantConfidence = Number.isFinite(n) ? n : null;
+      } else if (parsed.variantConfidence != null && typeof parsed.variantConfidence !== 'number') {
+        parsed.variantConfidence = null;
+      }
+
       return parsed;
     } catch (error) {
       adapters.logger.warn('Magic paste LLM parse failed', { error: (error as Error).message });
@@ -1445,6 +1508,21 @@ interface MagicPasteExtraction {
   weight?: number | null;
   confidence: number | null;
   error?: string;
+  /**
+   * PV-P3 — per-variant parse (best-effort, TIDAK blocking). Hanya terisi
+   * ketika teks menyatakan opsi per-variant masing-masing punya harga sendiri.
+   * attributes key HARUS nama atribut kenali (size/warna/color/material/...)
+   * agar resolveVariantByLabel (cart-authority.ts:1207) tetap match di WA chat.
+   */
+  variants?: Array<{
+    attributes: Record<string, string>; // e.g. {"size":"S"}
+    price: number; // absolute IDR (tidak ada konsep delta/override)
+    stock?: number | null;
+    sku?: string | null;
+  }>;
+  /** Confidence khusus split varian (0-1). Terpisah dari `confidence` global —
+   * dilihat owner di preview (Unit 2). */
+  variantConfidence?: number | null;
 }
 
 /** Override nilai yang di-edit user setelah preview (Phase 1.9.7b) */
@@ -1527,11 +1605,30 @@ EXTRACTION RULES:
    - 0.65-0.79: some ambiguity, missing optional fields
    - < 0.65: high uncertainty
 
+9. VARIANT (optional, PV-P3 — best-effort, NEVER blocks creation; [] if none):
+   - Detect per-option price breakdown → emit ONE entry per option.
+   - variants[] shape: {"attributes":{"size":"S"},"price":10000,"stock":10,"sku":null}
+   - attributes key = attribute TYPE in recognizable names (size/ukuran, warna/color,
+     material/bahan, etc.); value = the specific option (S/merah). Keys+values
+     lowercased client-side. Recognizable names so WA chat resolveVariantByLabel
+     (cart-authority.ts:1207) matches later.
+   - price = absolute IDR, required PER VARIANT (no delta/override concept).
+   - SHARED fields apply ONCE across all variants (NOT per-variant):
+     * weight → product-level weight (rule 6); do NOT repeat per variant.
+     * shared stock "stok @ N" / "masing2 N" / "stok N per size" → each
+       variant.stock = N (Product.stock irrelevant once hasVariants=true
+       per VARIANT_REQUIRED guard).
+   - THRESHOLD to EMIT variants[]: at least 2 options each with a DISTINCT price, OR
+     distinct stock per option + shared price. If ONE price for ALL options
+     ("size S/M/L Rp 50.000", "tersedia semua ukuran") → do NOT split → variants:[].
+   - Ambiguous/unsure → variants:[] + variantConfidence<0.8 + global confidence<0.65.
+   - BAD shape → self-correct so output stays valid JSON (never crash the parser).
+
 RESPONSE FORMAT:
 Return ONLY valid JSON (no markdown, no explanation):
-{"name":"string","price":number,"stock":number|null,"categoryName":"string|null","unit":"string|null","weight":number|null,"description":"string|null","confidence":number}
+{"name":"string","price":number,"stock":number|null,"categoryName":"string|null","unit":"string|null","weight":number|null,"description":"string|null","confidence":number,"variants":[{"attributes":{"size":"S","warna":"merah"},"price":number,"stock":number|null,"sku":"string|null"}],"variantConfidence":number|null}
 
 ERROR RESPONSE (if cannot extract required fields):
-{"error":"Missing required fields: {field1}, {field2}","confidence":0.0,"rawText":"{original_text}"}`;
+{"error":"Missing required fields: {field1}, {field2}","confidence":0.0,"rawText":"{original_text}","variants":[],"variantConfidence":null}`;
 
 export const productService = new ProductService();
