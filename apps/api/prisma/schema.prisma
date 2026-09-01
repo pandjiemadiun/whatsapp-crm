@@ -571,6 +571,34 @@ model SystemSetting {
   @@map("system_settings")
 }
 
+// LLM Provider Abstraction — Unit 1 (schema-only).
+// `apiKey` holds an AES-256-GCM ciphertext ("iv:tag:ciphertext") produced by
+// apps/api/src/utils/encryption.ts#encryptField; read-side decryption is wired
+// via the field-encryption Prisma `$use` middleware whitelist in
+// apps/api/src/infrastructure/prisma.ts (SENSITIVE_FIELDS). Registering
+// `AIProviderConfig: ['apiKey']` there is deferred to Unit 3 (the gateway that
+// first reads this key) — outside this unit's schema+migration-only scope.
+// format/role are validated strings (app-layer, not DB enums) so new values can
+// be added without a migration; documented allowed values below.
+model AIProviderConfig {
+  id             String    @id @default(uuid())
+  name           String    // display name, e.g. "Groq Production", "OpenAI Backup"
+  format         String    // "openai_compatible" | "gemini_native"
+  baseUrl        String    // e.g. https://api.groq.com/openai/v1/chat/completions
+  apiKey         String    // AES-256-GCM ciphertext ("iv:tag:ciphertext")
+  model          String    // model identifier sent in the request body/URL
+  role           String    // "chat_primary" | "chat_fallback" | "chat_gatekeeper" | "wizard" | "other"
+  priority       Int       @default(0) // ordering within the same role in fallback chains
+  isActive       Boolean   @default(true)
+  lastTestedAt   DateTime? // populated by the test-connection feature (Unit 4)
+  lastTestResult String?   // populated by Unit 4; last success/error message
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([role, isActive, priority])
+  @@map("ai_provider_configs")
+}
+
 model BackupManifest {
   id            String    @id @default(uuid())
   filename      String    @unique
