@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from 'react';
-import type { ExtractedMagicPasteData } from '../types/magicPaste';
+import type { ExtractedMagicPasteData, MagicPasteVariant } from '../types/magicPaste';
 import { MAGIC_PASTE_MAX_CHARS, MAGIC_PASTE_MIN_CHARS } from '../types/magicPaste';
 
 /**
@@ -144,6 +144,8 @@ export function useMagicPaste() {
         categoryId: data.extractedEntities?.categoryId ?? null,
         categoryHint: data.extractedEntities?.categoryHint ?? null,
         confidence: data.extractedEntities?.confidence ?? 0,
+        variants: (data.extractedEntities?.variants as MagicPasteVariant[] | undefined) ?? undefined,
+        variantConfidence: data.extractedEntities?.variantConfidence ?? null,
         needsWeightInput: data.needsWeightInput ?? false,
       };
       setExtracted(extractedData);

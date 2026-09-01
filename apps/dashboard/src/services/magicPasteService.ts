@@ -1,4 +1,4 @@
-import type { MagicPasteResponse, MagicPastePattern, MagicPasteSettings } from '../types/magicPaste';
+import type { MagicPasteResponse, MagicPastePattern, MagicPasteSettings, MagicPasteVariant } from '../types/magicPaste';
 
 /**
  * Service wrapper untuk API Magic Paste (POST /api/admin/products/magic-paste).
@@ -25,7 +25,8 @@ export async function extract(
   storeId: string,
   text: string,
   token: string,
-  preview = false
+  preview = false,
+  variantOverrides?: MagicPasteVariant[],
 ): Promise<MagicPasteResponse> {
   try {
     const url = preview ? '/api/admin/products/magic-paste?preview=true' : '/api/admin/products/magic-paste';
@@ -35,7 +36,7 @@ export async function extract(
         'Content-Type': 'application/json',
         Authorization: `Bearer ${token}`,
       },
-      body: JSON.stringify({ storeId, text }),
+      body: JSON.stringify({ storeId, text, ...(variantOverrides ? { variantOverrides } : {}) }),
       signal: AbortSignal.timeout(10_000),
     });
 

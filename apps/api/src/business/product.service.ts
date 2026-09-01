@@ -365,6 +365,61 @@ export class ProductService {
   }
 
   /**
+   * PV-P3 — resolve which variant rows to write: merchant `variantOverrides`
+   * (Part 2, STRICT validate — reject malformed) take priority over raw LLM
+   * `raw.variants` (Unit 1, already sanitized — drop-malformed). Returns []
+   * for non-variant products (regression: simple-product path unchanged).
+   */
+  private resolveEffectiveVariants(
+    raw: MagicPasteExtraction,
+    options: { variantOverrides?: MagicPasteVariant[] },
+  ): MagicPasteVariant[] {
+    // `!== undefined` (bukan truthy check): merchant dapat memberi `[]` (semua varian
+    // LLM di-clear → simple product) yang BERBEDA dari `undefined` (tidak ada override
+    // → pakai raw LLM variants). Mencegah simple-product regression.
+    if (options.variantOverrides !== undefined) {
+      return options.variantOverrides.map((v, i) => this.validateMerchantVariant(v, i));
+    }
+    if (raw.variants && raw.variants.length > 0) {
+      return raw.variants as MagicPasteVariant[];
+    }
+    return [];
+  }
+
+  /**
+   * STRICT validate ONE merchant-provided variant (reject, don't drop —
+   * merchant data has higher trust level than LLM output). Throws ApiError
+   * (400 ERR_VALIDATION) on the first malformed entry.
+   */
+  private validateMerchantVariant(v: MagicPasteVariant, idx: number): MagicPasteVariant {
+    if (!v || typeof v !== 'object') {
+      throw new ApiError(ErrorCodes.ERR_VALIDATION, `Variant #${idx + 1}: invalid shape`);
+    }
+    if (!v.attributes || typeof v.attributes !== 'object' || Array.isArray(v.attributes)) {
+      throw new ApiError(ErrorCodes.ERR_VALIDATION, `Variant #${idx + 1}: missing attributes`);
+    }
+    const attrs: Record<string, string> = {};
+    for (const [k, val] of Object.entries(v.attributes)) {
+      if (val == null || String(k).trim() === '') {
+        throw new ApiError(ErrorCodes.ERR_VALIDATION, `Variant #${idx + 1}: invalid attribute key/value`);
+      }
+      attrs[String(k).toLowerCase()] = String(val).toLowerCase();
+    }
+    if (Object.keys(attrs).length === 0) {
+      throw new ApiError(ErrorCodes.ERR_VALIDATION, `Variant #${idx + 1}: empty attributes`);
+    }
+    if (typeof v.price !== 'number' || !(v.price > 0) || v.price >= ProductService.MAX_PRICE) {
+      throw new ApiError(ErrorCodes.ERR_VALIDATION, `Variant #${idx + 1}: invalid price (${v.price})`);
+    }
+    return {
+      attributes: attrs,
+      price: v.price,
+      stock: typeof v.stock === 'number' ? v.stock : null,
+      sku: typeof v.sku === 'string' ? v.sku : null,
+    };
+  }
+
+  /**
    * List variants for a product.
    */
   async listVariants(productId: string, storeId: string): Promise<any[]> {
@@ -603,7 +658,7 @@ export class ProductService {
   async magicPaste(
     storeId: string,
     text: string,
-    options: { preview?: boolean; source?: 'store' | 'admin'; overrides?: MagicPasteOverrides } = {}
+    options: { preview?: boolean; source?: 'store' | 'admin'; overrides?: MagicPasteOverrides; variantOverrides?: MagicPasteVariant[] } = {}
   ): Promise<{
     product: Product | null;
     extractedEntities: Record<string, unknown>;
@@ -742,6 +797,8 @@ export class ProductService {
           description: raw.description ?? null,
           unit: raw.unit ?? null,
           confidence: raw.confidence ?? 0,
+          variants: raw.variants ?? null, // PV-P3
+          variantConfidence: raw.variantConfidence ?? null, // PV-P3
         },
         warning: warnings.length > 0 ? warnings.slice(0, 3) : null,
       };
@@ -798,25 +855,71 @@ export class ProductService {
     // 8c. Generate SKU unik (dengan retry)
     const sku = await this.generateUniqueSKU(storeId);
 
-    // 9. Buat produk
+    // 9. Buat produk + varian (atomic transaction — PV-P3).
+    //    variantOverrides (merchant-edited, Part 2) wins over raw LLM variants.
+    //    needsWeightInput gate (8b) di atas sudah lewat, jadi raw.weight > 0 di sini.
+    const effectiveVariants = this.resolveEffectiveVariants(raw, options);
+    const hasVariantsFlag = effectiveVariants.length > 0;
+
+    // PV-P3 — capture field yang sudah ter-narrow guard (687 / 8b) ke local typed.
+    // Narrowing `raw.*` tidak persisten di dalam async $transaction callback.
+    const productName: string = raw.name;
+    const productPrice: number = raw.price;
+    const productWeight: number = raw.weight ?? 0;
+
     let product: Product;
     try {
-      const row = await prisma.product.create({
-        data: {
-          storeId,
-          categoryId,
-          name: raw.name,
-          description: raw.description ?? null,
-          price: raw.price,
-          currency: 'IDR',
-          sku,
-          stock,
-          weight: raw.weight,
-          source: 'magic_paste',
-        },
+      product = await prisma.$transaction(async (tx) => {
+        const row = await tx.product.create({
+          data: {
+            storeId,
+            categoryId,
+            name: productName,
+            description: raw.description ?? null,
+            price: productPrice,
+            currency: 'IDR',
+            sku,
+            stock,
+            weight: productWeight,
+            source: 'magic_paste',
+            hasVariants: hasVariantsFlag, // PV-P3
+          },
+        });
+
+        if (hasVariantsFlag) {
+          for (const v of effectiveVariants) {
+            await tx.productVariant.create({
+              data: {
+                productId: row.id,
+                storeId,
+                sku: v.sku ?? null,
+                attributes: v.attributes as any,
+                price: v.price,
+                stock: v.stock ?? null,
+                isActive: true,
+              },
+            });
+          }
+        }
+
+        return this.mapProduct(row as any);
       });
-      product = this.mapProduct(row as any);
     } catch (error: any) {
+      // P2002 = @@unique([storeId, sku]) violation (Product.sku atau
+      // ProductVariant.sku). Map ke clean 409 — jangan biarkan Prisma error bocor.
+      // Prisma $transaction auto-rollback → ZERO rows bila gagal
+      // (Product + N variants tidak setengah-created).
+      if (error?.code === 'P2002') {
+        adapters.logger.warn('Magic paste SKU conflict (atomic rollback)', {
+          storeId,
+          target: error?.meta?.target ?? null,
+        });
+        throw new ApiError(
+          ErrorCodes.ERR_CONFLICT,
+          'SKU already exists for this store — use a unique SKU or edit the conflicting variant',
+          { skuConflict: error?.meta?.target ?? null },
+        );
+      }
       adapters.logger.error('Magic paste create failed', error as Error, { storeId });
       throw new ApiError(ErrorCodes.ERR_DB, 'Failed to create product');
     }
@@ -861,6 +964,8 @@ export class ProductService {
         description: raw.description ?? null,
         unit: raw.unit ?? null,
         confidence: raw.confidence ?? 0,
+        variants: effectiveVariants.length ? effectiveVariants : null, // PV-P3
+        variantConfidence: raw.variantConfidence ?? null, // PV-P3
       },
       warning: warnings.length > 0 ? warnings.slice(0, 3) : null,
     };
@@ -1532,6 +1637,18 @@ export interface MagicPasteOverrides {
   stock?: number | null;
   /** Berat (gram) — bisa diisi manual setelah preview needsWeightInput. */
   weight?: number | null;
+}
+
+/**
+ * Bentuk satu baris varian untuk magic-paste create (PV-P3).
+ * Dipakai untuk `variantOverrides` (merchant-edited, dari preview step)
+ * dan konsisten dengan `MagicPasteExtraction.variants` (Unit 1 LLM output).
+ */
+export interface MagicPasteVariant {
+  attributes: Record<string, string>; // e.g. {"size":"S"}
+  price: number; // absolute IDR (tidak ada konsep delta/override)
+  stock?: number | null;
+  sku?: string | null;
 }
 
 /** Pattern ekstraksi regex yang dikelola admin (Phase 1.9.8) */

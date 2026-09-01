@@ -9,6 +9,7 @@ import { prisma } from '../infrastructure/prisma.js';
 import { adapters } from '../adapters/container.js';
 import { ApiError } from '../errors/ApiError.js';
 import { ErrorCodes } from '../constants/errorCodes.js';
+import { variantOverrideSchema } from '../schemas/index.js';
 
 const router = Router();
 
@@ -64,6 +65,8 @@ const magicPasteOwnerSchema = z.object({
       weight: z.number().int().min(1).optional(),
     })
     .optional(),
+  // PV-P3 — merchant-edited variant list (overrides raw LLM variants on create)
+  variantOverrides: z.array(variantOverrideSchema).optional(),
 });
 
 function generateSku(): string {
@@ -193,10 +196,15 @@ router.delete('/my/:productId', async (req: AuthenticatedRequest, res: Response)
 router.post('/my/magic-paste', validateRequest(magicPasteOwnerSchema, 'body'), async (req: AuthenticatedRequest, res: Response) => {
   try {
 const storeId = req.user!.storeId;
-    const { text, overrides } = getValidated<any>(req);
+    const { text, overrides, variantOverrides } = getValidated<any>(req);
     const preview = req.query.preview === 'true';
 
-    const result = await productService.magicPaste(storeId, text, { preview, source: 'store', overrides });
+    const result = await productService.magicPaste(storeId, text, {
+      preview,
+      source: 'store',
+      overrides,
+      variantOverrides,
+    });
 
     if (!preview && result.product) {
       adapters.logger.info('Store magic paste completed', { productId: result.product.id, storeId });

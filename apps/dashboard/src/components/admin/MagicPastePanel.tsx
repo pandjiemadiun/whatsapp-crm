@@ -7,6 +7,7 @@ import { MagicPastePreview } from './MagicPastePreview';
 import { MagicPasteWarnings } from './MagicPasteWarnings';
 import { ConfirmCreateModal } from './ConfirmCreateModal';
 import { MAGIC_PASTE_MAX_CHARS, MAGIC_PASTE_MIN_CHARS } from '../../types/magicPaste';
+import type { MagicPasteVariant } from '../../types/magicPaste';
 
 /**
  * Props untuk komponen MagicPastePanel.
@@ -105,8 +106,9 @@ export function MagicPastePanel({ token, onProductCreated }: MagicPastePanelProp
     mp.handleTextChange(EXAMPLE_TEXT);
   };
 
-  /** Create produk (dari modal konfirmasi). */
-  const handleConfirmCreate = async () => {
+  /** Create produk (dari modal konfirmasi). Terima variantOverrides yang sudah
+   *  diedit merchant (PV-P3) — merchant edits win over raw LLM variants. */
+  const handleConfirmCreate = async (variantOverrides?: MagicPasteVariant[]) => {
     if (!mp.extracted || creating) return;
     if (mp.extracted.needsWeightInput) {
       showFeedback('error', 'Berat produk belum diisi — lengkapi berat (gram) sebelum membuat produk.');
@@ -115,8 +117,9 @@ export function MagicPastePanel({ token, onProductCreated }: MagicPastePanelProp
     setCreating(true);
     setFeedback(null);
     try {
-      // Preview sudah didapat saat Extract; di sini call TANPA preview=true → create
-      const res = await magicPasteService.extract(mp.storeId, mp.text, token, false);
+      // Preview sudah didapat saat Extract; di sini call TANPA preview=true → create.
+      // variantOverrides (merchant-edited) dikirim → backend pakai ini, bukan LLM raw.
+      const res = await magicPasteService.extract(mp.storeId, mp.text, token, false, variantOverrides);
       if (res.success && res.data?.product) {
         const productId = res.data.product.id;
         setCreatedId(productId);

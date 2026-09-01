@@ -173,6 +173,19 @@ export type UpdateProductInput = z.infer<typeof updateProductSchema>;
 
 // ─── MAGIC PASTE SCHEMAS (Phase 1.9.3) ───
 
+/** PV-P3 — satu entri variantOverrides (merchant-edited, dari magic-paste preview).
+ *  Aturan VALIDASI sama seperti Unit 1 LLM-path (attributes non-empty, price valid),
+ *  tapi di sini STRICT: merchant data → reject malformed, jangan silent-drop. */
+export const variantOverrideSchema = z.object({
+  price: z.coerce.number().min(1, 'Variant price must be > 0'),
+  stock: z.coerce.number().int().min(0).optional().nullable(),
+  sku: z.string().max(100).optional().nullable(),
+  attributes: z
+    .record(z.string(), z.any())
+    .refine((val) => Object.keys(val).length > 0, { message: 'attributes must be a non-empty object' }),
+});
+export type VariantOverride = z.infer<typeof variantOverrideSchema>;
+
 export const magicPasteSchema = z.object({
   text: z
     .string()
@@ -181,6 +194,8 @@ export const magicPasteSchema = z.object({
     .trim(),
   // Store ID bisa UUID (admin-created) atau format store-xxx (self-registered)
   storeId: z.string().min(1, 'storeId is required'),
+  // PV-P3 — merchant-edited variant list (overrides raw LLM variants pada create)
+  variantOverrides: z.array(variantOverrideSchema).optional(),
 });
 
 export type MagicPasteInput = z.infer<typeof magicPasteSchema>;

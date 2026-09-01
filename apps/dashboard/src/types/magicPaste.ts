@@ -4,6 +4,17 @@
  */
 
 /**
+ * Bentuk satu baris varian untuk magic-paste (PV-P3) — dipakai di dashboard
+ * preview/edit + dikirim sebagai `variantOverrides` ke backend.
+ */
+export interface MagicPasteVariant {
+  attributes: Record<string, string>; // e.g. {"size":"S"}
+  price: number; // absolute IDR (tidak ada konsep delta/override)
+  stock?: number | null;
+  sku?: string | null;
+}
+
+/**
  * Data hasil ekstraksi produk dari teks (bentuk yang ditampilkan di preview).
  */
 export interface ExtractedMagicPasteData {
@@ -19,6 +30,10 @@ export interface ExtractedMagicPasteData {
   categoryHint: string | null;
   /** Skor keyakinan 0.0–1.0 */
   confidence: number;
+  /** PV-P3 — parsed/merchant-edited variants to display + edit in preview. */
+  variants?: MagicPasteVariant[];
+  /** PV-P3 — confidence khusus split varian (0-1). Tampilkan warning bila rendah (<0.8). */
+  variantConfidence?: number | null;
   /** true bila berat tidak ditemukan di teks → produk belum bisa dibuat, perlu input manual */
   needsWeightInput?: boolean;
 }
