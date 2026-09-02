@@ -764,7 +764,33 @@ export class ProductService {
       warnings.push(`Extraction confidence low (${raw.confidence.toFixed(2)}) — please review extracted data`);
     }
 
-    // 8a. Preview mode — return hasil ekstraksi tanpa create produk
+    // 8. Weight gate — cek SEBELUM preview return supaya preview juga dapat
+    //    flag needsWeightInput + warning. Owner jadi tahu berat wajib diisi
+    //    SEBELUM klik "Buat Produk", bukan setelah.
+    const needsWeightInput = raw.weight == null || raw.weight <= 0;
+    if (needsWeightInput) {
+      warnings.push('Berat (gram) tidak ditemukan di teks — lengkapi manual sebelum simpan');
+    }
+
+    // Shared extractedEntities (dipakai preview DAN needsWeightInput return).
+    // SELALU termasuk variants + variantConfidence — jangan drop di path mana pun.
+    const extractedEntities = {
+      name: raw.name,
+      price: raw.price,
+      stock,
+      weight: raw.weight ?? null,
+      categoryHint: raw.categoryName ?? null,
+      categoryId,
+      description: raw.description ?? null,
+      unit: raw.unit ?? null,
+      confidence: raw.confidence ?? 0,
+      variants: raw.variants ?? null, // PV-P3
+      variantConfidence: raw.variantConfidence ?? null, // PV-P3
+    };
+
+    // 8a. Preview mode — return hasil ekstraksi tanpa create produk.
+    //     Selalu include needsWeightInput + warning supaya UI bisa tampilkan
+    //     pesan berat-wajib-diisi di tahap preview (belum klik "Buat Produk").
     if (options.preview) {
       adapters.logger.info('Magic paste preview (no create)', { storeId, confidence: raw.confidence });
       await this.recordMagicPasteRun({
@@ -774,42 +800,20 @@ export class ProductService {
         confidence: raw.confidence ?? 0,
         status: 'preview',
         warnings,
-        extractedEntities: {
-          name: raw.name,
-          price: raw.price,
-          stock,
-          categoryHint: raw.categoryName ?? null,
-          categoryId,
-          description: raw.description ?? null,
-          unit: raw.unit ?? null,
-          confidence: raw.confidence ?? 0,
-        },
+        extractedEntities,
         source: options.source ?? 'store',
       });
       return {
         product: null,
-        extractedEntities: {
-          name: raw.name,
-          price: raw.price,
-          stock,
-          categoryHint: raw.categoryName ?? null,
-          categoryId,
-          description: raw.description ?? null,
-          unit: raw.unit ?? null,
-          confidence: raw.confidence ?? 0,
-          variants: raw.variants ?? null, // PV-P3
-          variantConfidence: raw.variantConfidence ?? null, // PV-P3
-        },
+        extractedEntities,
         warning: warnings.length > 0 ? warnings.slice(0, 3) : null,
+        ...(needsWeightInput ? { needsWeightInput: true } : {}),
       };
     }
 
-    // 8b. Weight wajib untuk create (schema Product.weight NOT NULL, dan kita TIDAK
-    //     menyimpan angka palsu). Kalau ekstraksi tidak menemukan berat di teks
-    //     sumber → JANGAN insert; kembalikan sebagai preview dengan flag
-    //     needsWeightInput agar UI minta owner isi manual sebelum simpan.
-    if (raw.weight == null || raw.weight <= 0) {
-      const weightWarning = 'Berat (gram) tidak ditemukan di teks — lengkapi manual sebelum simpan';
+    // 8b. Create path — kalau berat belum ada, JANGAN insert. Return preview-like
+    //     response dengan needsWeightInput flag. Variants tetap included.
+    if (needsWeightInput) {
       adapters.logger.info('Magic paste needs weight input (no weight in source text)', {
         storeId,
         confidence: raw.confidence,
@@ -820,34 +824,14 @@ export class ProductService {
         textLength: text.length,
         confidence: raw.confidence ?? 0,
         status: 'preview',
-        warnings: [...warnings, weightWarning],
-        extractedEntities: {
-          name: raw.name,
-          price: raw.price,
-          stock,
-          weight: null,
-          categoryHint: raw.categoryName ?? null,
-          categoryId,
-          description: raw.description ?? null,
-          unit: raw.unit ?? null,
-          confidence: raw.confidence ?? 0,
-        },
+        warnings,
+        extractedEntities,
         source: options.source ?? 'store',
       });
       return {
         product: null,
-        extractedEntities: {
-          name: raw.name,
-          price: raw.price,
-          stock,
-          weight: null,
-          categoryHint: raw.categoryName ?? null,
-          categoryId,
-          description: raw.description ?? null,
-          unit: raw.unit ?? null,
-          confidence: raw.confidence ?? 0,
-        },
-        warning: [...warnings, weightWarning].slice(0, 3),
+        extractedEntities,
+        warning: warnings.slice(0, 3),
         needsWeightInput: true,
       };
     }
@@ -1729,6 +1713,22 @@ EXTRACTION RULES:
      material/bahan, etc.); value = the specific option (S/merah). Keys+values
      lowercased client-side. Recognizable names so WA chat resolveVariantByLabel
      (cart-authority.ts:1207) matches later.
+   - BARE OPTION TOKENS (no explicit keyword): single letters like S/M/L/XL/XXL or
+     short color/material names (merah, biru, cotton) adjacent to a price are STILL
+     variants. Infer the attribute type from context: S/M/L → "size"; merah/biru →
+     "warna"; cotton/polyester → "material". Do NOT require the word "size"/"ukuran"
+     to appear in the text.
+   - PRICE PARSING — thousand-separator dots are NOT decimals:
+     "10.000" = 10000, "1.500.000" = 1500000, "20.000.000" = 20000000.
+     "S 10.000" → variant S price 10000. "M 1.500.000" → variant M price 1500000.
+     Also support "K"/"rb"/"ribu" (x1000) and "M"/"juta" (x1000000).
+   - ADJACENT-NO-SPACE TOKENS: "10.000M" or "10.000 M" should be split as price
+     10000 + option M. Tokenize robustly — do not silently merge or drop.
+   - MULTI-LINE VARIANT PATTERN: input may be one product with option+price on
+     separate lines (name on first line, then "S 10.000\nM 20.000\nL 30.000").
+     Treat this as ONE product with 3 variants, NOT multiple products. Lines that
+     look like metadata (e.g. "Berat 100gram", "stok @ 10") are product-level
+     fields, not variants.
    - price = absolute IDR, required PER VARIANT (no delta/override concept).
    - SHARED fields apply ONCE across all variants (NOT per-variant):
      * weight → product-level weight (rule 6); do NOT repeat per variant.
@@ -1740,6 +1740,28 @@ EXTRACTION RULES:
      ("size S/M/L Rp 50.000", "tersedia semua ukuran") → do NOT split → variants:[].
    - Ambiguous/unsure → variants:[] + variantConfidence<0.8 + global confidence<0.65.
    - BAD shape → self-correct so output stays valid JSON (never crash the parser).
+
+   FEW-SHOT EXAMPLES (variant extraction):
+   Input: "Baju kaos polos S 10.000 M 20.000 L 30.000 Berat 100gram"
+   → {"name":"Baju kaos polos","price":10000,"stock":null,"weight":100,"confidence":0.95,
+       "variants":[{"attributes":{"size":"s"},"price":10000,"stock":null,"sku":null},
+                  {"attributes":{"size":"m"},"price":20000,"stock":null,"sku":null},
+                  {"attributes":{"size":"l"},"price":30000,"stock":null,"sku":null}],
+       "variantConfidence":0.95}
+
+   Input: "Kaos harian variasi\nS 10.000\nM 20.000\nL 30.000\nBerat 100gram"
+   → {"name":"Kaos harian variasi","price":10000,"stock":null,"weight":100,"confidence":0.95,
+       "variants":[{"attributes":{"size":"s"},"price":10000,"stock":null,"sku":null},
+                  {"attributes":{"size":"m"},"price":20000,"stock":null,"sku":null},
+                  {"attributes":{"size":"l"},"price":30000,"stock":null,"sku":null}],
+       "variantConfidence":0.95}
+
+   Input: "Kaos warna merah 25000 biru 30000 hijau 28000"
+   → {"name":"Kaos","price":25000,"stock":null,"confidence":0.9,
+       "variants":[{"attributes":{"warna":"merah"},"price":25000,"stock":null,"sku":null},
+                  {"attributes":{"warna":"biru"},"price":30000,"stock":null,"sku":null},
+                  {"attributes":{"warna":"hijau"},"price":28000,"stock":null,"sku":null}],
+       "variantConfidence":0.9}
 
 RESPONSE FORMAT:
 Return ONLY valid JSON (no markdown, no explanation):

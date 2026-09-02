@@ -33,6 +33,45 @@ interface MagicPasteExtracted {
   confidence: number;
 }
 
+/** Price-like number pattern: supports thousand-separator dots/commas, K/rb/ribu suffixes. */
+const PRICE_RE = /\d{1,3}(?:[.,]\d{3})*(?:[.,]\d+)?|\d+\s*(?:K|rb|ribu|M|juta)/i;
+
+/** A "variant line" = a single short token (option-like, ≤15 chars) + a clean price. */
+const VARIANT_LINE_RE = /^\s*(\S{1,15})\s+(\d[\d.,]*)\s*$/;
+
+/** Detect if a line contains a price-like number. */
+function hasPrice(line: string): boolean {
+  return PRICE_RE.test(line);
+}
+
+/** Detect if a line looks like a single option + price (variant pattern). */
+function looksLikeVariantLine(line: string): boolean {
+  return VARIANT_LINE_RE.test(line);
+}
+
+/**
+ * Classify multi-line pasted text as either:
+ *  - 'single' = ONE product whose lines are option+price variants (or a name header
+ *    followed by variant lines)
+ *  - 'batch' = MULTIPLE independent products
+ *
+ * Heuristic: if the first line has NO price (acts as a name/header) AND at least
+ * 2 subsequent lines match the variant pattern (short token + price), treat as
+ * single-product-with-variants. Otherwise batch.
+ *
+ * Limitations: inherently ambiguous. A genuine multi-product list where each line
+ * is "short token + price" (e.g. "Apel 5000\nJeruk 6000") will be classified as
+ * single-with-variants. The preview-before-save UX is the safety net — the owner
+ * sees the interpretation and can correct/retry.
+ */
+function classifyMultiLineIntent(lines: string[]): 'single' | 'batch' {
+  if (lines.length <= 1) return 'single';
+  const [first, ...rest] = lines;
+  if (hasPrice(first)) return 'batch';
+  const variantLineCount = rest.filter(looksLikeVariantLine).length;
+  return variantLineCount >= 2 ? 'single' : 'batch';
+}
+
 const EMPTY_FORM = { name: '', price: '', stock: '', description: '', categoryId: '' };
 
 function formatRupiah(v: number | null | undefined): string {
@@ -239,9 +278,9 @@ export default function ProductsPage() {
     setMpError('');
     try {
       const lines = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0);
-      const isBatch = lines.length > 1;
+      const intent = classifyMultiLineIntent(lines);
 
-      if (isBatch) {
+      if (intent === 'batch') {
         const url = create
           ? '/products/my/magic-paste/batch'
           : '/products/my/magic-paste/batch?preview=true';
@@ -276,6 +315,7 @@ export default function ProductsPage() {
         return;
       }
 
+      // Single-product intent (including multi-line "name + variant lines")
       const url = create ? '/products/my/magic-paste' : '/products/my/magic-paste?preview=true';
       const res = await api.post(url, { text, ...(overrides ? { overrides } : {}) });
       if (res.data.success) {
