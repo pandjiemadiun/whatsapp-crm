@@ -241,4 +241,54 @@ describe('OpenAICompatibleAdapter (NEW generic adapter — fully hermetic)', () 
     assert.equal(adapter.getName(), 'deepseek-pro');
     assert.equal(adapter.getModel(), 'm');
   });
+
+  // ── PV-P3-debug: prove the EXACT outbound request for a real provider (Mistral) ──
+  // baseUrl is forwarded VERBATIM — no path appended / rewritten. This is the
+  // trace (URL + method + headers + body) the debug task asked for.
+  it('case11: Mistral baseUrl sent VERBATIM — POST + Bearer + Content-Type + OpenAI body', async () => {
+    calls.length = 0;
+    const MISTRAL_URL = 'https://api.mistral.ai/v1/chat/completions';
+    responder = async () =>
+      fakeResponse({ ok: true, json: { choices: [{ message: { content: 'OK' } }] } });
+    const adapter = new OpenAICompatibleAdapter({
+      baseUrl: MISTRAL_URL,
+      apiKey: 'sk-mistral-fake',
+      model: 'mistral-small-latest',
+      name: 'mistral-probe',
+    });
+    const r = await adapter.generate(TEST_PROMPT());
+
+    assert.equal(calls.length, 1);
+    // Acceptance #4: EXACTLY the configured baseUrl, nothing appended/rewritten.
+    assert.equal(calls[0].url, MISTRAL_URL, 'baseUrl must be sent VERBATIM');
+    assert.equal((calls[0].init as any).method, 'POST');
+    assert.equal((calls[0].init as any).headers.Authorization, 'Bearer sk-mistral-fake');
+    assert.equal((calls[0].init as any).headers['Content-Type'], 'application/json');
+    const body = calls[0].parsedBody as any;
+    assert.equal(body.model, 'mistral-small-latest');
+    assert.deepEqual(body.messages, [{ role: 'user', content: 'Reply with the single word: OK' }]);
+    assert.equal(body.temperature, 0.7);
+    assert.equal(body.max_tokens, 512);
+    assert.equal(body.top_p, 0.95);
+    assert.equal(r.content, 'OK');
+  });
+
+  it('case12: bare origin "/v1" forwarded VERBATIM (no /chat/completions appended) — explains the option-1 404', async () => {
+    calls.length = 0;
+    const BARE = 'https://api.mistral.ai/v1';
+    responder = async () => fakeResponse({ ok: false, status: 404, statusText: 'Not Found', text: '{}' });
+    const adapter = new OpenAICompatibleAdapter({ baseUrl: BARE, apiKey: 'k', model: 'mistral-small-latest' });
+    await assert.rejects(
+      () => adapter.generate('hi'),
+      (e) => e instanceof AIProviderError && e.statusCode === 404,
+    );
+    // The adapter does NOT append /chat/completions — it sends the origin as-is.
+    assert.equal(calls[0].url, BARE);
+    assert.equal((calls[0].init as any).method, 'POST');
+  });
 });
+
+/** Prompt used by probeProvider/test-connection (mirrors ai-providers.ts TEST_PROMPT). */
+function TEST_PROMPT(): string {
+  return 'Reply with the single word: OK';
+}

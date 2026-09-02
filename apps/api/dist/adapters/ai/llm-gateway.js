@@ -22,6 +22,8 @@ import { geminiAdapter } from './gemini.adapter.js';
 import { groqAdapter } from './groq.adapter.js';
 import { shouldSkipProvider, triggerCooldown } from '../../services/provider-cooldown.js';
 import { logTokenUsage } from '../../services/token-usage-tracker.js';
+import { configService } from '../../business/config.service.js';
+import { aiProviderResolver } from '../../services/ai-provider-resolver.service.js';
 const TURN_DEADLINE_MS = 12000;
 const MAX_ATTEMPTS = 3;
 const GATEWAY_BREAKER_THRESHOLD = 5;
@@ -33,7 +35,8 @@ export class CircuitOpenError extends AIProviderError {
     }
 }
 export class LLMGateway {
-    constructor(primary = geminiAdapter, fallback = groqAdapter, gatekeeper = groqAdapter, turnDeadlineMs = TURN_DEADLINE_MS, maxAttempts = MAX_ATTEMPTS) {
+    constructor(primary = geminiAdapter, fallback = groqAdapter, gatekeeper = groqAdapter, turnDeadlineMs = TURN_DEADLINE_MS, maxAttempts = MAX_ATTEMPTS, resolver = aiProviderResolver, dynamicFlagProvider = undefined) {
+        this.dynamicFlagCache = null;
         /** In-memory gateway-level circuit breaker (one owner for AI boundary) */
         this.breaker = {
             failures: 0,
@@ -46,11 +49,76 @@ export class LLMGateway {
             fallback: { success: 0, failed: 0 },
             errors: [],
         };
+        // ─── Unit 3b: feature-flag-gated dynamic provider resolution ────────────
+        // Gate (default OFF): configService.getConfig('llm.useDynamicProviders') === 'true'.
+        // TTL-cached so the OFF hot path pays no DB read per request. Tests may inject
+        // `dynamicFlagProvider` to force ON/OFF without touching configService/system_settings.
+        this.DYNAMIC_FLAG_TTL_MS = 30000;
         this.primary = primary;
         this.fallback = fallback;
         this.gatekeeper = gatekeeper;
         this.turnDeadlineMs = turnDeadlineMs;
         this.maxAttempts = maxAttempts;
+        this.resolver = resolver;
+        this.dynamicFlagProvider = dynamicFlagProvider;
+    }
+    /** Resolve the dynamic-provider flag. Absence of the key => OFF (never throws). */
+    async isDynamicProvidersEnabled() {
+        const now = Date.now();
+        if (this.dynamicFlagCache && now - this.dynamicFlagCache.ts < this.DYNAMIC_FLAG_TTL_MS) {
+            return this.dynamicFlagCache.value;
+        }
+        let enabled;
+        if (this.dynamicFlagProvider) {
+            enabled = await this.dynamicFlagProvider();
+        }
+        else {
+            enabled = (await configService.getConfig('llm.useDynamicProviders')) === 'true';
+        }
+        this.dynamicFlagCache = { value: enabled, ts: now };
+        return enabled;
+    }
+    /**
+     * Resolve the primary/fallback adapter instances for this request.
+     * OFF (default): returns the original singletons -> OFF path runs UNCHANGED.
+     * ON: reads active AIProviderConfig rows via the resolver (3a), highest-priority
+     * first. Empty DB list for a role -> warn + fall back to the default singleton
+     * (customer chat is NOT disrupted; the cutover is safe by default).
+     *
+     * NOTE: the gatekeeper is intentionally NOT resolved here. extractIntent is a
+     * GroqAdapter-specific method (groq.adapter.ts:329) — not on AIProvider and
+     * not implemented by the Unit-2 generic adapters — so swapping the gatekeeper
+     * would silently degrade intent extraction (every message -> COMPLEX_CONVERSATION).
+     * Unit 5 chose Option B: gatekeeper stays pinned to the groqAdapter singleton
+     * and `chat_gatekeeper` AIProviderConfig rows are cosmetic for now.
+     */
+    async resolveEffectiveProviders() {
+        if (!(await this.isDynamicProvidersEnabled())) {
+            return { primary: this.primary, fallback: this.fallback };
+        }
+        const primaryList = await this.resolver.getProvidersForRole('chat_primary');
+        const fallbackList = await this.resolver.getProvidersForRole('chat_fallback');
+        let primary;
+        if (primaryList.length > 0) {
+            primary = primaryList[0];
+        }
+        else {
+            this.warnEmptyRole('chat_primary');
+            primary = this.primary;
+        }
+        let fallback;
+        if (fallbackList.length > 0) {
+            fallback = fallbackList[0];
+        }
+        else {
+            this.warnEmptyRole('chat_fallback');
+            fallback = this.fallback;
+        }
+        return { primary, fallback };
+    }
+    warnEmptyRole(role) {
+        console.warn(`[LLMGateway] dynamic providers ON but role '${role}' returned 0 active ` +
+            `AIProviderConfig rows; falling back to default singleton provider.`);
     }
     // ─── Circuit breaker (gateway-level, one owner) ─────────────────────────
     isCircuitOpen() {
@@ -124,16 +192,24 @@ export class LLMGateway {
      *   5. Record success/failure for circuit breaker stats
      */
     async generate(prompt, options, intent = 'general') {
+        // ── Unit 3b: feature-flag-gated dynamic provider resolution (default OFF) ──
+        // OFF (default): resolveEffectiveProviders() returns the original singletons,
+        // and the circuit-breaker/retry/fallback loop below runs UNCHANGED.
+        // ON: primary/fallback come from AIProviderConfig rows via the resolver (3a).
+        //   The gatekeeper is NOT swapped: extractIntent is GroqAdapter-specific
+        //   (groq.adapter.ts:329), not on AIProvider; swapping it would silently
+        //   degrade intent extraction. Gatekeeper cutover is deferred to Unit 5.
+        const { primary, fallback } = await this.resolveEffectiveProviders();
         // Circuit breaker gate
         if (this.isCircuitOpen()) {
             throw new CircuitOpenError('Gateway circuit breaker OPEN — AI providers exhausted');
         }
-        const primaryName = this.primary.getName();
-        const fallbackName = this.fallback.getName();
+        const primaryName = primary.getName();
+        const fallbackName = fallback.getName();
         let lastError = null;
         const providers = [
-            { name: primaryName, provider: this.primary, key: 'primary' },
-            { name: fallbackName, provider: this.fallback, key: 'fallback' },
+            { name: primaryName, provider: primary, key: 'primary' },
+            { name: fallbackName, provider: fallback, key: 'fallback' },
         ];
         for (const { name, provider, key } of providers) {
             // Per-provider cooldown via provider-cooldown service
@@ -150,6 +226,7 @@ export class LLMGateway {
                     logTokenUsage({
                         timestamp: Date.now(),
                         provider: response.provider,
+                        role: key === 'primary' ? 'chat_primary' : 'chat_fallback',
                         model: response.model,
                         intent,
                         conversationId: options?.conversationId || 'unknown',
@@ -223,6 +300,16 @@ export class LLMGateway {
     /**
      * Fast Intent & Entity Gatekeeper via Groq (gatekeeper provider).
      * Returns fallback intent on failure — never throws.
+     *
+     * Unit 5 decision — Option B: this is the resolved `this.gatekeeper`
+     * singleton and is NOT swapped by resolveEffectiveProviders(). extractIntent
+     * is GroqAdapter-specific (groq.adapter.ts:329) and not on the AIProvider
+     * interface, so resolving it from a `chat_gatekeeper` AIProviderConfig row
+     * would either require adding extractIntent to the shared interface
+     * (Option A) or implementing Groq-style intent extraction on every adapter.
+     * Option B was chosen to avoid a silent COMPLEX_CONVERSATION-for-everything
+     * regression (the Unit 3b bug) and to keep the shared interface clean.
+     * `chat_gatekeeper` rows are therefore cosmetic for now.
      */
     async extractIntent(message, contextSummary) {
         try {

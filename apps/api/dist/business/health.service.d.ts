@@ -13,6 +13,13 @@ interface SystemStatus {
         redis: DependencyStatus;
         groq: DependencyStatus;
         gemini: DependencyStatus;
+        /** Dynamic AIProviderConfig-backed providers (per role). Present when
+         *  llm.useDynamicProviders is ON; omitted/empty when OFF. Added in Unit 5. */
+        aiProviders?: Record<string, {
+            providers: string[];
+            healthy: boolean;
+            error?: string;
+        }>;
     };
     metrics: {
         totalStores: number;
@@ -31,6 +38,18 @@ export declare class HealthService {
     checkRedis(): Promise<DependencyStatus>;
     checkGroq(): Promise<DependencyStatus>;
     checkGemini(): Promise<DependencyStatus>;
+    /**
+     * Unit 5 — health for dynamic AIProviderConfig-backed providers.
+     * Shape choice: a SEPARATE `aiProviders` section on the dependencies object
+     * (merged alongside groq/gemini, which are NOT removed). Gated on the
+     * feature flag: when OFF (default, no DB rows) returns {} with no DB read,
+     * preserving the existing health response exactly.
+     */
+    checkAiProviders(): Promise<Record<string, {
+        providers: string[];
+        healthy: boolean;
+        error?: string;
+    }>>;
     getMetrics(): Promise<{
         totalStores: number;
         activeStores: number;

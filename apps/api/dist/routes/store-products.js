@@ -8,6 +8,7 @@ import { prisma } from '../infrastructure/prisma.js';
 import { adapters } from '../adapters/container.js';
 import { ApiError } from '../errors/ApiError.js';
 import { ErrorCodes } from '../constants/errorCodes.js';
+import { variantOverrideSchema } from '../schemas/index.js';
 const router = Router();
 // Semua route di sini butuh auth store owner. storeId selalu dari token.
 router.use(authMiddleware);
@@ -57,6 +58,8 @@ const magicPasteOwnerSchema = z.object({
         weight: z.number().int().min(1).optional(),
     })
         .optional(),
+    // PV-P3 — merchant-edited variant list (overrides raw LLM variants on create)
+    variantOverrides: z.array(variantOverrideSchema).optional(),
 });
 function generateSku() {
     return `SKU-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
@@ -171,9 +174,14 @@ router.delete('/my/:productId', async (req, res) => {
 router.post('/my/magic-paste', validateRequest(magicPasteOwnerSchema, 'body'), async (req, res) => {
     try {
         const storeId = req.user.storeId;
-        const { text, overrides } = getValidated(req);
+        const { text, overrides, variantOverrides } = getValidated(req);
         const preview = req.query.preview === 'true';
-        const result = await productService.magicPaste(storeId, text, { preview, source: 'store', overrides });
+        const result = await productService.magicPaste(storeId, text, {
+            preview,
+            source: 'store',
+            overrides,
+            variantOverrides,
+        });
         if (!preview && result.product) {
             adapters.logger.info('Store magic paste completed', { productId: result.product.id, storeId });
             return res.status(201).json({ success: true, data: result });

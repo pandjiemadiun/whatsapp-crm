@@ -1,10 +1,12 @@
 /**
  * BAGIAN 1 — Token Usage Tracking
  *
- * In-memory tracking per-request (per-hour window).
- * - logRequest: record successful LLM call
- * - getUsageLastHour: aggregate stats
+ * In-memory tracking per-request (per-hour window) + persistent DB log.
+ * - logTokenUsage: record successful LLM call (in-memory + DB)
+ * - getUsageLastHour: aggregate stats (in-memory, for backward compat)
+ * - queryUsage: flexible time-range aggregation (DB-backed)
  */
+import { prisma } from '../infrastructure/prisma.js';
 const WINDOW_MS = 60 * 60000; // 1 hour
 const MAX_LOGS = 10000;
 const logs = [];
@@ -30,6 +32,31 @@ export function logTokenUsage(entry) {
     }
     if (groqRecent >= GROQ_LIMIT * 0.8) {
         console.warn(`[TokenTracker] Groq approaching rate limit: ${groqRecent}/${GROQ_LIMIT} req/min`);
+    }
+    // Persist to DB — fire-and-forget, never break the response path.
+    // This is observability, not business logic: a DB hiccup here must not
+    // cause user-facing failures or add latency to the LLM response.
+    void persistTokenUsage(entry);
+}
+async function persistTokenUsage(entry) {
+    try {
+        await prisma.tokenUsageLog.create({
+            data: {
+                provider: entry.provider,
+                role: entry.role ?? null,
+                model: entry.model || null,
+                inputTokens: entry.inputTokens,
+                outputTokens: entry.outputTokens,
+                costUsd: entry.costUsd,
+                createdAt: new Date(entry.timestamp),
+            },
+        });
+    }
+    catch (err) {
+        console.warn('[TokenTracker] Failed to persist token usage to DB', {
+            provider: entry.provider,
+            error: err.message,
+        });
     }
 }
 export function getUsageLastHour() {
@@ -89,5 +116,50 @@ export function getUsageLastHour() {
         tokens: data.tokens,
     }));
     return summary;
+}
+export function validateTimeRange(query) {
+    if (isNaN(query.from.getTime()) || isNaN(query.to.getTime())) {
+        return 'from and to must be valid dates';
+    }
+    if (query.from >= query.to) {
+        return 'from must be before to';
+    }
+    const maxRangeDays = 365;
+    if (query.to.getTime() - query.from.getTime() > maxRangeDays * 24 * 60 * 60 * 1000) {
+        return `range must not exceed ${maxRangeDays} days`;
+    }
+    return null;
+}
+/**
+ * Flexible time-range aggregation from DB. Returns the same per-provider shape
+ * as getUsageLastHour() for consistency, but for any range (day/week/month/historical).
+ */
+export async function queryUsage(range) {
+    const rows = await prisma.tokenUsageLog.findMany({
+        where: {
+            createdAt: {
+                gte: range.from,
+                lte: range.to,
+            },
+        },
+        select: {
+            provider: true,
+            inputTokens: true,
+            outputTokens: true,
+            costUsd: true,
+        },
+    });
+    const result = {};
+    for (const row of rows) {
+        if (!result[row.provider]) {
+            result[row.provider] = { requests: 0, inputTokens: 0, outputTokens: 0, costUsd: 0 };
+        }
+        const agg = result[row.provider];
+        agg.requests++;
+        agg.inputTokens += row.inputTokens;
+        agg.outputTokens += row.outputTokens;
+        agg.costUsd += row.costUsd ?? 0;
+    }
+    return result;
 }
 //# sourceMappingURL=token-usage-tracker.js.map

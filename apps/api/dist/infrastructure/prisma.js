@@ -22,6 +22,14 @@ const SENSITIVE_FIELDS = {
     Customer: ['phone', 'name'],
     Order: ['shippingAddress', 'notes'],
     BankAccount: ['accountNumber', 'accountName'],
+    // Unit 3a: AIProviderConfig fields. apiKey is AES-256-GCM ciphertext
+    // (apps/api/src/utils/encryption.ts#encryptField). Auto-encrypted on
+    // create/update and auto-decrypted on read by this $use middleware.
+    // Writers (seed-ai-providers-from-env.mts + Platform Config in Unit 4) must
+    // store apiKey in PLAINTEXT — the middleware encrypts. Pre-encrypting before
+    // a Prisma write causes DOUBLE encryption (the original seed did this;
+    // fixed in Unit 3a so the resolver reads a single-decrypted key).
+    AIProviderConfig: ['apiKey'],
 };
 /** Periodic key refresh tiap 10 menit */
 setInterval(async () => {
@@ -72,9 +80,10 @@ prisma.$use(async (params, next) => {
     const decryptResult = (obj) => {
         if (!obj || typeof obj !== 'object')
             return obj;
+        const recordId = obj.id;
         for (const field of sensitive) {
             if (obj[field] !== undefined && typeof obj[field] === 'string') {
-                obj[field] = decryptField(obj[field], key);
+                obj[field] = decryptField(obj[field], key, { model, field, recordId });
             }
         }
         return obj;

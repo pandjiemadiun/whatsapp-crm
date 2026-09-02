@@ -297,6 +297,7 @@ export class LLMGateway {
           logTokenUsage({
             timestamp: Date.now(),
             provider: response.provider,
+            role: key === 'primary' ? 'chat_primary' : 'chat_fallback',
             model: response.model,
             intent,
             conversationId: options?.conversationId || 'unknown',

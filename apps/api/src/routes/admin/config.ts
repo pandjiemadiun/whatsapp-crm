@@ -9,7 +9,7 @@ import { AuthenticatedAdminRequest } from '../../middleware/adminAuth.js';
 import { asyncHandler } from '../../utils/asyncHandler.js';
 import { validateRequest, getValidated } from '../../middleware/validate-request.js';
 import { updateConfigSchema } from '../../schemas/index.js';
-import { getUsageLastHour } from '../../services/token-usage-tracker.js';
+import { getUsageLastHour, queryUsage, validateTimeRange } from '../../services/token-usage-tracker.js';
 
 const router = Router();
 
@@ -34,6 +34,45 @@ router.get('/token-usage/last-hour', asyncHandler(async (req: AuthenticatedAdmin
         gemini: { rpm: 12, limitPerMinute: 12 },
         groq: { rpm: 25, limitPerMinute: 25 },
       },
+    },
+  });
+}));
+
+// ─── GET /api/admin/config/token-usage/query?from=<ISO>&to=<ISO> ───
+// Flexible time-range aggregation from DB (day/week/month/historical).
+// Must be before /:key wildcard route.
+router.get('/token-usage/query', asyncHandler(async (req: AuthenticatedAdminRequest, res: Response) => {
+  const fromStr = req.query.from as string | undefined;
+  const toStr = req.query.to as string | undefined;
+
+  if (!fromStr || !toStr) {
+    return res.status(400).json({ error: 'from and to query params are required (ISO 8601)' });
+  }
+
+  const from = new Date(fromStr);
+  const to = new Date(toStr);
+
+  const validationError = validateTimeRange({ from, to });
+  if (validationError) {
+    return res.status(400).json({ error: validationError });
+  }
+
+  const perProvider = await queryUsage({ from, to });
+  const totalRequests = Object.values(perProvider).reduce((s, p) => s + p.requests, 0);
+  const totalInputTokens = Object.values(perProvider).reduce((s, p) => s + p.inputTokens, 0);
+  const totalOutputTokens = Object.values(perProvider).reduce((s, p) => s + p.outputTokens, 0);
+  const totalCostUsd = Object.values(perProvider).reduce((s, p) => s + p.costUsd, 0);
+
+  res.json({
+    success: true,
+    data: {
+      from: from.toISOString(),
+      to: to.toISOString(),
+      totalRequests,
+      totalInputTokens,
+      totalOutputTokens,
+      totalCostUsd,
+      perProvider,
     },
   });
 }));

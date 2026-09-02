@@ -1,13 +1,7 @@
-/**
- * BAGIAN 1 — Token Usage Tracking
- *
- * In-memory tracking per-request (per-hour window).
- * - logRequest: record successful LLM call
- * - getUsageLastHour: aggregate stats
- */
 export interface TokenLogEntry {
     timestamp: number;
     provider: string;
+    role?: string;
     model: string;
     intent: string;
     conversationId: string;
@@ -40,4 +34,19 @@ export interface UsageSummary {
 }
 export declare function logTokenUsage(entry: TokenLogEntry): void;
 export declare function getUsageLastHour(): UsageSummary;
+export interface TimeRangeQuery {
+    from: Date;
+    to: Date;
+}
+export declare function validateTimeRange(query: TimeRangeQuery): string | null;
+/**
+ * Flexible time-range aggregation from DB. Returns the same per-provider shape
+ * as getUsageLastHour() for consistency, but for any range (day/week/month/historical).
+ */
+export declare function queryUsage(range: TimeRangeQuery): Promise<Record<string, {
+    requests: number;
+    inputTokens: number;
+    outputTokens: number;
+    costUsd: number;
+}>>;
 //# sourceMappingURL=token-usage-tracker.d.ts.map

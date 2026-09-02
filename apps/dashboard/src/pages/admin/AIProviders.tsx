@@ -253,6 +253,15 @@ export default function AIProviders() {
     return copy;
   });
 
+  // Detect roles with >1 active provider (only the highest-priority one is used).
+  const duplicateActiveRoles = (() => {
+    const roleCount: Record<string, number> = {};
+    for (const p of providers) {
+      if (p.isActive) roleCount[p.role] = (roleCount[p.role] ?? 0) + 1;
+    }
+    return Object.entries(roleCount).filter(([, c]) => c > 1).map(([r]) => r);
+  })();
+
   // ── Render ──
   if (loading) {
     return (
@@ -345,6 +354,12 @@ export default function AIProviders() {
               placeholder="https://api.groq.com/openai/v1/chat/completions"
               className="w-full px-3 py-1.5 bg-dcard border border-dline rounded-lg text-sm text-surface focus:outline-none focus:ring-2 focus:ring-cyan font-mono"
             />
+            <p className="mt-1 text-xs text-slate-500">
+              Harus endpoint chat-completions <strong>penuh</strong> (termasuk <code>/chat/completions</code>).
+              Contoh Mistral: <code>https://api.mistral.ai/v1/chat/completions</code>. Adapter mengirim baseUrl
+              apa adi‑riwayat — origin saja (mis. <code>https://api.mistral.ai/v1</code>) tidak punya route chat
+              dan akan <strong>404</strong>.
+            </p>
           </div>
           <div className="lg:col-span-2">
             <label className="block text-xs font-medium text-slate-400 mb-1">API Key (password)</label>
@@ -443,6 +458,16 @@ export default function AIProviders() {
       </div>
 
       {/* ── Provider table ── */}
+      {duplicateActiveRoles.length > 0 && (
+        <div className="mb-4 p-3 rounded-lg bg-amber-400/10 border border-amber-400/20 text-amber-300 text-sm">
+          <strong>Perhatian:</strong> Role berikut memiliki lebih dari 1 provider aktif:{' '}
+          {duplicateActiveRoles.map((r) => (
+            <span key={r} className="font-mono mx-1">{r}</span>
+          ))}
+          . Hanya 1 provider (prioritas tertinggi) yang benar-benar dipakai per role saat ini. Provider aktif lain di role yang sama{' '}
+          <strong>TIDAK</strong> dipanggil otomatis — nonaktifkan yang tidak dipakai atau naikkan prioritas yang diinginkan.
+        </div>
+      )}
       <div className="bg-dcard rounded-lg border border-dline overflow-hidden">
         <table className="w-full text-sm">
           <thead>

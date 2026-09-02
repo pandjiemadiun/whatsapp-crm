@@ -23,13 +23,13 @@ export declare class KnowledgeService {
         createdAt: Date;
         updatedAt: Date;
         content: string;
-        tags: string[];
-        embedding: string | null;
         isActive: boolean;
+        tags: string[];
+        source: string | null;
+        embedding: string | null;
         deletedAt: Date | null;
         storeId: string;
         title: string;
-        source: string | null;
         relevanceScore: number;
     }>;
     update(id: string, data: Partial<KnowledgeInput>): Promise<{
@@ -38,13 +38,13 @@ export declare class KnowledgeService {
         createdAt: Date;
         updatedAt: Date;
         content: string;
-        tags: string[];
-        embedding: string | null;
         isActive: boolean;
+        tags: string[];
+        source: string | null;
+        embedding: string | null;
         deletedAt: Date | null;
         storeId: string;
         title: string;
-        source: string | null;
         relevanceScore: number;
     }>;
     delete(id: string): Promise<{
@@ -57,13 +57,13 @@ export declare class KnowledgeService {
         createdAt: Date;
         updatedAt: Date;
         content: string;
-        tags: string[];
-        embedding: string | null;
         isActive: boolean;
+        tags: string[];
+        source: string | null;
+        embedding: string | null;
         deletedAt: Date | null;
         storeId: string;
         title: string;
-        source: string | null;
         relevanceScore: number;
     } | null>;
     list(storeId: string, options?: {
@@ -76,13 +76,13 @@ export declare class KnowledgeService {
         createdAt: Date;
         updatedAt: Date;
         content: string;
-        tags: string[];
-        embedding: string | null;
         isActive: boolean;
+        tags: string[];
+        source: string | null;
+        embedding: string | null;
         deletedAt: Date | null;
         storeId: string;
         title: string;
-        source: string | null;
         relevanceScore: number;
     }[]>;
     search(storeId: string, query: string): Promise<KnowledgeSearchResult[]>;

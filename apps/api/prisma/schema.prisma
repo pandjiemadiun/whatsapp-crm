@@ -599,6 +599,21 @@ model AIProviderConfig {
   @@map("ai_provider_configs")
 }
 
+model TokenUsageLog {
+  id           String   @id @default(uuid())
+  provider     String
+  role         String?
+  model        String?
+  inputTokens  Int
+  outputTokens Int
+  costUsd      Float?
+  createdAt    DateTime @default(now())
+
+  @@index([provider, createdAt])
+  @@index([createdAt])
+  @@map("token_usage_logs")
+}
+
 model BackupManifest {
   id            String    @id @default(uuid())
   filename      String    @unique

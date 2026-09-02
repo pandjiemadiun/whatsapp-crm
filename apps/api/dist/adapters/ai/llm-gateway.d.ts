@@ -18,6 +18,7 @@
  * GOWA device_id is tenant identification only, NOT authentication.
  */
 import { AIProvider, AIGenerateOptions, AIResponse, AIProviderError, ExtractedIntent } from './types.js';
+import type { AIProviderResolverService } from '../../services/ai-provider-resolver.service.js';
 export declare class CircuitOpenError extends AIProviderError {
     constructor(message: string);
 }
@@ -27,12 +28,34 @@ export declare class LLMGateway {
     private gatekeeper;
     private turnDeadlineMs;
     private maxAttempts;
+    private resolver;
+    private dynamicFlagProvider;
+    private dynamicFlagCache;
     /** In-memory gateway-level circuit breaker (one owner for AI boundary) */
     private breaker;
     private stats;
     constructor(primary?: AIProvider, fallback?: AIProvider, gatekeeper?: AIProvider & {
         extractIntent(message: string, contextSummary?: string): Promise<ExtractedIntent>;
-    }, turnDeadlineMs?: number, maxAttempts?: number);
+    }, turnDeadlineMs?: number, maxAttempts?: number, resolver?: AIProviderResolverService, dynamicFlagProvider?: (() => Promise<boolean>) | undefined);
+    private readonly DYNAMIC_FLAG_TTL_MS;
+    /** Resolve the dynamic-provider flag. Absence of the key => OFF (never throws). */
+    private isDynamicProvidersEnabled;
+    /**
+     * Resolve the primary/fallback adapter instances for this request.
+     * OFF (default): returns the original singletons -> OFF path runs UNCHANGED.
+     * ON: reads active AIProviderConfig rows via the resolver (3a), highest-priority
+     * first. Empty DB list for a role -> warn + fall back to the default singleton
+     * (customer chat is NOT disrupted; the cutover is safe by default).
+     *
+     * NOTE: the gatekeeper is intentionally NOT resolved here. extractIntent is a
+     * GroqAdapter-specific method (groq.adapter.ts:329) — not on AIProvider and
+     * not implemented by the Unit-2 generic adapters — so swapping the gatekeeper
+     * would silently degrade intent extraction (every message -> COMPLEX_CONVERSATION).
+     * Unit 5 chose Option B: gatekeeper stays pinned to the groqAdapter singleton
+     * and `chat_gatekeeper` AIProviderConfig rows are cosmetic for now.
+     */
+    private resolveEffectiveProviders;
+    private warnEmptyRole;
     private isCircuitOpen;
     private recordSuccess;
     private recordFailure;
@@ -70,6 +93,16 @@ export declare class LLMGateway {
     /**
      * Fast Intent & Entity Gatekeeper via Groq (gatekeeper provider).
      * Returns fallback intent on failure — never throws.
+     *
+     * Unit 5 decision — Option B: this is the resolved `this.gatekeeper`
+     * singleton and is NOT swapped by resolveEffectiveProviders(). extractIntent
+     * is GroqAdapter-specific (groq.adapter.ts:329) and not on the AIProvider
+     * interface, so resolving it from a `chat_gatekeeper` AIProviderConfig row
+     * would either require adding extractIntent to the shared interface
+     * (Option A) or implementing Groq-style intent extraction on every adapter.
+     * Option B was chosen to avoid a silent COMPLEX_CONVERSATION-for-everything
+     * regression (the Unit 3b bug) and to keep the shared interface clean.
+     * `chat_gatekeeper` rows are therefore cosmetic for now.
      */
     extractIntent(message: string, contextSummary?: string): Promise<ExtractedIntent>;
     isGatewayCircuitOpen(): boolean;

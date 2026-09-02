@@ -3,11 +3,15 @@ import { geminiAdapter } from './gemini.adapter.js';
 import { shouldSkipProvider, triggerCooldown } from '../../services/provider-cooldown.js';
 import { logTokenUsage } from '../../services/token-usage-tracker.js';
 import { groqAdapter } from './groq.adapter.js';
+import { configService } from '../../business/config.service.js';
+import { aiProviderResolver } from '../../services/ai-provider-resolver.service.js';
 export class AIProviderManager {
     constructor(primary = geminiAdapter, // GEMINI SEKARANG PRIMARY SPEAKER (Natural Conversation)
     fallback = groqAdapter, // GROQ SEKARANG FALLBACK SPEAKER
-    gatekeeper = groqAdapter // GROQ SEKARANG FAST GATEKEEPER (Intent Extraction)
-    ) {
+    gatekeeper = groqAdapter, // GROQ SEKARANG FAST GATEKEEPER (Intent Extraction)
+    resolver = aiProviderResolver, dynamicFlagProvider = undefined) {
+        this.dynamicFlagCache = null;
+        this.DYNAMIC_FLAG_TTL_MS = 30000;
         this.breaker = {
             failures: 0,
             threshold: 5,
@@ -22,9 +26,76 @@ export class AIProviderManager {
         this.primaryProvider = primary;
         this.fallbackProvider = fallback;
         this.gatekeeperProvider = gatekeeper;
+        this.resolver = resolver;
+        this.dynamicFlagProvider = dynamicFlagProvider;
+    }
+    /** Resolve the dynamic-provider flag. Absence of the key => OFF (never throws). */
+    async isDynamicProvidersEnabled() {
+        const now = Date.now();
+        if (this.dynamicFlagCache && now - this.dynamicFlagCache.ts < this.DYNAMIC_FLAG_TTL_MS) {
+            return this.dynamicFlagCache.value;
+        }
+        let enabled;
+        if (this.dynamicFlagProvider) {
+            enabled = await this.dynamicFlagProvider();
+        }
+        else {
+            enabled = (await configService.getConfig('llm.useDynamicProviders')) === 'true';
+        }
+        this.dynamicFlagCache = { value: enabled, ts: now };
+        return enabled;
     }
     /**
-     * Fast Intent & Entity Gatekeeper via Groq
+     * Resolve primary/fallback for this request.
+     * OFF (default): returns the original singletons -> OFF path runs UNCHANGED.
+     * ON: reads active AIProviderConfig rows via the resolver, highest-priority first.
+     * Empty DB list for a role -> warn + fall back to the default singleton
+     * (customer chat is NOT disrupted; the cutover is safe by default).
+     *
+     * NOTE: the gatekeeper is intentionally NOT resolved here (Option B — see
+     * Unit 5 report). extractIntent is GroqAdapter-specific, not on AIProvider.
+     */
+    async resolveEffectiveProviders() {
+        if (!(await this.isDynamicProvidersEnabled())) {
+            return { primary: this.primaryProvider, fallback: this.fallbackProvider };
+        }
+        const primaryList = await this.resolver.getProvidersForRole('chat_primary');
+        const fallbackList = await this.resolver.getProvidersForRole('chat_fallback');
+        let primary;
+        if (primaryList.length > 0) {
+            primary = primaryList[0];
+        }
+        else {
+            console.warn("[AIManager] dynamic providers ON but role 'chat_primary' returned 0 active " +
+                "AIProviderConfig rows; falling back to default primary provider.");
+            primary = this.primaryProvider;
+        }
+        let fallback;
+        if (fallbackList.length > 0) {
+            fallback = fallbackList[0];
+        }
+        else {
+            console.warn("[AIManager] dynamic providers ON but role 'chat_fallback' returned 0 active " +
+                "AIProviderConfig rows; falling back to default fallback provider.");
+            fallback = this.fallbackProvider;
+        }
+        return { primary, fallback };
+    }
+    /**
+     * Fast Intent & Entity Gatekeeper via Groq (gatekeeper provider).
+     * Returns fallback intent on failure — never throws.
+     *
+     * Unit 5 decision — Option B: the gatekeeper is pinned to the GroqAdapter
+     * singleton (this.gatekeeperProvider) regardless of llm.useDynamicProviders.
+     * extractIntent is GroqAdapter-specific (groq.adapter.ts:329) and is NOT on
+     * the AIProvider interface, nor implemented by the Unit-2 generic adapters
+     * (OpenAICompatibleAdapter / GeminiShimAdapter). Resolving it from
+     * AIProviderConfig (chat_gatekeeper role) would require either adding
+     * extractIntent to the shared interface (Option A) or implementing Groq-style
+     * intent extraction on every adapter. Option B was chosen explicitly to
+     * avoid a silent COMPLEX_CONVERSATION-for-everything regression (the Unit 3b
+     * bug) and to keep the shared interface clean. `chat_gatekeeper` rows are
+     * therefore cosmetic for now and are reported as an intentional limitation.
      */
     async extractIntent(message, contextSummary) {
         try {
@@ -41,8 +112,9 @@ export class AIProviderManager {
         }
     }
     async generate(prompt, options, intent = 'general') {
-        const primaryName = this.primaryProvider.getName();
-        const fallbackName = this.fallbackProvider.getName();
+        const { primary, fallback } = await this.resolveEffectiveProviders();
+        const primaryName = primary.getName();
+        const fallbackName = fallback.getName();
         // BAGIAN 2 - Circuit breaker
         if (this.breaker.failures >= this.breaker.threshold &&
             Date.now() - this.breaker.openedAt < this.breaker.resetAfterMs) {
@@ -53,7 +125,7 @@ export class AIProviderManager {
         // BAGIAN 1 - Check primary cooldown
         if (!shouldSkipProvider(primaryName)) {
             try {
-                const response = await this.primaryProvider.generate(prompt, options);
+                const response = await primary.generate(prompt, options);
                 this.stats.primary.success++;
                 this.breaker.failures = 0;
                 this.breaker.openedAt = 0;
@@ -105,7 +177,7 @@ export class AIProviderManager {
         // BAGIAN 1 - Check fallback cooldown
         if (!shouldSkipProvider(fallbackName)) {
             try {
-                const response = await this.fallbackProvider.generate(prompt, options);
+                const response = await fallback.generate(prompt, options);
                 this.stats.fallback.success++;
                 this.breaker.failures = 0;
                 this.breaker.openedAt = 0;

@@ -1,3 +1,4 @@
+import { type DecryptFieldContext } from '../errors/FieldDecryptionError.js';
 /** Parse key string (hex / base64 / raw) ke Buffer 32 bytes. */
 export declare function parseKey(raw: string): Buffer;
 /**
@@ -21,9 +22,11 @@ export declare function encryptField(plaintext: string | null | undefined, key: 
  * Dekripsi string yang dienkripsi oleh encryptField.
  * @param encrypted - string format "iv:tag:ciphertext"
  * @param key - Buffer key (32 bytes). Jika null, kembalikan apa adanya.
+ * @param ctx - optional model/field/record context for error reporting.
  * @returns plaintext asli, atau null jika input null
+ * @throws FieldDecryptionError on decryption failure (wrong key / corrupt data)
  */
-export declare function decryptField(encrypted: string | null | undefined, key: Buffer | null): string | null;
+export declare function decryptField(encrypted: string | null | undefined, key: Buffer | null, ctx?: DecryptFieldContext): string | null;
 /**
  * Hash deterministic untuk kolom unique (mis. untuk future use).
  * @param value - nilai yang akan di-hash

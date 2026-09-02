@@ -3,6 +3,7 @@ import { geminiAdapter } from '../adapters/ai/gemini.adapter.js';
 import { redisAdapter } from '../adapters/cache/redis.adapter.js';
 import { adapters } from '../adapters/container.js';
 import { configService } from './config.service.js';
+import { aiProviderResolver } from '../services/ai-provider-resolver.service.js';
 import { prisma } from '../infrastructure/prisma.js';
 const APP_START_TIME = Date.now();
 const cache = { data: null, expiresAt: 0 };
@@ -12,18 +13,20 @@ export class HealthService {
         if (!forceRefresh && cache.data && Date.now() < cache.expiresAt) {
             return cache.data;
         }
-        const [dbStatus, redisStatus, groqStatus, geminiStatus, metrics] = await Promise.all([
+        const [dbStatus, redisStatus, groqStatus, geminiStatus, metrics, aiProvidersStatus] = await Promise.all([
             this.checkDatabase(),
             this.checkRedis(),
             this.checkGroq(),
             this.checkGemini(),
             this.getMetrics(),
+            this.checkAiProviders(),
         ]);
         const deps = {
             database: dbStatus,
             redis: redisStatus,
             groq: groqStatus,
             gemini: geminiStatus,
+            aiProviders: aiProvidersStatus,
         };
         let overall;
         // Database & Redis are critical — everything else (Groq/Gemini) is optional
@@ -100,6 +103,34 @@ export class HealthService {
         catch (error) {
             return { status: 'error', error: error.message };
         }
+    }
+    /**
+     * Unit 5 — health for dynamic AIProviderConfig-backed providers.
+     * Shape choice: a SEPARATE `aiProviders` section on the dependencies object
+     * (merged alongside groq/gemini, which are NOT removed). Gated on the
+     * feature flag: when OFF (default, no DB rows) returns {} with no DB read,
+     * preserving the existing health response exactly.
+     */
+    async checkAiProviders() {
+        const enabled = (await configService.getConfig('llm.useDynamicProviders')) === 'true';
+        if (!enabled)
+            return {};
+        const roles = ['chat_primary', 'chat_fallback', 'chat_gatekeeper', 'batch_task', 'wizard', 'other'];
+        const out = {};
+        for (const role of roles) {
+            try {
+                const providers = await aiProviderResolver.getProvidersForRole(role);
+                if (providers.length === 0)
+                    continue;
+                const healthResults = await Promise.allSettled(providers.map((p) => (p.isHealthy ? p.isHealthy() : Promise.resolve(true))));
+                const healthy = healthResults.every((r) => r.status === 'fulfilled' && r.value === true);
+                out[role] = { providers: providers.map((p) => p.getName()), healthy };
+            }
+            catch (err) {
+                out[role] = { providers: [], healthy: false, error: err.message };
+            }
+        }
+        return out;
     }
     async getMetrics() {
         const start = Date.now();

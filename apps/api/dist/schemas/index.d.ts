@@ -138,9 +138,25 @@ export declare const updateProductSchema: z.ZodObject<{
     isActive: z.ZodOptional<z.ZodBoolean>;
 }, z.core.$strip>;
 export type UpdateProductInput = z.infer<typeof updateProductSchema>;
+/** PV-P3 — satu entri variantOverrides (merchant-edited, dari magic-paste preview).
+ *  Aturan VALIDASI sama seperti Unit 1 LLM-path (attributes non-empty, price valid),
+ *  tapi di sini STRICT: merchant data → reject malformed, jangan silent-drop. */
+export declare const variantOverrideSchema: z.ZodObject<{
+    price: z.ZodCoercedNumber<unknown>;
+    stock: z.ZodNullable<z.ZodOptional<z.ZodCoercedNumber<unknown>>>;
+    sku: z.ZodNullable<z.ZodOptional<z.ZodString>>;
+    attributes: z.ZodRecord<z.ZodString, z.ZodAny>;
+}, z.core.$strip>;
+export type VariantOverride = z.infer<typeof variantOverrideSchema>;
 export declare const magicPasteSchema: z.ZodObject<{
     text: z.ZodString;
     storeId: z.ZodString;
+    variantOverrides: z.ZodOptional<z.ZodArray<z.ZodObject<{
+        price: z.ZodCoercedNumber<unknown>;
+        stock: z.ZodNullable<z.ZodOptional<z.ZodCoercedNumber<unknown>>>;
+        sku: z.ZodNullable<z.ZodOptional<z.ZodString>>;
+        attributes: z.ZodRecord<z.ZodString, z.ZodAny>;
+    }, z.core.$strip>>>;
 }, z.core.$strip>;
 export type MagicPasteInput = z.infer<typeof magicPasteSchema>;
 export declare const createVariantSchema: z.ZodObject<{

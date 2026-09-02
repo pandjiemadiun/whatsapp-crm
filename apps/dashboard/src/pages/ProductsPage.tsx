@@ -31,6 +31,9 @@ interface MagicPasteExtracted {
   categoryId: string | null;
   categoryHint: string | null;
   confidence: number;
+  weight: number | null;
+  variants: Array<{ attributes: Record<string, string>; price: number; stock: number | null; sku: string | null }> | null;
+  variantConfidence: number | null;
 }
 
 /** Price-like number pattern: supports thousand-separator dots/commas, K/rb/ribu suffixes. */
@@ -268,7 +271,7 @@ export default function ProductsPage() {
   };
 
   // ── Magic Paste handlers ──
-  const handleMpExtract = async (create: boolean, overrides?: { name?: string; price?: number; stock?: number | null }) => {
+  const handleMpExtract = async (create: boolean, overrides?: { name?: string; price?: number; stock?: number | null; weight?: number | null }) => {
     const text = mpText.trim();
     if (text.length < 10) {
       setMpError('Minimal 10 karakter');
@@ -327,15 +330,22 @@ export default function ProductsPage() {
           categoryId: d.extractedEntities?.categoryId ?? null,
           categoryHint: d.extractedEntities?.categoryHint ?? null,
           confidence: d.extractedEntities?.confidence ?? 0,
+          weight: d.extractedEntities?.weight ?? null,
+          variants: d.extractedEntities?.variants ?? null,
+          variantConfidence: d.extractedEntities?.variantConfidence ?? null,
         });
         setMpBatch(null);
-        setMpEdit(false);
-        if (create) {
+        if (create && d.needsWeightInput) {
+          setMpEdit(true);
+          showFeedback('error', 'Berat (gram) tidak ditemukan — isi berat sebelum membuat produk.');
+        } else if (create && d.product) {
+          setMpEdit(false);
           showFeedback('success', 'Produk berhasil dibuat via Magic Paste!');
           setMpText('');
           setMpExtracted(null);
-          setMpEdit(false);
           loadProducts();
+        } else {
+          setMpEdit(false);
         }
       } else {
         setMpError(res.data.error?.message || 'Gagal memproses teks');
@@ -613,6 +623,7 @@ className="flex items-center gap-2 bg-brand text-white px-4 py-2 rounded-lg text
                   name: mpExtracted.name || undefined,
                   price: mpExtracted.price ?? undefined,
                   stock: mpExtracted.stock ?? undefined,
+                  weight: mpExtracted.weight ?? undefined,
                 } : undefined)}
                 disabled={mpLoading}
                 className="flex items-center gap-2 bg-green-600 text-white px-5 py-2.5 rounded-lg text-sm font-semibold hover:bg-green-700 focus-visible:ring-2 focus:ring-brand disabled:bg-green-300 transition"
@@ -788,10 +799,39 @@ className="flex items-center gap-2 bg-brand text-white px-4 py-2 rounded-lg text
                   )}
                 </div>
                 <div>
+                  <span className="text-xs text-muted">Berat (gram)</span>
+                  {mpEdit ? (
+                    <input
+                      type="number"
+                      value={mpExtracted.weight != null ? String(mpExtracted.weight) : ''}
+                      onChange={(e) => setMpExtracted({ ...mpExtracted, weight: e.target.value ? Number(e.target.value) : null })}
+                      placeholder="Wajib diisi"
+                      className="w-full mt-0.5 px-2 py-1 border border-line dark:border-dline rounded text-sm bg-surface dark:bg-dsurface text-ink focus:outline-none focus:ring-1 focus:ring-brand"
+                    />
+                  ) : (
+                    <p className={`font-medium ${mpExtracted.weight ? 'text-ink dark:text-surface' : 'text-red-600 dark:text-red-400'}`}>
+                      {mpExtracted.weight != null ? `${mpExtracted.weight} gram` : '— (belum diisi)'}
+                    </p>
+                  )}
+                </div>
+                <div className="sm:col-span-2">
                   <span className="text-xs text-muted">Kategori</span>
                   <p className="font-medium text-ink dark:text-surface">{mpExtracted.categoryHint || mpExtracted.categoryId || '—'}</p>
                 </div>
               </div>
+              {mpExtracted.variants && mpExtracted.variants.length > 0 && (
+                <div className="mt-3 pt-3 border-t border-line dark:border-dline">
+                  <span className="text-xs text-muted block mb-1">Varian terdeteksi ({mpExtracted.variants.length})</span>
+                  <div className="flex flex-wrap gap-2">
+                    {mpExtracted.variants.map((v) => (
+                      <span key={Math.random()} className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-brand-soft dark:bg-brand/15 text-xs font-medium text-brand">
+                        {Object.entries(v.attributes).map(([_, val]) => `${val}`).join(' / ')}
+                        <span className="text-brand/70">{formatRupiah(v.price)}</span>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
               {mpExtracted.confidence < 0.8 && (
                 <p className="text-xs text-amber-700 dark:text-amber-400">Review data di atas sebelum membuat produk.</p>
               )}

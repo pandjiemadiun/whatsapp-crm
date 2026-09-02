@@ -11,6 +11,7 @@ const navItems = [
   { label: 'GOWA', path: '/admin/gowa', icon: Smartphone },
   { label: 'Config', path: '/admin/config', icon: Settings },
   { label: 'AI Providers', path: '/admin/ai-providers', icon: Database },
+  { label: 'Token Usage', path: '/admin/token-usage', icon: BarChart3 },
   { label: 'Analytics', path: '/admin/analytics', icon: BarChart3 },
   { label: 'Audit Log', path: '/admin/audit-logs', icon: ClipboardList },
   { label: 'Backups', path: '/admin/backups', icon: Archive },

@@ -1,6 +1,7 @@
 import cron from 'node-cron';
 import { prisma } from '../infrastructure/prisma.js';
 import { groqAdapter } from '../adapters/ai/groq.adapter.js';
+import { aiProviderResolver } from '../services/ai-provider-resolver.service.js';
 import { fonnteService } from '../services/fonnte.service.js';
 import { gowaAdapter } from '../adapters/whatsapp/gowa.adapter.js';
 import { adapters } from '../adapters/container.js';
@@ -218,7 +219,12 @@ Aturan:
 - Akhiri dengan ajakan bertanya
 - JANGAN gunakan emoji`;
     try {
-        const result = await groqAdapter.generate(prompt, {
+        // Unit 5: 'batch_task' role — resolver-backed, falls back to the groqAdapter
+        // singleton when no active AIProviderConfig row exists for 'batch_task'
+        // (default OFF: no rows => groqAdapter, identical to prior behavior).
+        const batchTaskProviders = await aiProviderResolver.getProvidersForRole('batch_task');
+        const llm = batchTaskProviders.length > 0 ? batchTaskProviders[0] : groqAdapter;
+        const result = await llm.generate(prompt, {
             temperature: 0.7,
             maxTokens: 100,
             intent: 'followup',

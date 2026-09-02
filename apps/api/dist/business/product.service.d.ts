@@ -65,6 +65,19 @@ export declare class ProductService {
         attributes: Record<string, any>;
     }): Promise<any>;
     /**
+     * PV-P3 — resolve which variant rows to write: merchant `variantOverrides`
+     * (Part 2, STRICT validate — reject malformed) take priority over raw LLM
+     * `raw.variants` (Unit 1, already sanitized — drop-malformed). Returns []
+     * for non-variant products (regression: simple-product path unchanged).
+     */
+    private resolveEffectiveVariants;
+    /**
+     * STRICT validate ONE merchant-provided variant (reject, don't drop —
+     * merchant data has higher trust level than LLM output). Throws ApiError
+     * (400 ERR_VALIDATION) on the first malformed entry.
+     */
+    private validateMerchantVariant;
+    /**
      * List variants for a product.
      */
     listVariants(productId: string, storeId: string): Promise<any[]>;
@@ -131,6 +144,7 @@ export declare class ProductService {
         preview?: boolean;
         source?: 'store' | 'admin';
         overrides?: MagicPasteOverrides;
+        variantOverrides?: MagicPasteVariant[];
     }): Promise<{
         product: Product | null;
         extractedEntities: Record<string, unknown>;
@@ -244,6 +258,17 @@ export interface MagicPasteOverrides {
     stock?: number | null;
     /** Berat (gram) — bisa diisi manual setelah preview needsWeightInput. */
     weight?: number | null;
+}
+/**
+ * Bentuk satu baris varian untuk magic-paste create (PV-P3).
+ * Dipakai untuk `variantOverrides` (merchant-edited, dari preview step)
+ * dan konsisten dengan `MagicPasteExtraction.variants` (Unit 1 LLM output).
+ */
+export interface MagicPasteVariant {
+    attributes: Record<string, string>;
+    price: number;
+    stock?: number | null;
+    sku?: string | null;
 }
 /** Pattern ekstraksi regex yang dikelola admin (Phase 1.9.8) */
 export interface MagicPastePattern {

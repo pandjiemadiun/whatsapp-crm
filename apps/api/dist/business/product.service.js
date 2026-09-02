@@ -323,6 +323,56 @@ export class ProductService {
         });
     }
     /**
+     * PV-P3 — resolve which variant rows to write: merchant `variantOverrides`
+     * (Part 2, STRICT validate — reject malformed) take priority over raw LLM
+     * `raw.variants` (Unit 1, already sanitized — drop-malformed). Returns []
+     * for non-variant products (regression: simple-product path unchanged).
+     */
+    resolveEffectiveVariants(raw, options) {
+        // `!== undefined` (bukan truthy check): merchant dapat memberi `[]` (semua varian
+        // LLM di-clear → simple product) yang BERBEDA dari `undefined` (tidak ada override
+        // → pakai raw LLM variants). Mencegah simple-product regression.
+        if (options.variantOverrides !== undefined) {
+            return options.variantOverrides.map((v, i) => this.validateMerchantVariant(v, i));
+        }
+        if (raw.variants && raw.variants.length > 0) {
+            return raw.variants;
+        }
+        return [];
+    }
+    /**
+     * STRICT validate ONE merchant-provided variant (reject, don't drop —
+     * merchant data has higher trust level than LLM output). Throws ApiError
+     * (400 ERR_VALIDATION) on the first malformed entry.
+     */
+    validateMerchantVariant(v, idx) {
+        if (!v || typeof v !== 'object') {
+            throw new ApiError(ErrorCodes.ERR_VALIDATION, `Variant #${idx + 1}: invalid shape`);
+        }
+        if (!v.attributes || typeof v.attributes !== 'object' || Array.isArray(v.attributes)) {
+            throw new ApiError(ErrorCodes.ERR_VALIDATION, `Variant #${idx + 1}: missing attributes`);
+        }
+        const attrs = {};
+        for (const [k, val] of Object.entries(v.attributes)) {
+            if (val == null || String(k).trim() === '') {
+                throw new ApiError(ErrorCodes.ERR_VALIDATION, `Variant #${idx + 1}: invalid attribute key/value`);
+            }
+            attrs[String(k).toLowerCase()] = String(val).toLowerCase();
+        }
+        if (Object.keys(attrs).length === 0) {
+            throw new ApiError(ErrorCodes.ERR_VALIDATION, `Variant #${idx + 1}: empty attributes`);
+        }
+        if (typeof v.price !== 'number' || !(v.price > 0) || v.price >= ProductService.MAX_PRICE) {
+            throw new ApiError(ErrorCodes.ERR_VALIDATION, `Variant #${idx + 1}: invalid price (${v.price})`);
+        }
+        return {
+            attributes: attrs,
+            price: v.price,
+            stock: typeof v.stock === 'number' ? v.stock : null,
+            sku: typeof v.sku === 'string' ? v.sku : null,
+        };
+    }
+    /**
      * List variants for a product.
      */
     async listVariants(productId, storeId) {
@@ -625,7 +675,31 @@ export class ProductService {
         if (raw.confidence != null && raw.confidence < 0.8) {
             warnings.push(`Extraction confidence low (${raw.confidence.toFixed(2)}) — please review extracted data`);
         }
-        // 8a. Preview mode — return hasil ekstraksi tanpa create produk
+        // 8. Weight gate — cek SEBELUM preview return supaya preview juga dapat
+        //    flag needsWeightInput + warning. Owner jadi tahu berat wajib diisi
+        //    SEBELUM klik "Buat Produk", bukan setelah.
+        const needsWeightInput = raw.weight == null || raw.weight <= 0;
+        if (needsWeightInput) {
+            warnings.push('Berat (gram) tidak ditemukan di teks — lengkapi manual sebelum simpan');
+        }
+        // Shared extractedEntities (dipakai preview DAN needsWeightInput return).
+        // SELALU termasuk variants + variantConfidence — jangan drop di path mana pun.
+        const extractedEntities = {
+            name: raw.name,
+            price: raw.price,
+            stock,
+            weight: raw.weight ?? null,
+            categoryHint: raw.categoryName ?? null,
+            categoryId,
+            description: raw.description ?? null,
+            unit: raw.unit ?? null,
+            confidence: raw.confidence ?? 0,
+            variants: raw.variants ?? null, // PV-P3
+            variantConfidence: raw.variantConfidence ?? null, // PV-P3
+        };
+        // 8a. Preview mode — return hasil ekstraksi tanpa create produk.
+        //     Selalu include needsWeightInput + warning supaya UI bisa tampilkan
+        //     pesan berat-wajib-diisi di tahap preview (belum klik "Buat Produk").
         if (options.preview) {
             adapters.logger.info('Magic paste preview (no create)', { storeId, confidence: raw.confidence });
             await this.recordMagicPasteRun({
@@ -635,39 +709,19 @@ export class ProductService {
                 confidence: raw.confidence ?? 0,
                 status: 'preview',
                 warnings,
-                extractedEntities: {
-                    name: raw.name,
-                    price: raw.price,
-                    stock,
-                    categoryHint: raw.categoryName ?? null,
-                    categoryId,
-                    description: raw.description ?? null,
-                    unit: raw.unit ?? null,
-                    confidence: raw.confidence ?? 0,
-                },
+                extractedEntities,
                 source: options.source ?? 'store',
             });
             return {
                 product: null,
-                extractedEntities: {
-                    name: raw.name,
-                    price: raw.price,
-                    stock,
-                    categoryHint: raw.categoryName ?? null,
-                    categoryId,
-                    description: raw.description ?? null,
-                    unit: raw.unit ?? null,
-                    confidence: raw.confidence ?? 0,
-                },
+                extractedEntities,
                 warning: warnings.length > 0 ? warnings.slice(0, 3) : null,
+                ...(needsWeightInput ? { needsWeightInput: true } : {}),
             };
         }
-        // 8b. Weight wajib untuk create (schema Product.weight NOT NULL, dan kita TIDAK
-        //     menyimpan angka palsu). Kalau ekstraksi tidak menemukan berat di teks
-        //     sumber → JANGAN insert; kembalikan sebagai preview dengan flag
-        //     needsWeightInput agar UI minta owner isi manual sebelum simpan.
-        if (raw.weight == null || raw.weight <= 0) {
-            const weightWarning = 'Berat (gram) tidak ditemukan di teks — lengkapi manual sebelum simpan';
+        // 8b. Create path — kalau berat belum ada, JANGAN insert. Return preview-like
+        //     response dengan needsWeightInput flag. Variants tetap included.
+        if (needsWeightInput) {
             adapters.logger.info('Magic paste needs weight input (no weight in source text)', {
                 storeId,
                 confidence: raw.confidence,
@@ -678,59 +732,77 @@ export class ProductService {
                 textLength: text.length,
                 confidence: raw.confidence ?? 0,
                 status: 'preview',
-                warnings: [...warnings, weightWarning],
-                extractedEntities: {
-                    name: raw.name,
-                    price: raw.price,
-                    stock,
-                    weight: null,
-                    categoryHint: raw.categoryName ?? null,
-                    categoryId,
-                    description: raw.description ?? null,
-                    unit: raw.unit ?? null,
-                    confidence: raw.confidence ?? 0,
-                },
+                warnings,
+                extractedEntities,
                 source: options.source ?? 'store',
             });
             return {
                 product: null,
-                extractedEntities: {
-                    name: raw.name,
-                    price: raw.price,
-                    stock,
-                    weight: null,
-                    categoryHint: raw.categoryName ?? null,
-                    categoryId,
-                    description: raw.description ?? null,
-                    unit: raw.unit ?? null,
-                    confidence: raw.confidence ?? 0,
-                },
-                warning: [...warnings, weightWarning].slice(0, 3),
+                extractedEntities,
+                warning: warnings.slice(0, 3),
                 needsWeightInput: true,
             };
         }
         // 8c. Generate SKU unik (dengan retry)
         const sku = await this.generateUniqueSKU(storeId);
-        // 9. Buat produk
+        // 9. Buat produk + varian (atomic transaction — PV-P3).
+        //    variantOverrides (merchant-edited, Part 2) wins over raw LLM variants.
+        //    needsWeightInput gate (8b) di atas sudah lewat, jadi raw.weight > 0 di sini.
+        const effectiveVariants = this.resolveEffectiveVariants(raw, options);
+        const hasVariantsFlag = effectiveVariants.length > 0;
+        // PV-P3 — capture field yang sudah ter-narrow guard (687 / 8b) ke local typed.
+        // Narrowing `raw.*` tidak persisten di dalam async $transaction callback.
+        const productName = raw.name;
+        const productPrice = raw.price;
+        const productWeight = raw.weight ?? 0;
         let product;
         try {
-            const row = await prisma.product.create({
-                data: {
-                    storeId,
-                    categoryId,
-                    name: raw.name,
-                    description: raw.description ?? null,
-                    price: raw.price,
-                    currency: 'IDR',
-                    sku,
-                    stock,
-                    weight: raw.weight,
-                    source: 'magic_paste',
-                },
+            product = await prisma.$transaction(async (tx) => {
+                const row = await tx.product.create({
+                    data: {
+                        storeId,
+                        categoryId,
+                        name: productName,
+                        description: raw.description ?? null,
+                        price: productPrice,
+                        currency: 'IDR',
+                        sku,
+                        stock,
+                        weight: productWeight,
+                        source: 'magic_paste',
+                        hasVariants: hasVariantsFlag, // PV-P3
+                    },
+                });
+                if (hasVariantsFlag) {
+                    for (const v of effectiveVariants) {
+                        await tx.productVariant.create({
+                            data: {
+                                productId: row.id,
+                                storeId,
+                                sku: v.sku ?? null,
+                                attributes: v.attributes,
+                                price: v.price,
+                                stock: v.stock ?? null,
+                                isActive: true,
+                            },
+                        });
+                    }
+                }
+                return this.mapProduct(row);
             });
-            product = this.mapProduct(row);
         }
         catch (error) {
+            // P2002 = @@unique([storeId, sku]) violation (Product.sku atau
+            // ProductVariant.sku). Map ke clean 409 — jangan biarkan Prisma error bocor.
+            // Prisma $transaction auto-rollback → ZERO rows bila gagal
+            // (Product + N variants tidak setengah-created).
+            if (error?.code === 'P2002') {
+                adapters.logger.warn('Magic paste SKU conflict (atomic rollback)', {
+                    storeId,
+                    target: error?.meta?.target ?? null,
+                });
+                throw new ApiError(ErrorCodes.ERR_CONFLICT, 'SKU already exists for this store — use a unique SKU or edit the conflicting variant', { skuConflict: error?.meta?.target ?? null });
+            }
             adapters.logger.error('Magic paste create failed', error, { storeId });
             throw new ApiError(ErrorCodes.ERR_DB, 'Failed to create product');
         }
@@ -772,6 +844,8 @@ export class ProductService {
                 description: raw.description ?? null,
                 unit: raw.unit ?? null,
                 confidence: raw.confidence ?? 0,
+                variants: effectiveVariants.length ? effectiveVariants : null, // PV-P3
+                variantConfidence: raw.variantConfidence ?? null, // PV-P3
             },
             warning: warnings.length > 0 ? warnings.slice(0, 3) : null,
         };
@@ -894,6 +968,68 @@ export class ProductService {
             }
             if (parsed.weight != null && typeof parsed.weight !== 'number') {
                 parsed.weight = null;
+            }
+            // PV-P3 — sanitize LLM's variants[] (best-effort, TIDAK blocking).
+            // Shape valid: tiap entry punya `attributes` (object string->string, ≥1 key,
+            // key+value non-empty) + `price` (angka > 0 & < 10.000.000). Entry
+            // rusak/non-objek/missing-price/missing-attributes → DROP (tidak crash).
+            // Jika LLM tidak kembalikan `variants` (produk non-varian) → tetap
+            // `undefined` (regression: simple-product parsing tidak berubah sama sekali).
+            if (Array.isArray(parsed.variants)) {
+                const ok = [];
+                for (const v of parsed.variants) {
+                    if (!v || typeof v !== 'object')
+                        continue;
+                    const vany = v;
+                    // attributes: wajib object string->string, minimal 1 kunci bernama
+                    let attrs = null;
+                    const rawAttr = vany.attributes;
+                    if (rawAttr && typeof rawAttr === 'object' && !Array.isArray(rawAttr)) {
+                        attrs = {};
+                        let good = true;
+                        for (const [k, val] of Object.entries(rawAttr)) {
+                            if (val == null) {
+                                good = false;
+                                break;
+                            }
+                            const ks = String(k).toLowerCase();
+                            if (ks === '') {
+                                good = false;
+                                break;
+                            }
+                            attrs[ks] = String(val).toLowerCase();
+                        }
+                        if (!good || Object.keys(attrs).length === 0)
+                            attrs = null;
+                    }
+                    // price: normalisasi string->angka via normalizePriceText, lalu validasi rentang
+                    let price = null;
+                    const vp = vany.price;
+                    const num = typeof vp === 'string'
+                        ? this.normalizePriceText(vp)
+                        : typeof vp === 'number'
+                            ? vp
+                            : null;
+                    if (num != null && num > 0 && num < 10000000)
+                        price = num;
+                    if (attrs !== null && price !== null) {
+                        ok.push({
+                            attributes: attrs,
+                            price,
+                            stock: typeof vany.stock === 'number' ? vany.stock : null,
+                            sku: typeof vany.sku === 'string' ? vany.sku : null,
+                        });
+                    }
+                }
+                parsed.variants = ok;
+            }
+            // variantConfidence: normalisasi ke number|null
+            if (typeof parsed.variantConfidence === 'string') {
+                const n = parseFloat(parsed.variantConfidence);
+                parsed.variantConfidence = Number.isFinite(n) ? n : null;
+            }
+            else if (parsed.variantConfidence != null && typeof parsed.variantConfidence !== 'number') {
+                parsed.variantConfidence = null;
             }
             return parsed;
         }
@@ -1344,11 +1480,68 @@ EXTRACTION RULES:
    - 0.65-0.79: some ambiguity, missing optional fields
    - < 0.65: high uncertainty
 
+9. VARIANT (optional, PV-P3 — best-effort, NEVER blocks creation; [] if none):
+   - Detect per-option price breakdown → emit ONE entry per option.
+   - variants[] shape: {"attributes":{"size":"S"},"price":10000,"stock":10,"sku":null}
+   - attributes key = attribute TYPE in recognizable names (size/ukuran, warna/color,
+     material/bahan, etc.); value = the specific option (S/merah). Keys+values
+     lowercased client-side. Recognizable names so WA chat resolveVariantByLabel
+     (cart-authority.ts:1207) matches later.
+   - BARE OPTION TOKENS (no explicit keyword): single letters like S/M/L/XL/XXL or
+     short color/material names (merah, biru, cotton) adjacent to a price are STILL
+     variants. Infer the attribute type from context: S/M/L → "size"; merah/biru →
+     "warna"; cotton/polyester → "material". Do NOT require the word "size"/"ukuran"
+     to appear in the text.
+   - PRICE PARSING — thousand-separator dots are NOT decimals:
+     "10.000" = 10000, "1.500.000" = 1500000, "20.000.000" = 20000000.
+     "S 10.000" → variant S price 10000. "M 1.500.000" → variant M price 1500000.
+     Also support "K"/"rb"/"ribu" (x1000) and "M"/"juta" (x1000000).
+   - ADJACENT-NO-SPACE TOKENS: "10.000M" or "10.000 M" should be split as price
+     10000 + option M. Tokenize robustly — do not silently merge or drop.
+   - MULTI-LINE VARIANT PATTERN: input may be one product with option+price on
+     separate lines (name on first line, then "S 10.000\nM 20.000\nL 30.000").
+     Treat this as ONE product with 3 variants, NOT multiple products. Lines that
+     look like metadata (e.g. "Berat 100gram", "stok @ 10") are product-level
+     fields, not variants.
+   - price = absolute IDR, required PER VARIANT (no delta/override concept).
+   - SHARED fields apply ONCE across all variants (NOT per-variant):
+     * weight → product-level weight (rule 6); do NOT repeat per variant.
+     * shared stock "stok @ N" / "masing2 N" / "stok N per size" → each
+       variant.stock = N (Product.stock irrelevant once hasVariants=true
+       per VARIANT_REQUIRED guard).
+   - THRESHOLD to EMIT variants[]: at least 2 options each with a DISTINCT price, OR
+     distinct stock per option + shared price. If ONE price for ALL options
+     ("size S/M/L Rp 50.000", "tersedia semua ukuran") → do NOT split → variants:[].
+   - Ambiguous/unsure → variants:[] + variantConfidence<0.8 + global confidence<0.65.
+   - BAD shape → self-correct so output stays valid JSON (never crash the parser).
+
+   FEW-SHOT EXAMPLES (variant extraction):
+   Input: "Baju kaos polos S 10.000 M 20.000 L 30.000 Berat 100gram"
+   → {"name":"Baju kaos polos","price":10000,"stock":null,"weight":100,"confidence":0.95,
+       "variants":[{"attributes":{"size":"s"},"price":10000,"stock":null,"sku":null},
+                  {"attributes":{"size":"m"},"price":20000,"stock":null,"sku":null},
+                  {"attributes":{"size":"l"},"price":30000,"stock":null,"sku":null}],
+       "variantConfidence":0.95}
+
+   Input: "Kaos harian variasi\nS 10.000\nM 20.000\nL 30.000\nBerat 100gram"
+   → {"name":"Kaos harian variasi","price":10000,"stock":null,"weight":100,"confidence":0.95,
+       "variants":[{"attributes":{"size":"s"},"price":10000,"stock":null,"sku":null},
+                  {"attributes":{"size":"m"},"price":20000,"stock":null,"sku":null},
+                  {"attributes":{"size":"l"},"price":30000,"stock":null,"sku":null}],
+       "variantConfidence":0.95}
+
+   Input: "Kaos warna merah 25000 biru 30000 hijau 28000"
+   → {"name":"Kaos","price":25000,"stock":null,"confidence":0.9,
+       "variants":[{"attributes":{"warna":"merah"},"price":25000,"stock":null,"sku":null},
+                  {"attributes":{"warna":"biru"},"price":30000,"stock":null,"sku":null},
+                  {"attributes":{"warna":"hijau"},"price":28000,"stock":null,"sku":null}],
+       "variantConfidence":0.9}
+
 RESPONSE FORMAT:
 Return ONLY valid JSON (no markdown, no explanation):
-{"name":"string","price":number,"stock":number|null,"categoryName":"string|null","unit":"string|null","weight":number|null,"description":"string|null","confidence":number}
+{"name":"string","price":number,"stock":number|null,"categoryName":"string|null","unit":"string|null","weight":number|null,"description":"string|null","confidence":number,"variants":[{"attributes":{"size":"S","warna":"merah"},"price":number,"stock":number|null,"sku":"string|null"}],"variantConfidence":number|null}
 
 ERROR RESPONSE (if cannot extract required fields):
-{"error":"Missing required fields: {field1}, {field2}","confidence":0.0,"rawText":"{original_text}"}`;
+{"error":"Missing required fields: {field1}, {field2}","confidence":0.0,"rawText":"{original_text}","variants":[],"variantConfidence":null}`;
 export const productService = new ProductService();
 //# sourceMappingURL=product.service.js.map

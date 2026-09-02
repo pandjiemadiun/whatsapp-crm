@@ -26,6 +26,7 @@ import StoreManagement from './pages/admin/StoreManagement'
 import AdminGOWA from './pages/admin/AdminGOWA'
 import PlatformConfig from './pages/admin/PlatformConfig'
 import AIProviders from './pages/admin/AIProviders'
+import TokenUsage from './pages/admin/TokenUsage'
 import AuditLogViewer from './pages/admin/AuditLogViewer'
 import BackupManagement from './pages/admin/BackupManagement'
 import AnalyticsDashboard from './pages/admin/AnalyticsDashboard'
@@ -61,6 +62,7 @@ function App() {
             <Route path="products/:productId" element={<ProductDetailPage />} />
             <Route path="config" element={<PlatformConfig />} />
             <Route path="ai-providers" element={<AIProviders />} />
+            <Route path="token-usage" element={<TokenUsage />} />
             <Route path="analytics" element={<AnalyticsDashboard />} />
             <Route path="audit-logs" element={<AuditLogViewer />} />
             <Route path="backups" element={<BackupManagement />} />

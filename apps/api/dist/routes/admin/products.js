@@ -53,9 +53,13 @@ router.get('/stores/:storeId/products', asyncHandler(async (req, res) => {
  */
 router.post('/products/magic-paste', validateRequest(magicPasteSchema, 'body'), async (req, res) => {
     try {
-        const { storeId, text } = getValidated(req);
+        const { storeId, text, variantOverrides } = getValidated(req);
         const preview = req.query.preview === 'true';
-        const result = await productService.magicPaste(storeId, text, { preview, source: 'admin' });
+        const result = await productService.magicPaste(storeId, text, {
+            preview,
+            source: 'admin',
+            variantOverrides: variantOverrides,
+        });
         if (!preview && result.product) {
             await logAction({
                 storeId,
