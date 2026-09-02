@@ -14,7 +14,7 @@
 > di laporan lalu hilang. Setiap baris WAJIB punya kolom "Trigger" — kondisi
 > konkret kapan item ini harus ditagih kembali, bukan "nanti" yang kabur.
 >
-> **Update terakhir:** 2 Sep 2026 (evening).
+> **Update terakhir:** 2 Sep 2026.
 
 ---
 
@@ -40,6 +40,7 @@
 | 16 | N-provider rotation dalam 1 role (misal 20 Groq key bergantian otomatis) — owner explicitly requested redesign (merge primary/fallback into single role with N providers cycling), deferred until flag-ON runs stable so issues can be isolated one variable at a time | Owner request, 2 Sep 2026 session | Explicit sequencing decision — don't change flag-ON status and architecture simultaneously | Setelah flag ON terbukti stabil beberapa waktu, DAN owner siap prioritaskan redesign ini |
 | 17 | Cost accuracy per-provider (`TokenUsageLog.costUsd` pakai default $0.05/$0.15 generik, bukan tarif asli Mistral/SambaNova/provider baru lainnya) | TOKEN-USAGE-UNIT1-PERSISTENCE | Owner eksplisit bilang tidak perlu sekarang — requests/tokens sudah akurat, cost cuma perkiraan kasar | Kalau owner butuh laporan biaya aktual yang akurat (mis. untuk billing decision di GO-LIVE-BUSINESS-READINESS.md item #1) |
 | 19 | `batch-magic-paste.e2e.test.ts` tests #7/#8 fail — send no-weight items ("Rendang 50000"/"Sate 20000") expecting creation, but the weight gate correctly blocks them. Confirmed PRE-EXISTING via `git stash` (not caused by today's PV-P3/weight-gate-visibility fix) | DEBUG-MAGIC-PASTE-VARIANT-NOT-SHOWING-AND-EMPTY-LIST, 2 Sep 2026 | Test expectations are stale — written before/without accounting for the weight gate's blocking behavior; not a product bug | Kapan saja — update the 2 test cases to either include weight in the input text, or explicitly assert needsWeightInput:true instead of expecting creation |
+| 20 | Dashboard frontend anti-pattern: beberapa halaman mengecek `res.data.success` secara kasar tanpa membaca field detail lain (mis. `needsWeightInput`, `variants`) — sudah ketemu 3x hari ini (AI Providers error display, magic-paste false-success). Belum diaudit menyeluruh apakah ada halaman lain dengan pola sama | Ditemukan berulang selama sesi 2 Sep 2026 | Perbaikan spesifik sudah dilakukan tiap kali ditemukan; audit MENYELURUH ke semua halaman dashboard belum dilakukan | Kalau ketemu lagi kasus serupa di halaman lain, atau saat ada waktu luang buat audit preventif |
 
 ## 🟢 Prioritas rendah — hygiene/cosmetic, aman ditunda lama
 
@@ -49,6 +50,7 @@
 | 14 | II-5 — Test DB shared isolation lemah (row lintas file test) | `BUG-BELUM-DIBERESKAN.md` §II-5 | Sudah di-audit "0 assertion rawan", downgrade ke hygiene debt | Kalau ada file test baru — re-audit saat itu |
 | 15 | `GITHUB_PAT`, `WEBHOOK_SECRET` — env var tidak terpakai, cleanup candidate | `BUG-BELUM-DIBERESKAN.md` (pm2 env audit 31 Agu) | Tidak menyebabkan bug, cuma clutter | Kapan saja, sekali jalan | 
 | 18 | `adapters.knowledge`/`adapters.llm`/`adapters.storage` stub properties di `container.ts` — dead code terkonfirmasi (0 referensi di luar container.ts) | ORPHAN-CODE-AUDIT, 2 Sep 2026 | Sama pola `message.handler.ts` lama — laporan dulu, hapus nanti kalau ada siklus maintenance | Siklus maintenance `container.ts` berikutnya |
+| 19 | Magic-paste kadang gabungkan huruf varian pertama ke nama produk (mis. "Baju polos S" bukan "Baju polos") pada input 1-baris 2-varian — keterbatasan LLM, bukan bug kode, dimitigasi oleh preview-sebelum-simpan | DEBUG-CATALOG-EMPTY-AFTER-CREATE, 2 Sep 2026 | LLM variance pada kalimat ambigu, preview UX sudah jadi jaring pengaman | Kalau owner sering ketemu ini dan preview-edit terasa merepotkan |
 
 ---
 
