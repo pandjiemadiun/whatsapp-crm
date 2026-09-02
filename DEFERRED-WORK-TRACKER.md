@@ -39,6 +39,7 @@
 | 12 | Merchant onboarding wizard (guided setup UX untuk connect WA/tambah produk) — beda dari Track B wizard di atas (yang itu TOS/SOP/FAQ) | `GO-LIVE-BUSINESS-READINESS.md` #2 | Registrasi teknis sudah jalan, tapi UX guided untuk merchant non-teknis minimal | Kalau ada keluhan merchant riil kesulitan onboarding sendiri |
 | 16 | N-provider rotation dalam 1 role (misal 20 Groq key bergantian otomatis) — owner explicitly requested redesign (merge primary/fallback into single role with N providers cycling), deferred until flag-ON runs stable so issues can be isolated one variable at a time | Owner request, 2 Sep 2026 session | Explicit sequencing decision — don't change flag-ON status and architecture simultaneously | Setelah flag ON terbukti stabil beberapa waktu, DAN owner siap prioritaskan redesign ini |
 | 17 | Cost accuracy per-provider (`TokenUsageLog.costUsd` pakai default $0.05/$0.15 generik, bukan tarif asli Mistral/SambaNova/provider baru lainnya) | TOKEN-USAGE-UNIT1-PERSISTENCE | Owner eksplisit bilang tidak perlu sekarang — requests/tokens sudah akurat, cost cuma perkiraan kasar | Kalau owner butuh laporan biaya aktual yang akurat (mis. untuk billing decision di GO-LIVE-BUSINESS-READINESS.md item #1) |
+| 19 | `batch-magic-paste.e2e.test.ts` tests #7/#8 fail — send no-weight items ("Rendang 50000"/"Sate 20000") expecting creation, but the weight gate correctly blocks them. Confirmed PRE-EXISTING via `git stash` (not caused by today's PV-P3/weight-gate-visibility fix) | DEBUG-MAGIC-PASTE-VARIANT-NOT-SHOWING-AND-EMPTY-LIST, 2 Sep 2026 | Test expectations are stale — written before/without accounting for the weight gate's blocking behavior; not a product bug | Kapan saja — update the 2 test cases to either include weight in the input text, or explicitly assert needsWeightInput:true instead of expecting creation |
 
 ## 🟢 Prioritas rendah — hygiene/cosmetic, aman ditunda lama
 
@@ -60,6 +61,13 @@
   apakah ada defer lama yang triggernya sudah terpenuhi tapi belum ditagih.
 - **Item yang sudah selesai** → pindahkan ke bagian bawah sebagai
   "✅ RESOLVED" dengan tanggal + commit, JANGAN dihapus (audit trail).
+- **Push discipline:** jangan biarkan commits menumpuk local-only selama
+  berjam-jam. Hari ini 8 commits duduk local-only ~8 jam sebelum di-push
+  (akibat task demi task tanpa push intermediate). Rekomendasi: push
+  segera setelah acceptance criteria satu unit terpenuhi — jangan tunggu
+  akhir sesi. Ini mencegah gap local-vs-origin yang berbahaya kalau
+  session terputus (lihat kasus AI-Providers 404 hari ini: code ada di
+  local tapi production masih jalan versi lama).
 
 ## ✅ RESOLVED
 
