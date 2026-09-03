@@ -36,7 +36,7 @@ export interface Product {
   name: string;
   description: string | null;
   price: number;
-  currency: string;
+  currency?: string | null;
   sku: string | null;
   stock: number | null;
   weight: number;

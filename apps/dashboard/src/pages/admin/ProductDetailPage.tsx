@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { Package, Edit, Trash2, ChevronLeft, Loader2, Calendar, Tag, Wallet, Warehouse, Globe, ImageIcon } from 'lucide-react';
 import adminApi from '../../services/adminApi';
-import { ProductFormModal } from '../../components/admin/ProductFormModal';
+import { ProductForm } from '../../components/shared/ProductForm';
 import { VariantManagementPanel } from '../../components/admin/VariantManagementPanel';
 
 interface ProductDetail {
@@ -16,6 +16,7 @@ interface ProductDetail {
   currency: string | null;
   sku: string | null;
   stock: number | null;
+  weight: number;
   images: Array<{ url: string; alt?: string }> | null;
   primaryImageUrl: string | null;
   isActive: boolean;
@@ -273,21 +274,13 @@ export function ProductDetailPage() {
       />
 
       {/* Edit Modal */}
-      {modalOpen && (
-        <ProductFormModal
-          productId={product.id}
+      {modalOpen && product && (
+        <ProductForm
+          mode="admin"
           storeId={product.storeId}
-          initialData={{
-            name: product.name,
-            price: String(product.price),
-            stock: product.stock != null ? String(product.stock) : '',
-            sku: product.sku || '',
-            description: product.description || '',
-            categoryId: product.categoryId || '',
-          }}
-          open={modalOpen}
-          onClose={() => setModalOpen(false)}
+          product={product}
           onSaved={fetchProduct}
+          onCancel={() => setModalOpen(false)}
         />
       )}
 
