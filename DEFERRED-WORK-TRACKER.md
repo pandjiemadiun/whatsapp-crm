@@ -24,7 +24,6 @@
 |---|------|-------------------|------------------|------------------------|
 | 2 | Billing / pricing model — TIDAK ADA sama sekali di codebase | `GO-LIVE-BUSINESS-READINESS.md` #1 | Keputusan bisnis, bukan teknis — belum diputuskan free/paid/trial/per-message | Sebelum onboarding merchant riil pertama yang bukan test/canary |
 | 3 | Terms of Service / Privacy Policy — TIDAK ADA, padahal platform simpan PII terenkripsi (UU PDP applicable) | `GO-LIVE-BUSINESS-READINESS.md` #3 | Legal requirement, tapi butuh keputusan/draft di luar kode | Sebelum onboarding merchant riil pertama (legal blocker, bukan opsional) |
-| 4 | VII-A — Rotate seluruh secret (Groq/Gemini/DB/dll, pernah ter-expose di GitHub history lama) | `BUG-BELUM-DIBERESKAN.md` §VII-A | Ditunda sampai sebelum go-live, website belum ada trafik nyata (keputusan owner) | Sebelum go-live sungguhan (traffic nyata pertama) |
 
 ## 🟡 Prioritas menengah — perlu ditagih tapi tidak blocking
 
@@ -78,6 +77,7 @@
 
 | # | Item | Resolved | Commit(s) |
 |---|------|----------|-----------|
+| 4 | VII-A — Rotate seluruh secret (DATABASE_URL, REDIS_URL, GEMINI_API_KEY, GROQ_API_KEYS, GOWA_BASIC_AUTH_*, CLOUDINARY_*, BACKUP_ENCRYPTION_KEY, WEBHOOK_SECRET, STORAGE_PROVIDER/R2_*, FIELD_ENCRYPTION_KEY, CLOUDFLARE_WORKER_*, PUBLIC_API_KEY). RAJAONGKIR_API_KEY confirmed NOT rotated (never exposed, added post-purge). All keys confirmed changed from exposed pre-purge values, app healthy on new credentials (pm2 online, /api/health 200). | 3 Sep 2026 | Owner-completed outside session; verified 3 Sep 2026 |
 | 1 | PV-P3 — Magic-paste variant extraction. Best-effort LLM parsing (variants[] with attributes/price/stock per option, threshold: ≥2 distinct prices or distinct stock+shared price), preview+edit step before save (ConfirmCreateModal), transactional create (atomic Product+ProductVariant write, P2002→clean 409, no partial rows), merchant variantOverrides take precedence over raw LLM output. No hard gate (unlike needsWeightInput) — always produces an editable preview, never blocks creation. | 2 Sep 2026 | `adba501` (Unit 1 — parsing), `7950533` (Unit 2 — transactional create + dashboard preview/edit + e2e a-g, regression 271/37/118/46/8) |
 | 26 | Dual-UI magic-paste drift (ConfirmCreateModal vs ProductsPage) — merchant UI kini punya full variant editing (preview + create + post-edit), menyamakan fitur yang sebelumnya hanya ada di admin UI. Root cause bug varian sesi 2-3 Sep 2026. | 3 Sep 2026 | `2800f54` (variant lifecycle audit + merchant variant editing) |
 | 27 | Product CRUD dual-UI consolidation — AdminProductsPage, ProductsPage, dan ProductDetailPage kini semuanya pakai shared `ProductForm` component. VariantManagementPanel routing bug lama (double-prefix `/api/admin/variants/stores/...`) ditemukan+diperbaiki. ProductDetailPage variant editing di-dedup ke 1 sumber kebenaran (`VariantManagementPanel` saja, ProductForm modal di page itu diset `showVariantSection=false`). | 3 Sep 2026 | `cd5a8d1` (Unit 1 — shared ProductForm), `7505974` (ProductDetailPage wire), `483bbbc` (routing fix + dedup) |
