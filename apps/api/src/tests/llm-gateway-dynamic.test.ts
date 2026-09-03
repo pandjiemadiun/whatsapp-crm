@@ -22,10 +22,11 @@ import {
   type ExtractedIntent,
 } from '../adapters/ai/types.js';
 import type { AIProviderResolverService } from '../services/ai-provider-resolver.service.js';
+import { cooldown } from '../services/provider-cooldown.js';
 
 // ── Mock provider factory (mirrors ai-gateway.test.ts) ─────────────────────
 
-type Behavior = 'success' | 'fail';
+type Behavior = 'success' | 'fail' | 'rate_limit';
 
 function makeMockProvider(name: string, behavior: Behavior): AIProvider & { calls: number } {
   const provider = {
@@ -35,6 +36,15 @@ function makeMockProvider(name: string, behavior: Behavior): AIProvider & { call
     isHealthy: () => Promise.resolve(behavior !== 'fail'),
     generate: async (_prompt: string, _options?: AIGenerateOptions): Promise<AIResponse> => {
       provider.calls++;
+      if (behavior === 'rate_limit') {
+        throw new AIProviderError(
+          `${name} rate limited`,
+          ErrorCategory.RATE_LIMIT,
+          name,
+          429,
+          true,
+        );
+      }
       if (behavior === 'fail') {
         throw new AIProviderError(
           `${name} server error`,
@@ -188,5 +198,102 @@ describe('LLMGateway dynamic-provider cutover (Unit 3b, flag default OFF)', () =
     assert.equal(result.provider, 'dyn-fallback');
     assert.ok(dynPrimary.calls >= 1, 'resolved primary was attempted');
     assert.equal(dynFallback.calls, 1, 'resolved fallback recovered after primary failure');
+  });
+
+  // ── N1: Provider-Rotation within a role ─────────────────────────────────
+  // These tests verify the full-list iteration fix: when a role has 2+ active
+  // providers, the gateway iterates the FULL priority-ordered list instead of
+  // truncating to index 0.
+
+  test('B5: flag ON, 1 provider per role — regression: primary succeeds, fallback untouched', async () => {
+    const dynPrimary = makeMockProvider('gw-reg-primary', 'success');
+    const dynFallback = makeMockProvider('gw-reg-fallback', 'success');
+    const resolver = fakeResolver({
+      chat_primary: [dynPrimary],
+      chat_fallback: [dynFallback],
+    });
+
+    const gw = new LLMGateway(
+      makeMockProvider('gw-default-p', 'success'),
+      makeMockProvider('gw-default-f', 'success'),
+      mockGatekeeper,
+      5000,
+      1,
+      resolver,
+      () => Promise.resolve(true),
+    );
+
+    const result = await gw.generate('hi');
+
+    // With 1 provider per role, iteration must behave identically to the old
+    // [0]-only path: primary tried first, fallback never called.
+    assert.equal(result.provider, 'gw-reg-primary');
+    assert.equal(dynPrimary.calls, 1, 'primary called exactly once');
+    assert.equal(dynFallback.calls, 0, 'fallback NOT called on primary success');
+  });
+
+  test('B6: flag ON, 2 primary providers — first rate-limited (429), second used (same role rotation)', async () => {
+    const rlPrimary = makeMockProvider('gw-p1-rl', 'rate_limit');
+    const okPrimary = makeMockProvider('gw-p2-ok', 'success');
+    const fbProvider = makeMockProvider('gw-fb-ok', 'success');
+    const resolver = fakeResolver({
+      // priority order: p1 (highest) first, p2 second
+      chat_primary: [rlPrimary, okPrimary],
+      chat_fallback: [fbProvider],
+    });
+
+    const gw = new LLMGateway(
+      makeMockProvider('gw-default-p', 'success'),
+      makeMockProvider('gw-default-f', 'success'),
+      mockGatekeeper,
+      5000,
+      1,
+      resolver,
+      () => Promise.resolve(true),
+    );
+
+    const result = await gw.generate('hi');
+
+    // First primary (p1) was rate-limited → cooldown triggered → moved to p2
+    // WITHOUT falling through to the fallback role.
+    assert.equal(rlPrimary.calls, 1, 'rate-limited primary attempted exactly once');
+    assert.equal(okPrimary.calls, 1, 'second primary in SAME role was used');
+    assert.equal(fbProvider.calls, 0, 'fallback NOT called — same-role rotation succeeded');
+    assert.equal(result.provider, 'gw-p2-ok', 'result came from the second primary');
+  });
+
+  test('B7: flag ON, both primary providers in cooldown — falls through to fallback role', async () => {
+    const p1 = makeMockProvider('gw-p1-cooldown', 'success');
+    const p2 = makeMockProvider('gw-p2-cooldown', 'success');
+    const fb = makeMockProvider('gw-fb-cooldown', 'success');
+    const resolver = fakeResolver({
+      chat_primary: [p1, p2],
+      chat_fallback: [fb],
+    });
+
+    // Pre-set cooldown on BOTH primary providers so they are all skipped.
+    cooldown('gw-p1-cooldown', 60_000);
+    cooldown('gw-p2-cooldown', 60_000);
+
+    const gw = new LLMGateway(
+      makeMockProvider('gw-default-p', 'success'),
+      makeMockProvider('gw-default-f', 'success'),
+      mockGatekeeper,
+      5000,
+      1,
+      resolver,
+      () => Promise.resolve(true),
+    );
+
+    const result = await gw.generate('hi');
+
+    // All primary providers in cooldown → fall through to fallback role exactly
+    // like the original "primary failed → try fallback" behavior.
+    // IMPORTANT: cooldown is keyed by provider name, NOT by provider object —
+    // so pre-cooling both prevents any primary attempt.
+    assert.equal(p1.calls, 0, 'p1 skipped (in cooldown)');
+    assert.equal(p2.calls, 0, 'p2 skipped (in cooldown)');
+    assert.equal(fb.calls, 1, 'fallback role provider used after primary exhausted');
+    assert.equal(result.provider, 'gw-fb-cooldown');
   });
 });
