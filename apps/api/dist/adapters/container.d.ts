@@ -31,13 +31,9 @@ export declare const adapters: {
         };
     };
     cache: import("./cache/redis.adapter.js").RedisAdapter;
-    knowledge: {
-        search: (storeId: string, query: string) => Promise<never[]>;
-    };
     llm: {
         chat: (messages: any[], options?: any) => Promise<import("./ai/types.js").AIResponse>;
     };
-    storage: import("./storage/r2.adapter.js").StorageAdapter;
     catalogStorage: import("./storage/r2.adapter.js").StorageAdapter;
     profileStorage: import("./storage/r2.adapter.js").StorageAdapter;
 };

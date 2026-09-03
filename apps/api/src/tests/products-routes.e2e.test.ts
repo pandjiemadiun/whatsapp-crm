@@ -182,6 +182,7 @@ test('9. POST create product — 201 OK (admin)', async () => {
       name: 'Bayam Hijau',
       price: 2500,
       stock: 30,
+      weight: 1,
       sku: 'SKU-E2E-2',
       categoryId,
     }),
@@ -212,6 +213,8 @@ test('11. POST create product — 400 SKU duplicate per store', async () => {
     body: JSON.stringify({
       name: 'Kangkung Lain',
       price: 1000,
+      stock: 10,
+      weight: 1,
       sku: 'SKU-E2E-1', // sudah dipakai
       categoryId,
     }),
@@ -236,6 +239,8 @@ test('13. POST create product — 404 category not found', async () => {
     body: JSON.stringify({
       name: 'Produk Tanpa Kategori',
       price: 1000,
+      stock: 10,
+      weight: 1,
       sku: 'SKU-E2E-3',
       categoryId: '00000000-0000-0000-0000-000000000000',
     }),

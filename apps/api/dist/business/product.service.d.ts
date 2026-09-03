@@ -51,7 +51,8 @@ export declare class ProductService {
      */
     updateProduct(productId: string, data: Partial<Omit<Product, 'id' | 'storeId' | 'createdAt' | 'updatedAt'>>): Promise<Product>;
     /**
-     * Soft-delete produk (set deletedAt).
+     * Soft-delete produk (set deletedAt) + hard-delete varian terkait
+     * (cascade karena ProductVariant tidak punya soft-delete flag).
      */
     deleteProduct(productId: string): Promise<void>;
     /**

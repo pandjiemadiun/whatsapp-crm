@@ -147,7 +147,7 @@ app.use('/api/store/locations', authMiddleware, locationRouter);
 // tightly because each hit also consumes the shared external RajaOngkir quota.
 app.use('/api/pwa-locations', pwaLocationsLimiter, locationRouter);
 app.use('/api/admin', adminProductsRoutes);
-app.use('/api/admin/variants', adminVariantsRoutes);
+app.use('/api/admin', adminVariantsRoutes);
 // Store-owner product routes (auth) — mounted BEFORE public catalog
 app.use('/api/products', storeProductsRouter);
 // Store-owner analytics routes (auth)

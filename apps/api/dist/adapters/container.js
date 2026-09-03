@@ -2,7 +2,7 @@ import { aiProviderManager } from './ai/manager.js';
 import { geminiAdapter } from './ai/gemini.adapter.js';
 import { groqAdapter } from './ai/groq.adapter.js';
 import { redisAdapter } from './cache/redis.adapter.js';
-import { storageAdapter, catalogStorage, profileStorage, cloudinaryAdapter, reconfigureStorage } from './storage/cloudinary.adapter.js';
+import { catalogStorage, profileStorage, cloudinaryAdapter, reconfigureStorage } from './storage/cloudinary.adapter.js';
 import { r2Adapter } from './storage/r2.adapter.js';
 import { gowaAdapter } from './whatsapp/gowa.adapter.js';
 import { configService } from '../business/config.service.js';
@@ -32,12 +32,6 @@ const ai = {
     getProviders: () => aiProviderManager.getProviders(),
 };
 const cache = redisAdapter;
-const knowledge = {
-    search: async (storeId, query) => {
-        logger.debug(`Knowledge SEARCH`, { storeId, query });
-        return [];
-    },
-};
 const llm = {
     chat: async (messages, options) => {
         return aiProviderManager.generate(messages[messages.length - 1].content, options, options?.intent || 'tryAI');
@@ -47,9 +41,7 @@ export const adapters = {
     logger,
     ai,
     cache,
-    knowledge,
     llm,
-    storage: storageAdapter,
     catalogStorage,
     profileStorage,
 };
