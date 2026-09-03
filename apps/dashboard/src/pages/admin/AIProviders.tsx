@@ -241,9 +241,33 @@ export default function AIProviders() {
     setTestResults((s) => ({ ...s, [row.id]: { success: undefined as any, latencyMs: 0 } }));
     try {
       const res = await adminApi.post(`/ai-providers/${row.id}/test-connection`);
-      setTestResults((s) => ({ ...s, [row.id]: res.data?.data }));
+      const data = res.data?.data;
+      setTestResults((s) => ({ ...s, [row.id]: data }));
+      setProviders((prev) =>
+        prev.map((p) =>
+          p.id === row.id
+            ? {
+                ...p,
+                lastTestedAt: data?.lastTestedAt ?? new Date().toISOString(),
+                lastTestResult: data?.success ? 'ok' : 'failed',
+              }
+            : p
+        )
+      );
     } catch (err: any) {
-      setTestResults((s) => ({ ...s, [row.id]: err?.response?.data?.data || { success: false, errorCategory: 'UNKNOWN', errorMessage: err?.message } }));
+      const data = err?.response?.data?.data || { success: false, errorCategory: 'UNKNOWN', errorMessage: err?.message };
+      setTestResults((s) => ({ ...s, [row.id]: data }));
+      setProviders((prev) =>
+        prev.map((p) =>
+          p.id === row.id
+            ? {
+                ...p,
+                lastTestedAt: new Date().toISOString(),
+                lastTestResult: 'failed',
+              }
+            : p
+        )
+      );
     }
   };
 
