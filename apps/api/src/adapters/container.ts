@@ -37,21 +37,10 @@ const ai = {
 
 const cache = redisAdapter;
 
-const llm = {
-  chat: async (messages: any[], options?: any) => {
-    return aiProviderManager.generate(
-      messages[messages.length - 1].content,
-      options,
-      options?.intent || 'tryAI'
-    );
-  },
-};
-
 export const adapters = {
   logger,
   ai,
   cache,
-  llm,
   catalogStorage,
   profileStorage,
 };
