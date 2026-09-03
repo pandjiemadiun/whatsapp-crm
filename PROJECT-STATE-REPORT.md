@@ -2,7 +2,7 @@
 
 > **Dokumen ini dibuat untuk onboarding ke project baru (Claude/AI coding agent).**
 > Semua klaim status di bawah diverifikasi terhadap **source code, test, dan git log aktual**
-> di working tree `/home/ubuntu/garuda` pada **2026-08-31** (HEAD `fc2e6cf`). Tidak ada klaim
+> di working tree `/home/ubuntu/garuda` pada **3 Sep 2026** (HEAD `570e65c`). Tidak ada klaim
 > yang diambil mentah dari roadmap/STATUS lama tanpa cross-check ke kode.
 >
 > **ATURAN RAILS.md BERLAKU:** tidak ada kode yang diubah dalam pembuatan dokumen ini
@@ -15,8 +15,10 @@
 > sesi 21 Agu 2026** (cluster G2-G monitoring + shipping-cost full-stack + Store NOT NULL,
 > range `2a93924..2e64c0a`) — dikerjakan & di-push TANPA laporan real-time, ditutup post-hoc
 > via TASK DOCS-SYNC 21 Agu 2026 (lihat RAILS.md §6.x POST-HOC + §10 revisi). Working tree
-> saat ini BERISIKAN perubahan DIST yang belum di-rebuild sejak source ter-commit (pola III-1,
-> lihat §9.7) — source SELESAI & ter-push, `dist/` perlu `npm run build` sebelum deploy.
+> saat ini BERSIH (cluster N-provider rotation + PV-P3 + Product CRUD consolidation + cleanup
+> batch + secret rotation semua tercommit & ter-push; `dist/` sudah sesuai HEAD setelah
+> `npm run build` + revert). Post-merge hook (III-1-B, `bcddfcd`) aktif — auto-build `dist/`
+> pada pull, restart pm2 manual.
 
 ---
 
@@ -148,7 +150,7 @@ Verifikasi file:line: `webhooks.ts:103/262`, `conversation.service.ts:62`, `acti
 | **P3** | Context boundary (workspace_v2) | kolom `workspace_v2` + migrasi | **SELESAI (verified)** |
 | **P4** | Remove second brain | `extractAndSaveOrder` dihapus (`0db56bf`) | **SELESAI (verified)** |
 | **P5** | Response naturalness | composer fixes | **SELESAI (verified)** |
-| **P6** | Golden dataset sebagai architecture gate | `test:golden` + CI (P6.3) + coverage P3/P4/P5 (P6.4/5) | **SELESAI (verified)** — test:golden 23/23 |
+| **P6** | Golden dataset sebagai architecture gate | `test:golden` + CI (P6.3) + coverage P3/P4/P5 (P6.4/5) | **SELESAI (verified)** — test:golden 37/37 |
 
 ### 4.2 Roadmap Structured Actions — P0–P8 (PROJEK-CONTRACT §10)
 
@@ -188,24 +190,97 @@ pelajaran (jangan biarkan pekerjaan besar menggantung uncommitted) tidak hilang.
 | **G2-E** | Storefront UI/UX | banyak done (PWA deploy `qlobot.web.id`, realtime+push FASE 1-4) |
 | **G2-F** | Checkout/Order/Payment | **SELESAI TOTAL (F1–F6)** — F1 (schema+bugfix) SELESAI, F2 (payment-report/verify) SELESAI, F3 (PWA checkout) SELESAI, F4 (dashboard payment verification UI + `GET /orders/:id/valid-next-states`) SELESAI, F5 (CI coverage audit + golden dataset checkout/payment, mutation-tested) SELESAI, F6 (F6a: paymentRejectReason opsional di payment-verify + UI reject dialog; F6b: endpoint `cod-settle` + halaman dashboard COD terpisah) SELESAI (commit `50d4d25`). F6a/F6b ditemukan sebagai penutup item minor setelah F5 (reject-reason untuk audit + visibilitas COD). COD settlement ke `orderStatus`/fulfillment TETAP DEFERRED (lihat DECISION-COD-SETTLEMENT-DEFERRED.md) |
 | **G2-G** | Realtime + Scale Hardening | **AUDIT BASELINE SELESAI** (`AUDIT-BASELINE-G2-G.md`, `dd20696`); **monitoring dasar SELESAI** (`GET /api/admin/metrics/system`, `b18b6d5`, in-memory single-instance); breakdown sub-fase hardening BELUM diputuskan |
-| **G2-H** | Release Readiness | **PRAKTIS SELESAI** — audit 10-item closure ✅; rate-limiter gaps 11 endpoint publik ✅ (`10be048`); generalLimiter global safety net ✅ (sebelumnya dead code, `10be048`); backup restore rehearsal + fix ✅ (`0d29aaf`); smoke-fase4 Store fixture ✅ (`be8aff4`); SSL/HTTPS ✅ (certbot, expiry 2026-11-05, auto-renew aktif); VAPID/web-push env ✅ (FASE4); `test:shipping` CI ✅ (`e16679d`). **SISA 2 item DEFERRED:** (1) rotate seluruh secret (`VII-A`, DITUNDA sebelum go-live); (2) backup-alert sender — env `BACKUP_ALERT_EMAIL` terisi tapi TIDAK ADA sender terpasang (gap baru, Medium, lihat §6.10) |
+| **G2-H** | Release Readiness | **SELESAI TOTAL** — audit 10-item closure ✅; rate-limiter gaps 11 endpoint publik ✅ (`10be048`); generalLimiter global safety net ✅ (sebelumnya dead code, `10be048`); backup restore rehearsal + fix ✅ (`0d29aaf`); smoke-fase4 Store fixture ✅ (`be8aff4`); SSL/HTTPS ✅ (certbot, expiry 2026-11-05, auto-renew aktif); VAPID/web-push env ✅ (FASE4); `test:shipping` CI ✅ (`e16679d`); **🗝️ credential rotation VII-A ✅** (owner-completed + verified 3 Sep 2026, semua 13 secret diganti dari nilai terpaksa, RAJAONGKIR_API_KEY correctly excluded). **SISA 1 item DEFERRED:** backup-alert sender — env `BACKUP_ALERT_EMAIL` terisi tapi TIDAK ADA sender terpasang (gap baru, Medium, lihat §6.10) |
 
-### 4.8 🟢 GO-LIVE READINESS (31 Agu 2026) — UPDATED STATUS
+### 4.8 🟢 GO-LIVE READINESS (3 Sep 2026) — UPDATED STATUS
 
 | # | Area | Status | Evidence |
 |---|------|--------|----------|
-| 1 | Credential rotation | ⏸️ **DEFERRED** (ditunda sampai sebelum go-live) | Owner decision — secret masih valid di GitHub history lama |
+| 1 | Credential rotation | ✅ **VERIFIED** (VII-A selesai) | Owner-completed outside session; semua 13 secret (DATABASE_URL, REDIS_URL, GEMINI_API_KEY, GROQ_API_KEYS, GOWA_BASIC_AUTH_*, CLOUDINARY_*, BACKUP_ENCRYPTION_KEY, WEBHOOK_SECRET, STORAGE_PROVIDER/R2_*, FIELD_ENCRYPTION_KEY, CLOUDFLORE_WORKER_*, PUBLIC_API_KEY) diganti dari nilai terpaksa. RAJAONGKIR_API_KEY correctly NOT rotated (never exposed). App healthy: pm2 online, `/api/health` 200. Key rotation integration test `e6afc0c` (5 sub-tests pass), `decryptField()` fix `5e44c6e`. `WEBHOOK_SECRET` juga DIHAPUS dari `.env.example` (clean, 0 code references). |
 | 2 | SSL/HTTPS | ✅ **VERIFIED** | certbot, expiry 5 Nov 2026, auto-renew aktif |
 | 3 | Admin password recovery | ✅ **RESOLVED** (interim) | `POST /api/admin/auth/reset-password-operator` (super_admin only, token revocation) + `scripts/reset-admin-password.ts` CLI fallback |
 | 4 | Backup failure alerting | ✅ **RESOLVED** | `src/services/mailer.service.ts` (nodemailer SMTP) wired to `backup.service.ts` failure path. OWNER HARUS ISI SMTP_USER/APP_PASSWORD di .env |
 | 5 | Merchant push notifications | ✅ **LIVE** | Order/payment/message events → real device (Android, FCM 201 response verified). `StorePushSubscription` table, `merchant-push.service.ts`, `push.service.ts` shared helper |
 | 6 | Tenant isolation | ✅ **RE-AUDITED + FIXED** | 30 Aug deliberate re-audit found 2 CRITICAL bugs (cross-tenant message injection via `/api/messages/handle`, unprotected GOWA webhook). Both fixed same day. **Lesson: passing tests ≠ real isolation** — matches historical `actionsRouter` lesson in this file |
-| 7 | pm2 env audit | ✅ **CLEAN** | 2 minor findings: `GITHUB_PAT` + `WEBHOOK_SECRET` unused (cleanup candidates) |
+| 7 | pm2 env audit | ✅ **CLEAN** | `GITHUB_PAT` + `WEBHOOK_SECRET` removed (rotation + cleanup, `5e44c6e` + `923bf9a`). Tidak ada unused env var tersisa |
 | 8 | External audit (Qwen) cross-check | ✅ **13/14 CLAIMS FALSE** | gitingest silently dropped `cart-authority.ts`, `action-registry.ts`, `conversation.service.ts` from digest (no warning). 1 claim valid: `message.handler.ts` dead code — now removed (`fc2e6cf`) |
 
 **Key lesson (matches §10.3 actionsRouter precedent):** Third-party audit tools can silently drop critical files from their digest. Always verify the tool's input actually contains the files you care about before trusting OR dismissing findings.
 
 ---
+
+
+### 4.9 🟢 LLM Provider Abstraction (Units 1–5) + N-Provider Rotation
+
+| Unit | Scope | Commit | Status |
+|------|-------|--------|--------|
+| **Unit 1** | `AIProviderConfig` model + Prisma migration + seed script (`seed-ai-providers-from-env.mts`). Kolom: name, format, baseUrl, apiKey (AES-256-GCM), model, role, priority, isActive, lastTestedAt/Result | `71f1d7e` | **SELESAI** |
+| **Unit 2** | Generic OpenAI-compatible adapter + Gemini shim adapter (interface extensions, tests). Standalone, not wired yet | `e60ee97` | **SELESAI** |
+| **Unit 3a** | `AIProviderConfig.apiKey` AES-256-GCM encryption/decryption (`encryption.ts`). Provider resolver service (`ai-provider-resolver.service.ts`) mengembalikan priority-ordered array per role | `03137dd` | **SELESAI** |
+| **Unit 3b** | `llmGateway` flag-gated primary/fallback cutover (`llm.useDynamicProviders`, default OFF). Gatekeeper/ExtractIntent deferred ke Unit 5 | `5f1feb7` | **SELESAI** |
+| **Unit 4** | Admin CRUD UI + test-connection untuk `AIProviderConfig` (`routes/admin/ai-providers.ts`, `dashboard/src/pages/admin/AIProviders.tsx`). super_admin gate, apiKey masked, live-refresh `lastTestedAt`/`lastTestResult` | `bc53d0e` + `23d61b8` | **SELESAI** |
+| **Unit 5** | Cut over ALL remaining hardcoded Groq/Gemini LLM call sites ke resolver dinamis. `llm.useDynamicProviders` flag sekarang **ON di production** (Mistral primary + SambaNova fallback) | `cced1ce` | **SELESAI** |
+| **N-1** | N-provider rotation: `resolveEffectiveProviders` kembalikan full list per role (bukan `primaryList[0]`); `generate()` di `llm-gateway.ts` + `manager.ts` iterasi penuh, skip cooldown provider, rotate ke provider berikutnya pada 429/RATE_LIMIT sebelum fallthrough ke role lain. Circuit-breaker tidak disentuh. OFF-path (flag OFF/singleton) 100% tidak berubah | `4cd0371` | **SELESAI** |
+
+**Cooldown mechanism:** `provider-cooldown.ts` — in-memory `Map`, keyed by provider name.
+`cooldown()`, `isCooldown()`, `shouldSkipProvider()`, `triggerCooldown()` (default 5-min).
+Redis-backed cooldown **DEFERRED** (see 🟢 item #23) — owner confirmed 3-5 provider pada
+single-instance cukup.
+
+**Test results (35/35 AI-gateway suite):** `ai-gateway.test.ts` (7), `llm-gateway-dynamic.test.ts`
+B1-B7 (7), `ai-provider-resolver.service.test.ts` R1-R6 (6), `gateway-conversation-fallback.test.ts`
+(4), `manager-dynamic.test.ts` M1-M7 (7), `ai-gateway-gatekeeper.test.ts` (2),
+`gateway-integration.test.ts` (2). Plus standard regression: Chat 271/271, Golden 37/37,
+Structured 118/118, Payment 46/46, Shipping 8/8.
+
+**Production smoke test:** Mistral melayani chat message nyata (token counts 619 in / 85 out
+cocok interpreter logs). Token usage persisted ke `TokenUsageLog` + dashboard UI.
+
+### 4.10 🟢 PV-P3 Magic-Paste Variant Extraction
+
+| Fase | Scope | Commit | Status |
+|------|-------|--------|--------|
+| **Unit 1** | Variant extraction parsing layer: interface extensions (`product.service.ts` LLM-path shape validation), LLM prompt rule 9 (variant extraction), shape validation, tests (`magic-paste-variant-parsing.test.ts`) | `adba501` | **SELESAI** |
+| **Unit 2** | Transactional variant create + dashboard preview/edit (`VariantManagementPanel`, `ConfirmCreateModal`). Atomic Product + ProductVariant write, P2002→clean 409, no partial rows | `7950533` | **SELESAI** |
+| **Heuristic fix** | Routing heuristic untuk multi-line single-product-with-variants (batch vs single-product path tidak bergeser) + variant prompt robustness improvement | `1837a89` | **SELESAI** |
+| **Anti-pattern** | Dashboard false-success: `needsWeightInput` + `variants` tidak ditampilkan ketika extraction gagal parsial | `4cd2256` | **SELESAI** |
+| **Bug A/B** | variantOverride pada weight-retry + product detail modal state | `45d5d22` | **SELESAI** |
+| **Lifecycle** | Full variant lifecycle audit — `VariantManagementPanel` routing fix (double-prefix `/api/admin/variants/stores/...`) + dedup variant UI di ProductDetailPage | `f15ddc5` + `483bbbc` | **SELESAI** |
+
+**Architecture:** Magic-paste ekstraksi variants via LLM (≥2 distinct prices OR distinct stock
++ shared price → variant), preview + edit step sebelum save (ConfirmCreateModal), transactional
+create (atomic Product + ProductVariant), merchant `variantOverrides` precedence over raw LLM
+output. `MagicPasteRun` model (lihat §7) mencatat setiap extraction untuk analytics confidence.
+Weight gate (`needsWeightInput`) tetap sebagai hard gate yang terpisah — magic-paste variant
+extraction tidak blokir pembuatan (selalu hasilkan editable preview).
+
+### 4.11 🟢 Product CRUD Dual-UI Consolidation
+
+| Komponen | Scope | Commit | Status |
+|----------|-------|--------|--------|
+| **Shared ProductForm** | `ProductForm.tsx` (shared component) — satu sumber kebenaran untuk semua product form | `cd5a8d1` | **SELESAI** |
+| **ProductDetailPage wire** | Wire ProductDetailPage ke shared ProductForm | `7505974` | **SELESAI** |
+| **Routing fix** | VariantManagementPanel routing bug (double-prefix `/api/admin/variants/stores/...`) — fixed | `483bbbc` | **SELESAI** |
+| **Dedup** | ProductDetailPage variant editing dedup ke 1 sumber (`VariantManagementPanel` saja, ProductForm modal diset `showVariantSection=false`) | `483bbbc` | **SELESAI** |
+| **Modal cleanup** | `ProductFormModal.tsx` — deleted (0 references, superseded oleh shared `ProductForm.tsx`) | `10e7212` | **SELESAI** |
+
+**Affected pages:** `AdminProductsPage`, `ProductsPage`, `ProductDetailPage` — ketiganya pakai
+shared `ProductForm`. Merchant UI (`ProductsPage`) kini punya full variant editing
+(preview + create + post-edit), menyamakan fitur yang sebelumnya hanya ada di admin UI.
+
+### 4.12 🟢 Token Usage Tracking (TOKEN-USAGE Unit 1+2)
+
+| Unit | Scope | Migration | Status |
+|------|-------|-----------|--------|
+| **Unit 1** | `TokenUsageLog` model + migrasi (`20260902070000_add_token_usage_log`) + persistence service (`token-usage-tracker.ts`). Record setiap LLM call (provider, role, model, input/output tokens, costUsd) | `20260902070000` | **SELESAI** |
+| **Unit 2** | Dashboard UI (`TokenUsage.tsx`) — query range fleksibel, persist ke DB | — | **SELESAI** |
+
+**Schema:** `TokenUsageLog(id, provider, role?, model?, inputTokens, outputTokens, costUsd?, createdAt)`
+dengan index `[provider, createdAt]` + `[createdAt]`. `costUsd` pakai default generik
+($0.05/$0.15) — akurasi per-provider **DEFERRED** (lihat 🟡 item #17).
+
+---
+
 
 ### 4.5 Shipping-cost full-stack (RajaOngkir Komerce) — **SELESAI, TER-WIRE KE CHECKOUT**
 
@@ -265,11 +340,13 @@ Ringkas 10 item audit awal + status closure masing-masing (commit terverifikasi 
 | 6 | generalLimiter global safety net (sebelumnya dead code) | `10be048` | ✅ RESOLVED |
 | 7 | Rate-limiter gaps 11 endpoint publik tanpa proteksi | `10be048` (reuse existing limiter) | ✅ RESOLVED |
 | 8 | SSL/HTTPS (certbot, expiry 2026-11-05, auto-renew) | verifikasi manual VPS (infra-only) | ✅ RESOLVED |
-| 9 | Rotate seluruh secret | `VII-A` | 🟡 DEFERRED (sebelum go-live) |
-| 10 | G2-H Release Readiness sign-off (audit + docs-sync) | task ini (22 Agu 2026) | ✅ SELESAI |
+| 9 | Rotate seluruh secret (VII-A) | Owner-completed 3 Sep 2026 + verified same day (13/13 keys changed, RAJAONGKIR_API_KEY excluded, `/api/health` 200) | ✅ **RESOLVED & VERIFIED** (lihat §6.7) |
+| 10 | Backup-alert sender (nodemailer SMTP) | env-only (`10be048`-era) | ⚠️ env DONE / sender OPEN — gap baru, Medium — lihat §6.12 |
+| 11 | G2-H Release Readiness sign-off (audit + docs-sync) | task ini (2 Sep 2026 update) | ✅ **SELESAI** |
 
 Catatan: item 5 & 10 terkait — env sudah ada (item 5) tapi mekanisme pengirim (item 10) belum ada,
-jadi alert kegagalan backup TIDAK terkirim. Item 9 (rotate secret) sengaja ditunda per keputusan owner.
+jadi alert kegagalan backup TIDAK terkirim. Item 9 (rotate secret) **TUDAH SELLESISI** — owner
+completed + verified 3 Sep 2026 (lihat §6.7).
 
 ---
 
@@ -339,35 +416,59 @@ Lihat §5.6.
 Ketiga action + CANCEL_ORDER sudah typed & terverifikasi reachable via HTTP.
 
 ### 6.4 🟢 Golden dataset BUKAN CI gate lengkap — **RESOLVED** (P6.4/5 + P8-CI-FIX)
-Coverage P3/P4/P5 ada (`e2d391e`/`55c66c5`), mutation-tested. `test:golden` 23/23.
-P8-CI-FIX (`c6be2d8`) masukkan `test:structured` (115 test) ke CI → gate lengkap.
+Coverage P3/P4/P5 ada (`e2d391e`/`55c66c5`), mutation-tested. `test:golden` 23/23 (saat resolved)
+→ **37/37** (per 3 Sep 2026). P8-CI-FIX (`c6be2d8`) masukkan `test:structured` (115 test) ke
+CI → gate lengkap. `test:structured` kini **118/118** (2 Sep 2026, setelah Unit 5).
 
-### 6.5 🟡 Pre-existing test failures (baseline) — **MASIH OPEN (tidak blocking)**
-`test:chat` baseline = **1 failed test** (reasoning-v2; full suite **267/267** otherwise hijau, terverifikasi 19 Agu 2026):
-- `reasoning-v2.test.ts` — "terminal→fallback" outdated (II-1).
-- ~~`engine-config-v2.test.ts` — `ReferenceError: redisAdapter before initialization` (II-2)~~ ✅ **RESOLVED (STALE DOC, 19 Agu 2026)** — audit read-only konfirmasi `engine-config-v2.test.ts` LULUS **6/6** (di-run 6x, full `test:chat` 267/267 tiap kali). TDZ TIDAK direproduksi ulang. Cycle import `container.ts`↔3 adapter tetap ada tapi benign (semua `adapters.` di dalam method) — lihat BUG-BELUM-DIBERESKAN II-2 + III-10.
+### 6.5 🟢 Pre-existing test failures (baseline) — **RESOLVED (2 Sep 2026)**
+`test:chat` baseline = **0 failed (271/271 hijau)**, termasuk `reasoning-v2.test.ts` +
+`engine-config-v2.test.ts`. Test:chat naik 267→271 setelah Unit 5 (`cced1ce`) cut-over
+semua hardcoded Groq/Gemini call sites ke resolver dinamis (reasoning-v2 terminal→fallback
+outdated test selaras dengan path lama yang sudah diganti). TDZ cycle import
+`container.ts`↔3 adapter tetap ada tapi benign. Lihat BUG-BELUM-DIBERESKAN II-1/II-2.
 
 ### 6.6 🟡 Hygiene: `dist/` ter-track + `logs/` (III-1 / III-2)
 - `logs/*.log`: **RESOLVED** (III-2-A/B, `bcddfcd`) — di-exclude + di-purge dari history
   (backup bundle `garuda-backup-20260819.bundle`).
-- `dist/`: **MITIGASI** (III-1-B) — post-merge auto-build hook terpasang; dist MASIH ter-track,
-  untrack ditunda sampai hook terbukti di deploy nyata. **⚠️ UPDATE 21 Agu 2026:** cluster
-  `2a93924..2e64c0a` (G2-G monitoring + shipping + Store NOT NULL) di-commit SOURCE-nya
-  TAPI `dist/` belum di-rebuild/commit → working tree saat ini BERISIKAN dist modified
-  (pola III-1 berulang). Sebelum deploy: `cd apps/api && npm run build` lalu commit `dist/`.
+- `dist/`: **RESOLVED** (III-1-B) — post-merge auto-build hook (`bcddfcd`) terpasang +
+  terbukti di deploy nyata (pm2 restart otomatis via hook). `dist/` ter-track tapi working tree
+  BERSIH per 3 Sep 2026 (HEAD `570e65c`) — semua source + dist ter-commit & ter-sync.
+  **Saran lanjutan:** untrack `dist/` sepenuhnya agar tidak ada lagi stale-build trap di
+  masa depan (butuh koordinasi deploy pipeline).
 
-### 6.7 🟡 Lainnya (dari BUG-BELUM-DIBERESKAN.md)
+### 6.7 🟢 VII-A Secret Rotation (3 Sep 2026) — **RESOLVED & VERIFIED**
+Owner-completed outside session; diverifikasi 3 Sep 2026. Semua 13 secret
+(DATABASE_URL, REDIS_URL, GEMINI_API_KEY, GROQ_API_KEYS, GOWA_BASIC_AUTH_*,
+CLOUDINARY_*, BACKUP_ENCRYPTION_KEY, WEBHOOK_SECRET, STORAGE_PROVIDER/R2_*,
+FIELD_ENCRYPTION_KEY, CLOUDFLARE_WORKER_*, PUBLIC_API_KEY) diganti dari nilai
+terpaksa. RAJAONGKIR_API_KEY correctly NOT rotated (never exposed, added post-purge).
+App healthy: pm2 online, `/api/health` 200. Evidence: key-rotation integration test
+`e6afc0c` (5 sub-tests pass), `decryptField()` fix `5e44c6e` (throws on failure,
+bukan return ciphertext). `WEBHOOK_SECRET` juga DIHAPUS dari `.env.example`.
+Lihat juga: DEFERRED-WORK-TRACKER #4, GO-LIVE-BUSINESS-READINESS.md #1.
+
+### 6.8 🟢 Cleanup batch (2 Sep 2026) — **RESOLVED**
+- `adapters.llm.chat` removed dari `container.ts` (`923bf9a`) — 0 non-test production
+  references, hanya komentar di test file.
+- `ProductFormModal.tsx` deleted (`10e7212`) — 0 references, superseded oleh shared
+  `ProductForm.tsx`.
+- `adapters.knowledge`, `adapters.storage` stub properties removed dari `container.ts`
+  exports (`10e7212`) — dead code, 0 non-test references.
+- `GITHUB_PAT`, `WEBHOOK_SECRET` removed dari `.env.example` (`5e44c6e`), 0 code references.
+- `products-routes.e2e.test.ts` tests #9/#11/#13 — stale expectations (missing `weight`),
+  fixed dengan menambah `weight: 1` (`10e7212`).
+
+### 6.9 🟡 Lainnya (dari BUG-BELUM-DIBERESKAN.md)
 - **I-1** Qty 0 di receipt ("Brambang (0x)") — Medium, kosmetik.
 - **II-5** Test DB shared isolation lemah (row `store-f7140b5c` bocor lintas file) — 🟡 **AUDITED (19 Agu 2026): 0 assertion rawan ditemukan** di full-scan `src/tests/`; root cause (cleanup per-prefix) tetap ada tapi harmless karena semua query sudah scope `storeId`/`conversationId`/composite-unique. Hygiene debt, bukan follow-up task.
 - **III-4/III-5** T5 fallback overlap + `appendMessage` race — belum diklasifikasi.
 - **III-7/III-8** I11/I12 normalizer — typo lolos / guard belum diverifikasi.
 - **Kata `'mau'` di `ORDER_INTENT_KEYWORDS`** (`fast-path.ts`) bisa short-circuit sebelum `trySop`.
-- **🟡 SHIPPING-CI-GAP (21 Agu 2026):** test suite shipping (`shipping-*.test.ts`,
-  `order-weight.helper` test, `shipping-options`/`select-shipping` e2e) **TIDAK ter-cover
-  CI** — tidak masuk `test:chat` (jest, hanya `src/services/chat/**`), tidak masuk
-  `test:golden`/`test:structured`/`test:payment`. Jalankan manual via
-  `tsx --test --test-force-exit "src/tests/shipping*.test.ts" "src/services/shipping/**/*.test.ts"`.
-  Pola sama persis II-6/II-7 — butuh script `test:shipping` + step CI (task terpisah).
+- **🟡 SHIPPING-CI-GAP (21 Agu 2026):** ~~TIDAK ter-cover CI~~ ✅ **RESOLVED** —
+  `test:shipping` script ditambah + masuk CI step (`e16679d`, §4.7 item 1). 8/8 tests pass.
+  `npm run test:shipping` dapat dijalankan manual via `tsx --test --test-force-exit`.
+  Masih tidak masuk `test:chat` (jest, hanya `src/services/chat/**`) — by design, shipping
+  pakai node:test bukan jest.
 - **🟡 Monitoring single-instance (`b18b6d5`):** `GET /api/admin/metrics/system` pakai
   in-memory rolling window → **TIDAK akurat di multi-instance pm2**. Gap diketahui,
   belum ada agregasi; aman untuk single-instance saat ini.
@@ -375,14 +476,14 @@ P8-CI-FIX (`c6be2d8`) masukkan `test:structured` (115 test) ke CI → gate lengk
   quota guard disengaja — owner terima risiko ban dari RajaOngkir. Interface
   `shipping-cost-provider.interface.ts` swap-able kalau perlu ganti provider.
 
-### 6.8 ✅ Prisma version — AUDITED (resolved = 5.22.0, match kontrak §6A.12)
+### 6.10 ✅ Prisma version — AUDITED (resolved = 5.22.0, match kontrak §6A.12)
 Kontrak §6A.12 mengunci **Prisma 5.22.0**; `package.json` `^5.10.0`. Audit read-only
 (2026-08-19) konfirmasi resolved version (`@prisma/client`, `prisma`, `@prisma/engines`)
 = **5.22.0 persis** via lockfile — SAMA dengan kontrak. Pin `^5.10.0` murni kosmetik,
 sudah resolve benar ke 5.22.0. `FOR UPDATE` via `$queryRaw` (action-registry) berjalan di
 versi ini. **Tidak ada tindakan diperlukan** (LOW, closed).
 
-### 6.9 ⚪ P7 — WA convergence ke action contract — **DITUTUP, TIDAK DIPERLUKAN (22 Agu 2026)**
+### 6.11 ⚪ P7 — WA convergence ke action contract — **DITUTUP, TIDAK DIPERLUKAN (22 Agu 2026)**
 
 Keputusan owner: WA **TIDAK** akan dikonvergensi ke Action Registry/typed action contract.
 Alasan: Action Registry didesain untuk aksi yang **SUDAH** diketahui tanpa interpretasi
@@ -402,7 +503,7 @@ Syarat buka ulang: HANYA kalau ada kebutuhan operasional konkret (misal audit-tr
 lintas kanal, response contract disamakan untuk analytics) — BUKAN alasan "konsistensi arsitektur"
 semata. Belum ada sinyal kebutuhan itu saat ini.
 
-### 6.11 🟢 30–31 Agu 2026 — Tenant isolation re-audit + merchant push + dead code removal
+### 6.12 🟢 30–31 Agu 2026 — Tenant isolation re-audit + merchant push + dead code removal
 
 - **Tenant isolation re-audit (CRITICAL):** Owner-insisted deliberate re-audit found 2 real bugs:
   - Cross-tenant message injection via `POST /api/messages/handle` (IDOR) — fixed (`9852477`).
@@ -436,10 +537,20 @@ semata. Belum ada sinyal kebutuhan itu saat ini.
 | `Customer` | id, storeId, webUid?, pushSubscription | |
 | `SystemSetting` | key (@unique), value, category, isSecret | encryption key di `FIELD_ENCRYPTION_KEY` |
 | `ActionIdempotency` | **SUDAH di schema.prisma (committed)** — idempotencyKey (PK), actionId, actionType, storeId, customerId, status (CLAIMED/COMPLETED/FAILED), leaseUntil, result, error; `@@unique([storeId,customerId,actionType,actionId])` | §4.3 |
+| `AIProviderConfig` | id, name, format, baseUrl, apiKey (AES-256-GCM), model, role, priority, isActive, lastTestedAt/Result. `@@index([role, isActive, priority])`. Migrasi `20260901012800_add_ai_provider_config` | §4.9 Unit 1 |
+| `TokenUsageLog` | id, provider, role?, model?, inputTokens, outputTokens, costUsd?, createdAt. `@@index([provider, createdAt])` + `@@index([createdAt])` | §4.12 |
+| `ProductVariant` | id, productId, storeId, sku?, attributes (Json), price, stock?, isActive. `@@unique([storeId, sku])` + `@@index([productId])`. onDelete Cascade ke Product | §4.10 |
+| `StoreDocument` | id, storeId, type (tos/sop), version, content, status (draft/published/superseded), generatedFromAnswers?, generatedAt?, publishedAt?, editedAt, createdAt. `@@unique([storeId, type, version])` | P1 onboarding-wizard schema `2c0042b` |
+| `StorePushSubscription` | id, storeId, customerId?, webUid?, endpoint, keys, createdAt | G2-E / §4.8 #5 |
+| `MagicPasteRun` | id, storeId, productId?, textLength, confidence, status, warnings?, extractedEntities?, source, errorMessage?, createdAt. `@@index([storeId, createdAt])` + `@@index([confidence])` | §4.10 |
+| `BankAccount` | id, storeId, type, provider, details (Json), isActive, createdAt/updatedAt | G2-F payment |
 
 ### 7.2 Environment variables (tanpa nilai rahasia)
 `DATABASE_URL`, `REDIS_URL`, `FIELD_ENCRYPTION_KEY`, `GROQ_API_KEYS`, `GEMINI_API_KEY`,
 `FONNTE_TOKEN`/`Store.fonnteToken`, `VAPID_PUBLIC/PRIVATE_KEY`, `PORT`, `NODE_ENV`.
+Catatan: `WEBHOOK_SECRET` **DIHAPUS** dari `.env.example` (VII-A rotation, 3 Sep 2026 —
+0 code references, tidak dipakai di source). AI provider config yang baru (`AIProviderConfig`)
+disimpan di DB (bukan env), kecuali env seed (`scripts/seed-ai-providers-from-env.mts`).
 > Rahasia TIDAK boleh di-expose di log/doc.
 
 ---
@@ -450,37 +561,49 @@ semata. Belum ada sinyal kebutuhan itu saat ini.
 Lihat §6.9 — DITUTUP, tidak diperlukan (22 Agu 2026).
 
 ### 8.2 Antrian (open)
-- **II-5 test-isolation** — audit assertion `actionType`/`store`-wide lintas file test.
-- **6.5** pre-existing test failures (II-1/II-2) — perbaiki di test env (tidak blocking).
-  - **6.7** sisa kosmetik / normalizer (I-1, III-4/5/7/8).
+- **II-5 test-isolation** — audit assertion `actionType`/`store`-wide lintas file test (masih
+  hygiene debt, tidak blocking — lihat §6.9).
+- **6.7** sisa kosmetik / normalizer (I-1, III-4/5/7/8) — lihat §6.9.
+- **Backup alert sender** — env `BACKUP_ALERT_EMAIL` terisi tapi TIDAK ADA sender (nodemailer
+  belum terpasang), gap baru Medium — lihat §6.12.
+- **Redis-backed provider cooldown** — in-memory sekarang, butuh Redis kalau multi-instance
+  (lihat 🟢 item #23 di DEFERRED-WORK-TRACKER).
+- **Cost accuracy per-provider** (`TokenUsageLog.costUsd` generik) — lihat 🟡 item #17.
 
 
 ---
 
 ## 9. CARA VERIFIKASI (untuk siapapun yang lanjutkan)
 
-> Working tree BERSIH (cluster `2a93924..2e64c0a` SUDAH di-merge ke `main` via commit
-> `ea1f0c2`, `dist/` SUDAH di-rebuild & ter-commit di `da1b2e1`, force-push + merge selesai
-> 22 Agu 2026). Satu-satunya untracked: `P7-AUDIT-FINDINGS.md` (sengaja dibiarkan) dan
-> `.env` (gitignored, bukan bagian git). Lihat RAILS.md §6 (insiden `.env` 22 Agu).
+> Working tree BERSIH per 3 Sep 2026 (HEAD `570e65c`). Semua cluster baru (LLM Provider
+> Abstraction, PV-P3, Product CRUD consolidation, Token Usage, cleanup batch, secret rotation)
+> ter-commit & ter-push. `dist/` ter-sync (post-merge hook + manual build + revert).
+> Satu-satunya untracked: `.env` (gitignored, bukan bagian git).
 
 ### 9.1 Build & typecheck (dari `apps/api`)
 ```bash
 cd /home/ubuntu/garuda/apps/api
-npx tsc --noEmit          # 0 error (terverifikasi 19 Agu)
+npx tsc --noEmit          # 0 error (terverifikasi 3 Sep 2026)
 npm run build             # WAJIB — generate dist/
 ```
 
 ### 9.2 Test
 ```bash
 cd /home/ubuntu/garuda/apps/api
-npm run test:chat         # Jest: 270/270 hijau (baseline 0 failed, reasoning-v2 + engine-config-v2)
-npm run test:golden       # node:test golden-dataset: 26/26 pass
-npm run test:structured   # node:test structured-actions*: 115 tests / 7 suites pass (P8-CI-FIX)
-npm run test:payment      # node:test G2-F suites: 37 tests / 4 files pass (G2-F6, commit `50d4d25`)
-#   - payment.test.ts (F2, ~13) + pwa-checkout.test.ts (F3, 8) + payment-verify-routes.e2e.test.ts (F1/F4 + F6a/F6b, ~16)
-#     + golden-payment.e2e.test.ts (G2-F5 golden checkout/payment, 5, mutation-tested)
+npm run test:chat         # Jest: 271/271 hijau (inclusive reasoning-v2 + engine-config-v2, 0 failed)
+npm run test:golden       # node:test golden-dataset: 37/37 pass
+npm run test:structured   # node:test structured-actions*: 118 tests / 7 suites pass
+npm run test:payment      # node:test G2-F suites: 46 tests / 4 files pass (G2-F6, commit `50d4d25`)
 npm run test:shipping     # node:test shipping-cost suite: 8 tests pass (`e16679d`, CI step setelah test:payment)
+# AI gateway suite (dynamic providers): 35 tests total
+#   - test:ai-gateway (jest) — 7 (ai-gateway.test.ts)
+#   - test:llm-gateway-dynamic — 7 (B1-B7)
+#   - test:manager-dynamic — 7 (M1-M7)
+#   - ai-provider-resolver.service.test.ts — 6 (R1-R6)
+#   - gateway-conversation-fallback.test.ts — 4
+#   - ai-gateway-gatekeeper.test.ts — 2
+#   - gateway-integration.test.ts — 2
+
 ```
 
 ### 9.3 Restart & log (produksi VPS `root@vps3541799`, repo `/home/ubuntu/garuda`)
@@ -488,6 +611,8 @@ npm run test:shipping     # node:test shipping-cost suite: 8 tests pass (`e16679
 pm2 restart api           # restart API (dist/index.js)
 pm2 status                # cek online / crash loop
 pm2 logs api --lines 100
+# AI gateway tests (dynamic providers, 35 total):
+npx jest test:ai-gateway test:llm-gateway-dynamic test:manager-dynamic
 ```
 
 ### 9.4 Database & Prisma
@@ -496,12 +621,16 @@ cd /home/ubuntu/garuda/apps/api
 npx prisma migrate status
 npx prisma studio
 # SELECT count(*) FROM action_idempotency;  -- SEKARANG ada (schema committed)
+# SELECT count(*) FROM ai_provider_configs;  -- provider dinamis (§4.9)
+# SELECT count(*) FROM token_usage_logs;  -- tracking (§4.12)
+# SELECT count(*) FROM product_variants;  -- variants (§4.10)
+# SELECT count(*) FROM store_documents;  -- ToS/SOP onboarding (P1 wizard)
 ```
 
 ### 9.5 Git state
 ```bash
-git status --short | head   # EXPECT dist/ modified (belum rebuild, §6.6) + P7-AUDIT-FINDINGS.md untracked
-git log --oneline -3        # HEAD: ea1f0c2
+git status --short          # EXPECT: clean working tree (HEAD 570e65c)
+git log --oneline -3        # HEAD: 570e65c (docs: tracker resolve N-provider rotation #16)
 ```
 
 ### 9.6 Verifikasi klaim
@@ -514,6 +643,15 @@ git log --oneline -3        # HEAD: ea1f0c2
 - `grep -n "metrics/system\|metricsStore" apps/api/src/routes/admin/system-metrics.ts apps/api/src/middleware/metrics.middleware.ts` → endpoint monitoring ada (`b18b6d5`).
 - `curl -H "Authorization: Bearer $ADMIN_TOKEN" localhost:PORT/api/admin/metrics/system` → JSON memory/uptime/requests.
 - `curl localhost:PORT/api/pwa/:slug/pwa-locations/provinces` → list provinsi (PUBLIC, tanpa auth, §4.5).
+- `grep -n "model AIProviderConfig" apps/api/prisma/schema.prisma` → >0 (§4.9 Unit 1).
+- `grep -n "model TokenUsageLog" apps/api/prisma/schema.prisma` → >0 (§4.12).
+- `grep -n "model ProductVariant" apps/api/prisma/schema.prisma` → >0 (§4.10).
+- `grep -n "model StoreDocument" apps/api/prisma/schema.prisma` → >0 (P1 wizard schema).
+- `grep -n "useDynamicProviders" apps/api/src/adapters/ai/llm-gateway.ts` → flag-gated rotation (§4.9 N-1).
+- `grep -rn "shouldSkipProvider\|triggerCooldown" apps/api/src/adapters/ai/llm-gateway.ts apps/api/src/adapters/ai/manager.ts` → cooldown rotation wired (§4.9 N-1).
+- `grep -n "VariantManagementPanel" apps/api/src/routes/admin/products.ts` → dual-UI consolidated (§4.11).
+- `ls apps/dashboard/src/components/shared/ProductForm.tsx` → shared component exists (§4.11).
+- `ls apps/dashboard/src/pages/admin/TokenUsage.tsx` → token tracking dashboard (§4.12).
 
 ---
 
@@ -585,6 +723,12 @@ wajib `npm run build` + commit `dist/`.
 | Monitoring | `routes/admin/system-metrics.ts` + `middleware/metrics.middleware.ts` |
 | Store profile | `routes/profile.ts`, `routes/auth.ts` (register wajib phone/address/origin; null-write guard) |
 | CI | `.github/workflows/test.yml` (test:chat + test:golden + test:structured + test:payment) |
+| **LLM Provider Abstraction** | `services/ai-provider-resolver.service.ts` (resolver), `adapters/ai/llm-gateway.ts` (gateway + rotation), `adapters/ai/manager.ts` (manager + rotation), `services/provider-cooldown.ts` (cooldown), `adapters/ai/openai-compatible.adapter.ts`, `adapters/ai/gemini-shim.adapter.ts` (shims), `routes/admin/ai-providers.ts` (admin CRUD + test-connection) |
+| **Token Usage** | `services/token-usage-tracker.ts` (persistence service), `dashboard/src/pages/admin/TokenUsage.tsx` (dashboard UI) |
+| **Magic-Paste Variants** | `business/product.service.ts` (variant extraction), `components/admin/ConfirmCreateModal.tsx` (preview + edit), `components/admin/VariantManagementPanel.tsx` (post-create edit), `routes/admin/products.ts` (admin CRUD) |
+| **Shared Product Form** | `dashboard/src/components/shared/ProductForm.tsx` (shared component, used by AdminProductsPage/ProductsPage/ProductDetailPage) |
+| **AI Provider Config (dashboard)** | `dashboard/src/pages/admin/AIProviders.tsx` (CRUD + test-connection UI) |
+| **Secret rotation** | `business/key-rotation.service.ts` (rotation service), `services/encryption.ts` (AES-256-GCM), `tests/key-rotation.integration.test.ts`, `scripts/seed-ai-providers-from-env.mts` (seed), `DOCS/KEY-ROTATION-RUNBOOK.md` (runbook) |
 
 ## APPENDIX B — Kontrak terkunci (jangan dilanggar tanpa persetujuan owner)
 1. `RAILS.md` §1 (bukti mentah wajib, scope terkunci, mulai sesi dengan git status).
@@ -596,6 +740,8 @@ wajib `npm run build` + commit `dist/`.
 ---
 
 *Laporan dibuat read-only (tidak ada kode diubah). Semua klaim diverifikasi ke source/test/git
-log working tree `/home/ubuntu/garuda` per 2026-08-22 (HEAD `ea1f0c2`). Klaim yang tidak bisa
+log working tree `/home/ubuntu/garuda` per 3 Sep 2026 (HEAD `570e65c`). Klaim yang tidak bisa
 diverifikasi mandiri ditandai [DUGAAN] atau "belum diverifikasi". INSIDEN unreported-work gap
-ada di §10 (19 Agu) dan §10.2 (21 Agu).*
+ada di §10 (19 Agu) dan §10.2 (21 Agu). UPDATE 3 Sep 2026: cluster LLM Provider Abstraction +
+PV-P3 + Product CRUD + Token Usage + cleanup + secret rotation seluruhnya tercatat di §4.9-§4.12,
+§6.7-§6.8, §7.1, Appendix A.*
