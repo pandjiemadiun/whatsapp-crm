@@ -53,13 +53,14 @@ export interface ProductFormProps {
   product?: Product | null;
   onSaved: (product: Product) => void;
   onCancel: () => void;
+  showVariantSection?: boolean;
 }
 
 function normalizeApiBase(mode: 'admin' | 'merchant') {
   return mode === 'admin' ? adminApi : api;
 }
 
-export function ProductForm({ storeId, mode, product, onSaved, onCancel }: ProductFormProps) {
+export function ProductForm({ storeId, mode, product, onSaved, onCancel, showVariantSection = true }: ProductFormProps) {
   const [form, setForm] = useState<ProductFormData>({
     name: '',
     price: '',
@@ -172,7 +173,7 @@ export function ProductForm({ storeId, mode, product, onSaved, onCancel }: Produ
       // Save variants if any
       if (savedProduct && variants.length > 0) {
         const variantBase = mode === 'admin'
-          ? `/admin/stores/${storeId}/products/${savedProduct.id}/variants`
+          ? `/stores/${storeId}/products/${savedProduct.id}/variants`
           : `/products/my/${savedProduct.id}/variants`;
         for (const v of variants) {
           const attrs: Record<string, string> = {};
@@ -180,7 +181,8 @@ export function ProductForm({ storeId, mode, product, onSaved, onCancel }: Produ
             if (a.key.trim()) attrs[a.key.trim()] = a.value.trim();
           }
           if (v.id) {
-            await apiBase.patch(`/products/my/variants/${v.id}`, {
+            const variantUpdatePath = mode === 'admin' ? `/variants/${v.id}` : `/products/my/variants/${v.id}`;
+            await apiBase.patch(variantUpdatePath, {
               price: Number(v.price),
               stock: v.stock.trim() === '' ? null : Number(v.stock),
               sku: v.sku.trim() || undefined,
@@ -343,7 +345,7 @@ export function ProductForm({ storeId, mode, product, onSaved, onCancel }: Produ
           </div>
 
           {/* ── Variant editing section ── */}
-          {(isEdit && product?.hasVariants) && (
+          {isEdit && product?.hasVariants && showVariantSection && (
             <div className="mt-4 pt-4 border-t border-line dark:border-dline space-y-3">
               <div className="flex items-center justify-between">
                 <h3 className="text-sm font-semibold text-ink dark:text-surface">Varian Produk</h3>

@@ -281,6 +281,7 @@ export function ProductDetailPage() {
           product={product}
           onSaved={fetchProduct}
           onCancel={() => setModalOpen(false)}
+          showVariantSection={false}
         />
       )}
 
