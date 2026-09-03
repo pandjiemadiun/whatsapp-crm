@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Package, Wand2, Loader2, Edit, Trash2, Plus } from 'lucide-react';
 import adminApi from '../../services/adminApi';
-import { ProductFormModal } from '../../components/admin/ProductFormModal';
+import { ProductForm } from '../../components/shared/ProductForm';
 
 interface ProductRow {
   id: string;
@@ -13,8 +13,12 @@ interface ProductRow {
   categoryId: string | null;
   description: string | null;
   source: string;
-  primaryImageUrl?: string | null;
+  primaryImageUrl: string | null;
   createdAt?: string;
+  hasVariants: boolean;
+  weight: number;
+  currency: string;
+  isActive: boolean;
 }
 
 interface StoreOption {
@@ -67,11 +71,7 @@ export function AdminProductsPage() {
 
   // Modal states
   const [modalOpen, setModalOpen] = useState(false);
-  const [modalProductId, setModalProductId] = useState<string | null>(null);
-  const [modalInitial, setModalInitial] = useState<Partial<{
-    name: string; price: string; stock: string; sku: string;
-    description: string; categoryId: string;
-  }>>({});
+  const [editingProduct, setEditingProduct] = useState<ProductRow | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
 
@@ -113,6 +113,10 @@ export function AdminProductsPage() {
           source: p.source,
           primaryImageUrl: p.primaryImageUrl,
           createdAt: p.createdAt,
+          hasVariants: p.hasVariants,
+          weight: p.weight,
+          currency: p.currency,
+          isActive: p.isActive,
         }));
         if (!cancelled) setProducts(list);
       } catch {
@@ -127,28 +131,18 @@ export function AdminProductsPage() {
   // ─── Actions ───
 
   const openCreate = () => {
-    setModalProductId(null);
-    setModalInitial({});
+    setEditingProduct(null);
     setModalOpen(true);
   };
 
   const openEdit = (p: ProductRow) => {
-    setModalProductId(p.id);
-    setModalInitial({
-      name: p.name,
-      price: String(p.price),
-      stock: p.stock != null ? String(p.stock) : '',
-      sku: p.sku || '',
-      description: p.description || '',
-      categoryId: p.categoryId || '',
-    });
+    setEditingProduct(p);
     setModalOpen(true);
   };
 
   const closeModal = () => {
     setModalOpen(false);
-    setModalProductId(null);
-    setModalInitial({});
+    setEditingProduct(null);
   };
 
   const handleSaved = () => {
@@ -290,13 +284,12 @@ export function AdminProductsPage() {
 
       {/* Product Form Modal (create / edit) */}
       {modalOpen && (
-        <ProductFormModal
-          productId={modalProductId}
+        <ProductForm
+          mode="admin"
           storeId={selectedStore}
-          initialData={modalInitial}
-          open={modalOpen}
-          onClose={closeModal}
+          product={editingProduct}
           onSaved={handleSaved}
+          onCancel={closeModal}
         />
       )}
 

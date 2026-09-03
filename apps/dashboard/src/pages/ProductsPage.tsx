@@ -4,6 +4,8 @@ import {
 } from 'lucide-react';
 import api from '../services/api';
 import ConfirmDialog from '../components/ConfirmDialog';
+import { useAuth } from '../contexts/AuthContext';
+import { ProductForm } from '../components/shared/ProductForm';
 
 interface Product {
   id: string;
@@ -89,19 +91,18 @@ function classifyMultiLineIntent(lines: string[]): 'single' | 'batch' {
   return variantLineCount >= 2 ? 'single' : 'batch';
 }
 
-const EMPTY_FORM = { name: '', price: '', stock: '', description: '', categoryId: '' };
-
 function formatRupiah(v: number | null | undefined): string {
   if (v == null) return '—';
   return `Rp ${Number(v).toLocaleString('id-ID')}`;
 }
 
 export default function ProductsPage() {
+  const { user } = useAuth();
+  const ownStoreId = user?.storeId || '';
   const [tab, setTab] = useState<'list' | 'magic'>('list');
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deleteConfirmProduct, setDeleteConfirmProduct] = useState<Product | null>(null);
   const [uploadingId, setUploadingId] = useState<string | null>(null);
@@ -109,10 +110,6 @@ export default function ProductsPage() {
   const [uploadTargetId, setUploadTargetId] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Product | null>(null);
-  const [form, setForm] = useState(EMPTY_FORM);
-  const [formError, setFormError] = useState('');
-  const [editVariants, setEditVariants] = useState<Array<{ id?: string; attributes: MpVariantAttr[]; price: string; stock: string; sku: string }>>([]);
-  const [editVariantsLoading, setEditVariantsLoading] = useState(false);
   const [detailProduct, setDetailProduct] = useState<Product | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailVariants, setDetailVariants] = useState<Array<{ id: string; price: number; attributes: Record<string, string>; stock: number | null; sku: string | null }>>([]);
@@ -247,44 +244,12 @@ export default function ProductsPage() {
 
   const openCreate = () => {
     setEditing(null);
-    setForm(EMPTY_FORM);
-    setFormError('');
     setModalOpen(true);
   };
 
-  const openEdit = async (p: Product) => {
+  const openEdit = (p: Product) => {
     setEditing(p);
-    setForm({
-      name: p.name,
-      price: String(p.price),
-      stock: p.stock != null ? String(p.stock) : '',
-      description: p.description || '',
-      categoryId: p.categoryId || '',
-    });
-    setFormError('');
-    setEditVariants([]);
     setModalOpen(true);
-
-    if (p.hasVariants) {
-      setEditVariantsLoading(true);
-      try {
-        const res = await api.get(`/products/my/${p.id}/variants`);
-        const variants = res.data.data.variants ?? [];
-        setEditVariants(
-          variants.map((v: any) => ({
-            id: v.id,
-            attributes: Object.entries(v.attributes ?? {}).map(([key, value]) => ({ key, value: String(value ?? '') })),
-            price: String(v.price ?? ''),
-            stock: v.stock == null ? '' : String(v.stock),
-            sku: v.sku ?? '',
-          }))
-        );
-      } catch {
-        setEditVariants([]);
-      } finally {
-        setEditVariantsLoading(false);
-      }
-    }
   };
 
   const openDetail = async (p: Product) => {
@@ -307,96 +272,6 @@ export default function ProductsPage() {
     setDetailProduct(null);
     setDetailVariants([]);
     setDetailLoading(false);
-  };
-
-  const handleSave = async () => {
-    if (!form.name.trim()) {
-      setFormError('Nama produk wajib diisi');
-      return;
-    }
-    const price = Number(form.price);
-    if (form.price === '' || isNaN(price) || price < 0) {
-      setFormError('Harga wajib diisi dan tidak boleh negatif');
-      return;
-    }
-    const payload = {
-      name: form.name.trim(),
-      price,
-      stock: form.stock === '' ? null : Number(form.stock),
-      description: form.description.trim() || null,
-      categoryId: form.categoryId || null,
-    };
-
-    setSaving(true);
-    setFormError('');
-    try {
-      if (editing) {
-        await api.put(`/products/my/${editing.id}`, payload);
-        if (editing.hasVariants) {
-          for (const ev of editVariants) {
-            const attrs: Record<string, string> = {};
-            for (const a of ev.attributes) {
-              if (a.key.trim()) attrs[a.key.trim()] = a.value.trim();
-            }
-            if (ev.id) {
-              await api.patch(`/products/my/variants/${ev.id}`, {
-                price: Number(ev.price),
-                stock: ev.stock.trim() === '' ? null : Number(ev.stock),
-                sku: ev.sku.trim() || undefined,
-                attributes: attrs,
-              });
-            } else if (attrs && Object.keys(attrs).length > 0 && ev.price) {
-              await api.post(`/products/my/${editing.id}/variants`, {
-                price: Number(ev.price),
-                stock: ev.stock.trim() === '' ? null : Number(ev.stock),
-                sku: ev.sku.trim() || undefined,
-                attributes: attrs,
-              });
-            }
-          }
-        }
-        showFeedback('success', 'Produk berhasil diupdate');
-      } else {
-        await api.post('/products/my', payload);
-        showFeedback('success', 'Produk berhasil ditambahkan');
-      }
-      setModalOpen(false);
-      loadProducts();
-    } catch (err: any) {
-      setFormError(err?.response?.data?.error || 'Gagal menyimpan produk');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const addEditVariant = () =>
-    setEditVariants((prev) => [...prev, { id: undefined, attributes: [{ key: '', value: '' }], price: '', stock: '', sku: '' }]);
-
-  const removeEditVariant = (idx: number) =>
-    setEditVariants((prev) => prev.filter((_, i) => i !== idx));
-
-  const updateEditVariantField = (idx: number, field: 'price' | 'stock' | 'sku', value: string) => {
-    setEditVariants((prev) => prev.map((v, i) => (i === idx ? { ...v, [field]: value } : v)));
-  };
-
-  const updateEditAttr = (vi: number, ai: number, field: 'key' | 'value', value: string) => {
-    setEditVariants((prev) =>
-      prev.map((v, i) =>
-        i === vi ? { ...v, attributes: v.attributes.map((a, j) => (j === ai ? { ...a, [field]: value } : a)) } : v
-      )
-    );
-  };
-
-  const addEditAttr = (vi: number) => {
-    setEditVariants((prev) =>
-      prev.map((v, i) => (i === vi ? { ...v, attributes: [...v.attributes, { key: '', value: '' }] } : v))
-    );
-  };
-
-  const removeEditAttr = (vi: number, ai: number) => {
-    setEditVariants((prev) =>
-      prev.map((v, i) => (i === vi ? { ...v, attributes: v.attributes.filter((_, j) => j !== ai) } : v))
-    );
   };
 
   const handleDelete = (p: Product) => {
@@ -1225,223 +1100,23 @@ className="flex items-center gap-2 bg-brand text-white px-4 py-2 rounded-lg text
         </div>
       )}
 
-      {/* ── MODAL: Tambah/Edit ── */}
+      {/* ── Product Form Modal (shared component) ── */}
       {modalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="bg-surface dark:bg-dcard rounded-xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between px-5 py-4 border-b border-line dark:border-dline">
-              <h2 className="font-display font-bold text-navy dark:text-surface">
-                {editing ? 'Edit Produk' : 'Tambah Produk'}
-              </h2>
-              <button
-                onClick={() => setModalOpen(false)}
-                className="text-muted hover:text-ink dark:text-muted dark:hover:text-surface"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            <div className="p-5 space-y-4">
-              {formError && (
-                <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 border border-red-200 dark:border-red-800">
-                  <AlertCircle className="w-4 h-4 shrink-0" />
-                  {formError}
-                </div>
-              )}
-              <div>
-                <label className="block text-sm font-medium text-ink dark:text-surface mb-1.5">
-                  Nama Produk <span className="text-red-500">*</span>
-                </label>
-                <input
-                  value={form.name}
-                  onChange={(e) => setForm({ ...form, name: e.target.value })}
-                  placeholder="Contoh: Soto Ayam Spesial"
-                  className="w-full rounded-lg border border-line dark:border-dline px-3 py-2 text-sm bg-surface dark:bg-dsurface text-ink placeholder-muted focus:outline-none focus:ring-2 focus:ring-brand"
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-sm font-medium text-ink dark:text-surface mb-1.5">
-                    Harga (Rp) <span className="text-red-500">*</span>
-                  </label>
-                  <input
-                    type="number"
-                    value={form.price}
-                    onChange={(e) => setForm({ ...form, price: e.target.value })}
-                    placeholder="25000"
-                    className="w-full rounded-lg border border-line dark:border-dline px-3 py-2 text-sm bg-surface dark:bg-dsurface text-ink placeholder-muted focus:outline-none focus:ring-2 focus:ring-brand"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-ink dark:text-surface mb-1.5">Stok</label>
-                  <input
-                    type="number"
-                    value={form.stock}
-                    onChange={(e) => setForm({ ...form, stock: e.target.value })}
-                    placeholder="100"
-                    className="w-full rounded-lg border border-line dark:border-dline px-3 py-2 text-sm bg-surface dark:bg-dsurface text-ink placeholder-muted focus:outline-none focus:ring-2 focus:ring-brand"
-                  />
-                </div>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-ink dark:text-surface mb-1.5">Kategori</label>
-                <select
-                  value={form.categoryId}
-                  onChange={(e) => setForm({ ...form, categoryId: e.target.value })}
-                  className="w-full rounded-lg border border-line dark:border-dline px-3 py-2 text-sm bg-surface dark:bg-dsurface text-ink focus:outline-none focus:ring-2 focus:ring-brand"
-                >
-                  <option value="">— Tanpa kategori —</option>
-                  {categories.map((c) => (
-                    <option key={c.id} value={c.id}>{c.name}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-ink dark:text-surface mb-1.5">Deskripsi</label>
-                <textarea
-                  value={form.description}
-                  onChange={(e) => setForm({ ...form, description: e.target.value })}
-                  placeholder="Deskripsi singkat produk..."
-                  rows={3}
-                  maxLength={1000}
-                  className="w-full resize-y rounded-lg border border-line dark:border-dline px-3 py-2 text-sm bg-surface dark:bg-dsurface text-ink placeholder-muted focus:outline-none focus:ring-2 focus:ring-brand"
-                />
-              </div>
-
-              {/* ── Variant editing section (post-create) ── */}
-              {editing?.hasVariants && (
-                <div className="mt-4 pt-4 border-t border-line dark:border-dline space-y-3">
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-sm font-semibold text-ink dark:text-surface">Varian Produk</h3>
-                    <button
-                      type="button"
-                      onClick={addEditVariant}
-                      disabled={saving}
-                      className="flex items-center gap-1 rounded-lg border border-line dark:border-dline px-3 py-1.5 text-xs font-medium text-ink dark:text-surface hover:bg-surface dark:hover:bg-dline disabled:cursor-not-allowed disabled:opacity/50"
-                    >
-                      <Plus className="h-3.5 w-3.5" /> Tambah varian
-                    </button>
-                  </div>
-                  {editVariantsLoading ? (
-                    <div className="flex justify-center py-4">
-                      <Loader2 className="w-5 h-5 animate-spin text-brand" />
-                    </div>
-                  ) : editVariants.length === 0 ? (
-                    <p className="text-xs text-muted">Belum ada varian.</p>
-                  ) : (
-                    <div className="space-y-3">
-                      {editVariants.map((v, vi) => (
-                        <div key={vi} className="rounded-lg border border-line dark:border-dline p-3 space-y-2">
-                          <div className="flex items-center justify-between">
-                            <span className="text-xs font-medium text-muted">Varian #{vi + 1}</span>
-                            <button
-                              type="button"
-                              onClick={() => removeEditVariant(vi)}
-                              disabled={saving}
-                              className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
-                              aria-label={`Hapus varian #${vi + 1}`}
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </button>
-                          </div>
-                          <div className="space-y-1.5">
-                            {v.attributes.map((a, ai) => (
-                              <div key={ai} className="flex items-center gap-1.5">
-                                <input
-                                  type="text"
-                                  value={a.key}
-                                  onChange={(e) => updateEditAttr(vi, ai, 'key', e.target.value)}
-                                  disabled={saving}
-                                  placeholder="size"
-                                  className="w-1/2 rounded-lg border border-line dark:border-dline px-2 py-1 text-sm bg-surface dark:bg-dsurface text-ink focus:outline-none focus:ring-1 focus:ring-brand"
-                                />
-                                <input
-                                  type="text"
-                                  value={a.value}
-                                  onChange={(e) => updateEditAttr(vi, ai, 'value', e.target.value)}
-                                  disabled={saving}
-                                  placeholder="L"
-                                  className="w-1/2 rounded-lg border border-line dark:border-dline px-2 py-1 text-sm bg-surface dark:bg-dsurface text-ink focus:outline-none focus:ring-1 focus:ring-brand"
-                                />
-                                <button
-                                  type="button"
-                                  onClick={() => removeEditAttr(vi, ai)}
-                                  disabled={saving}
-                                  className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
-                                  aria-label="Hapus atribut"
-                                >
-                                  <X className="h-3 w-3" />
-                                </button>
-                              </div>
-                            ))}
-                            <button
-                              type="button"
-                              onClick={() => addEditAttr(vi)}
-                              disabled={saving}
-                              className="flex items-center gap-1 text-xs font-medium text-brand hover:text-brand-deep"
-                            >
-                              <Plus className="h-3 w-3" /> Tambah atribut
-                            </button>
-                          </div>
-                          <div className="grid grid-cols-3 gap-2">
-                            <div>
-                              <label className="block text-xs text-muted">Harga (IDR)</label>
-                              <input
-                                type="number"
-                                value={v.price}
-                                onChange={(e) => updateEditVariantField(vi, 'price', e.target.value)}
-                                disabled={saving}
-                                placeholder="10000"
-                                className="mt-0.5 w-full rounded-lg border border-line dark:border-dline px-2 py-1 text-sm bg-surface dark:bg-dsurface text-ink focus:outline-none focus:ring-1 focus:ring-brand"
-                              />
-                            </div>
-                            <div>
-                              <label className="block text-xs text-muted">Stok</label>
-                              <input
-                                type="number"
-                                value={v.stock}
-                                onChange={(e) => updateEditVariantField(vi, 'stock', e.target.value)}
-                                disabled={saving}
-                                placeholder="100"
-                                className="mt-0.5 w-full rounded-lg border border-line dark:border-dline px-2 py-1 text-sm bg-surface dark:bg-dsurface text-ink focus:outline-none focus:ring-1 focus:ring-brand"
-                              />
-                            </div>
-                            <div>
-                              <label className="block text-xs text-muted">SKU</label>
-                              <input
-                                type="text"
-                                value={v.sku}
-                                onChange={(e) => updateEditVariantField(vi, 'sku', e.target.value)}
-                                disabled={saving}
-                                placeholder="opsional"
-                                className="mt-0.5 w-full rounded-lg border border-line dark:border-dline px-2 py-1 text-sm bg-surface dark:bg-dsurface text-ink focus:outline-none focus:ring-1 focus:ring-brand"
-                              />
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-            <div className="flex justify-end gap-2 px-5 py-4 border-t border-line dark:border-dline">
-              <button
-                onClick={() => setModalOpen(false)}
-                className="px-4 py-2 rounded-lg text-sm font-medium text-muted dark:text-muted border border-line dark:border-dline hover:bg-surface dark:hover:bg-dline transition"
-              >
-                Batal
-              </button>
-              <button
-                onClick={handleSave}
-                disabled={saving}
-                className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold bg-brand text-white hover:bg-brand-deep disabled:bg-brand/30 transition"
-              >
-                {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
-                {saving ? 'Menyimpan...' : 'Simpan'}
-              </button>
-            </div>
-          </div>
-        </div>
+        <ProductForm
+          mode="merchant"
+          storeId={ownStoreId}
+          product={editing}
+          onSaved={() => {
+            showFeedback('success', editing ? 'Produk berhasil diupdate' : 'Produk berhasil ditambahkan');
+            setModalOpen(false);
+            setEditing(null);
+            loadProducts();
+          }}
+          onCancel={() => {
+            setModalOpen(false);
+            setEditing(null);
+          }}
+        />
       )}
 
       {/* Hidden file input */}
