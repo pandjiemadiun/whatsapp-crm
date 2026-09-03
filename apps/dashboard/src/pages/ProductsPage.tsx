@@ -13,10 +13,12 @@ interface Product {
   currency: string;
   sku: string | null;
   stock: number | null;
+  weight: number;
   primaryImageUrl: string | null;
   categoryId: string | null;
   isActive: boolean;
   source: string;
+  hasVariants: boolean;
 }
 
 interface Category {
@@ -97,6 +99,9 @@ export default function ProductsPage() {
   const [editing, setEditing] = useState<Product | null>(null);
   const [form, setForm] = useState(EMPTY_FORM);
   const [formError, setFormError] = useState('');
+  const [detailProduct, setDetailProduct] = useState<Product | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailVariants, setDetailVariants] = useState<Array<{ id: string; price: number; attributes: Record<string, string>; stock: number | null; sku: string | null }>>([]);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; msg: string } | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('');
@@ -175,6 +180,28 @@ export default function ProductsPage() {
     });
     setFormError('');
     setModalOpen(true);
+  };
+
+  const openDetail = async (p: Product) => {
+    setDetailProduct(p);
+    setDetailLoading(true);
+    setDetailVariants([]);
+    try {
+      const res = await api.get(`/products/my/${p.id}`);
+      const data = res.data.data;
+      setDetailVariants(Array.isArray(data.variants) ? data.variants : []);
+      setDetailProduct({ ...p, description: data.description ?? p.description });
+    } catch {
+      setDetailVariants([]);
+    } finally {
+      setDetailLoading(false);
+    }
+  };
+
+  const closeDetail = () => {
+    setDetailProduct(null);
+    setDetailVariants([]);
+    setDetailLoading(false);
   };
 
   const handleSave = async () => {
@@ -320,7 +347,10 @@ export default function ProductsPage() {
 
       // Single-product intent (including multi-line "name + variant lines")
       const url = create ? '/products/my/magic-paste' : '/products/my/magic-paste?preview=true';
-      const res = await api.post(url, { text, ...(overrides ? { overrides } : {}) });
+      const body: Record<string, unknown> = { text };
+      if (overrides) body.overrides = overrides;
+      if (create && mpExtracted?.variants?.length) body.variantOverrides = mpExtracted.variants;
+      const res = await api.post(url, body);
       if (res.data.success) {
         const d = res.data.data;
         setMpExtracted({
@@ -506,7 +536,7 @@ className="flex items-center gap-2 bg-brand text-white px-4 py-2 rounded-lg text
                 <div className="col-span-2 text-right">Aksi</div>
               </div>
               {filteredProducts.map((p) => (
-                <div key={p.id} className="grid grid-cols-1 gap-2 p-4 rounded-xl border border-line dark:border-dline bg-surface dark:bg-dcard overflow-hidden">
+                <div key={p.id} onClick={() => openDetail(p)} className="grid grid-cols-1 gap-2 p-4 rounded-xl border border-line dark:border-dline bg-surface dark:bg-dcard overflow-hidden cursor-pointer hover:border-brand/50 transition">
                   <div className="flex items-center gap-3 min-w-0">
                     {p.primaryImageUrl ? (
                       <img src={p.primaryImageUrl} alt="" className="w-10 h-10 rounded-lg object-cover border border-line shrink-0" />
@@ -522,7 +552,7 @@ className="flex items-center gap-2 bg-brand text-white px-4 py-2 rounded-lg text
                       )}
                     </div>
                     <button
-                      onClick={() => triggerUpload(p.id)}
+                      onClick={(e) => { e.stopPropagation(); triggerUpload(p.id); }}
                       disabled={uploadingId === p.id}
                       className="p-1.5 text-muted hover:text-brand hover:bg-brand-soft dark:hover:bg-brand/15 rounded-lg transition shrink-0 disabled:opacity-50"
                       title="Upload gambar produk"
@@ -538,7 +568,7 @@ className="flex items-center gap-2 bg-brand text-white px-4 py-2 rounded-lg text
                     <span className="text-muted">Stok:</span>
                     {stockBadge(p)}
                   </div>
-                  <div>
+                  <div className="flex items-center gap-2 flex-wrap">
                     <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${
                       p.source === 'magic_paste'
                         ? 'bg-brand-soft dark:bg-brand/15 text-brand'
@@ -546,17 +576,22 @@ className="flex items-center gap-2 bg-brand text-white px-4 py-2 rounded-lg text
                     }`}>
                       {p.source === 'magic_paste' ? 'Magic Paste' : 'Manual'}
                     </span>
+                    {p.hasVariants && (
+                      <span className="inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-purple-50 text-purple-700 dark:bg-purple-900/20 dark:text-purple-400">
+                        Ada varian
+                      </span>
+                    )}
                   </div>
                   <div className="flex justify-end gap-1 pt-1">
                     <button
-                      onClick={() => openEdit(p)}
+                      onClick={(e) => { e.stopPropagation(); openEdit(p); }}
                       className="p-2 text-muted hover:text-brand hover:bg-brand-soft dark:hover:bg-brand/15 rounded-lg transition"
                       title="Edit"
                     >
                       <Pencil className="w-4 h-4" />
                     </button>
                     <button
-                      onClick={() => handleDelete(p)}
+                      onClick={(e) => { e.stopPropagation(); handleDelete(p); }}
                       disabled={deletingId === p.id}
                       className="p-2 text-muted hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition disabled:opacity-50"
                       title="Hapus"
@@ -568,6 +603,83 @@ className="flex items-center gap-2 bg-brand text-white px-4 py-2 rounded-lg text
               ))}
             </div>
           )}
+        </div>
+      )}
+
+      {/* ── PRODUCT DETAIL MODAL ── */}
+      {detailProduct && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={closeDetail}>
+          <div className="bg-surface dark:bg-dcard rounded-xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 py-4 border-b border-line dark:border-dline">
+              <h2 className="font-display font-bold text-navy dark:text-surface">Detail Produk</h2>
+              <button onClick={closeDetail} className="text-muted hover:text-ink dark:text-muted dark:hover:text-surface">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-5 space-y-4">
+              {detailLoading ? (
+                <div className="flex justify-center py-8">
+                  <Loader2 className="w-6 h-6 animate-spin text-brand" />
+                </div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                    <div>
+                      <span className="text-xs text-muted block mb-0.5">Nama</span>
+                      <p className="font-medium text-ink dark:text-surface">{detailProduct.name}</p>
+                    </div>
+                    <div>
+                      <span className="text-xs text-muted block mb-0.5">SKU</span>
+                      <p className="font-medium text-ink dark:text-surface">{detailProduct.sku || '—'}</p>
+                    </div>
+                    <div>
+                      <span className="text-xs text-muted block mb-0.5">Harga</span>
+                      <p className="font-medium text-ink dark:text-surface">{formatRupiah(detailProduct.price)}</p>
+                    </div>
+                    <div>
+                      <span className="text-xs text-muted block mb-0.5">Stok</span>
+                      <p className="font-medium text-ink dark:text-surface">{detailProduct.stock != null ? detailProduct.stock : 'Tak terbatas'}</p>
+                    </div>
+                    <div>
+                      <span className="text-xs text-muted block mb-0.5">Berat</span>
+                      <p className="font-medium text-ink dark:text-surface">{detailProduct.weight ? `${detailProduct.weight} gram` : '—'}</p>
+                    </div>
+                    <div>
+                      <span className="text-xs text-muted block mb-0.5">Sumber</span>
+                      <p className="font-medium text-ink dark:text-surface">{detailProduct.source === 'magic_paste' ? 'Magic Paste' : 'Manual'}</p>
+                    </div>
+                    <div className="sm:col-span-2">
+                      <span className="text-xs text-muted block mb-0.5">Deskripsi</span>
+                      <p className="text-sm text-ink dark:text-surface whitespace-pre-wrap">{detailProduct.description || '—'}</p>
+                    </div>
+                  </div>
+                  {detailVariants.length > 0 && (
+                    <div className="mt-4 pt-4 border-t border-line dark:border-dline">
+                      <span className="text-xs text-muted block mb-2">Varian ({detailVariants.length})</span>
+                      <div className="space-y-2">
+                        {detailVariants.map((v) => (
+                          <div key={v.id} className="flex items-center justify-between rounded-lg border border-line dark:border-dline px-3 py-2 text-sm">
+                            <span className="font-medium text-ink dark:text-surface">
+                              {Object.entries(v.attributes).map(([_, val]) => `${val}`).join(' / ')}
+                            </span>
+                            <span className="text-muted">{formatRupiah(v.price)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+            <div className="flex justify-end gap-2 px-5 py-4 border-t border-line dark:border-dline">
+              <button onClick={closeDetail} className="px-4 py-2 rounded-lg text-sm font-medium text-muted dark:text-muted border border-line dark:border-dline hover:bg-surface dark:hover:bg-dline transition">
+                Tutup
+              </button>
+              <button onClick={() => { closeDetail(); openEdit(detailProduct); }} className="px-4 py-2 rounded-lg text-sm font-semibold bg-brand text-white hover:bg-brand-deep transition">
+                Edit
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

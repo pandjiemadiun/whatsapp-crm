@@ -115,6 +115,32 @@ router.get('/my', async (req: AuthenticatedRequest, res: Response) => {
   }
 });
 
+// ─── GET /api/products/my/:productId — detail produk milik sendiri ───
+router.get('/my/:productId', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const storeId = req.user!.storeId;
+    const { productId } = req.params;
+
+    const product = await productService.getProductById(productId);
+    if (product.storeId !== storeId) {
+      return res.status(403).json({ error: 'Produk bukan milik toko Anda' });
+    }
+
+    const variants = await prisma.productVariant.findMany({
+      where: { productId, storeId, isActive: true },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    res.json({ success: true, data: { ...product, variants } });
+  } catch (error: any) {
+    adapters.logger.error('Get store product detail failed', error as Error);
+    if (error instanceof ApiError) {
+      return res.status(error.statusCode).json({ error: error.message });
+    }
+    res.status(500).json({ error: 'Gagal memuat detail produk' });
+  }
+});
+
 // ─── POST /api/products/my — create produk ───
 router.post('/my', validateRequest(createStoreProductSchema, 'body'), async (req: AuthenticatedRequest, res: Response) => {
   try {
