@@ -9,7 +9,7 @@ import { prisma } from '../infrastructure/prisma.js';
 import { adapters } from '../adapters/container.js';
 import { ApiError } from '../errors/ApiError.js';
 import { ErrorCodes } from '../constants/errorCodes.js';
-import { variantOverrideSchema } from '../schemas/index.js';
+import { variantOverrideSchema, createVariantSchema, updateVariantSchema, CreateVariantInput, UpdateVariantInput } from '../schemas/index.js';
 
 const router = Router();
 
@@ -138,6 +138,149 @@ router.get('/my/:productId', async (req: AuthenticatedRequest, res: Response) =>
       return res.status(error.statusCode).json({ error: error.message });
     }
     res.status(500).json({ error: 'Gagal memuat detail produk' });
+  }
+});
+
+// ─── GET /api/products/my/:productId/variants — list varian produk milik sendiri ───
+router.get('/my/:productId/variants', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const storeId = req.user!.storeId;
+    const { productId } = req.params;
+
+    const product = await prisma.product.findFirst({
+      where: { id: productId, storeId, deletedAt: null },
+    });
+    if (!product) {
+      return res.status(404).json({ error: 'Produk tidak ditemukan' });
+    }
+
+    const variants = await productService.listVariants(productId, storeId);
+    res.json({ success: true, data: { variants } });
+  } catch (error: any) {
+    adapters.logger.error('List store product variants failed', error as Error);
+    if (error instanceof ApiError) {
+      return res.status(error.statusCode).json({ error: error.message });
+    }
+    res.status(500).json({ error: 'Gagal memuat varian produk' });
+  }
+});
+
+// ─── POST /api/products/my/:productId/variants — buat varian baru ───
+router.post(
+  '/my/:productId/variants',
+  validateRequest(createVariantSchema, 'body'),
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const storeId = req.user!.storeId;
+      const { productId } = req.params;
+      const body = getValidated<CreateVariantInput>(req);
+
+      const product = await prisma.product.findFirst({
+        where: { id: productId, storeId, deletedAt: null },
+      });
+      if (!product) {
+        return res.status(404).json({ error: 'Produk tidak ditemukan' });
+      }
+
+      if (body.sku) {
+        const existingSku = await prisma.productVariant.findFirst({
+          where: { storeId, sku: body.sku, id: { not: '' } },
+        });
+        if (existingSku) {
+          return res.status(400).json({ error: `SKU "${body.sku}" sudah ada di toko ini` });
+        }
+      }
+
+      const variant = await productService.createVariant(productId, storeId, {
+        price: body.price,
+        stock: body.stock,
+        sku: body.sku,
+        attributes: body.attributes,
+      });
+
+      adapters.logger.info('Store variant created', { variantId: variant.id, productId, storeId });
+      res.status(201).json({ success: true, message: 'Varian berhasil dibuat', data: variant });
+    } catch (error: any) {
+      adapters.logger.error('Create store variant failed', error as Error);
+      if (error instanceof ApiError) {
+        return res.status(error.statusCode).json({ error: error.message });
+      }
+      res.status(500).json({ error: 'Gagal membuat varian' });
+    }
+  }
+);
+
+// ─── PATCH /api/products/my/variants/:variantId — update varian ───
+router.patch(
+  '/my/variants/:variantId',
+  validateRequest(updateVariantSchema, 'body'),
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const storeId = req.user!.storeId;
+      const { variantId } = req.params;
+      const body = getValidated<UpdateVariantInput>(req);
+
+      const variant = await prisma.productVariant.findUnique({
+        where: { id: variantId },
+        include: { product: { select: { storeId: true, id: true } } },
+      });
+      if (!variant || variant.product.storeId !== storeId) {
+        return res.status(404).json({ error: 'Varian tidak ditemukan' });
+      }
+
+      if (body.sku !== undefined && body.sku !== variant.sku) {
+        const duplicateSku = await prisma.productVariant.findFirst({
+          where: { storeId, sku: body.sku, id: { not: variantId } },
+        });
+        if (duplicateSku) {
+          return res.status(400).json({ error: `SKU "${body.sku}" sudah ada di toko ini` });
+        }
+      }
+
+      const updated = await productService.updateVariant(variantId, variant.product.id, storeId, {
+        ...(body.price !== undefined ? { price: body.price } : {}),
+        ...(body.stock !== undefined ? { stock: body.stock } : {}),
+        ...(body.sku !== undefined ? { sku: body.sku } : {}),
+        ...(body.attributes !== undefined ? { attributes: body.attributes } : {}),
+        ...(body.isActive !== undefined ? { isActive: body.isActive } : {}),
+      });
+
+      adapters.logger.info('Store variant updated', { variantId, productId: variant.product.id });
+      res.json({ success: true, message: 'Varian berhasil diupdate', data: updated });
+    } catch (error: any) {
+      adapters.logger.error('Update store variant failed', error as Error);
+      if (error instanceof ApiError) {
+        return res.status(error.statusCode).json({ error: error.message });
+      }
+      res.status(500).json({ error: 'Gagal mengupdate varian' });
+    }
+  }
+);
+
+// ─── DELETE /api/products/my/variants/:variantId — hapus varian ───
+router.delete('/my/variants/:variantId', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const storeId = req.user!.storeId;
+    const { variantId } = req.params;
+
+    const variant = await prisma.productVariant.findUnique({
+      where: { id: variantId },
+      include: { product: { select: { storeId: true, id: true } } },
+    });
+    if (!variant || variant.product.storeId !== storeId) {
+      return res.status(404).json({ error: 'Varian tidak ditemukan' });
+    }
+
+    await productService.deleteVariant(variantId, variant.product.id, storeId);
+
+    adapters.logger.info('Store variant deleted', { variantId, productId: variant.product.id });
+    res.status(204).send();
+  } catch (error: any) {
+    adapters.logger.error('Delete store variant failed', error as Error);
+    if (error instanceof ApiError) {
+      return res.status(error.statusCode).json({ error: error.message });
+    }
+    res.status(500).json({ error: 'Gagal menghapus varian' });
   }
 });
 

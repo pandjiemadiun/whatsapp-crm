@@ -291,16 +291,22 @@ export class ProductService {
   }
 
   /**
-   * Soft-delete produk (set deletedAt).
+   * Soft-delete produk (set deletedAt) + hard-delete varian terkait
+   * (cascade karena ProductVariant tidak punya soft-delete flag).
    */
   async deleteProduct(productId: string): Promise<void> {
     await this.getProductById(productId);
     try {
-      await prisma.product.update({
-        where: { id: productId },
-        data: { deletedAt: new Date(), isActive: false },
-      });
-      adapters.logger.info('Product soft-deleted', { productId });
+      await prisma.$transaction([
+        prisma.product.update({
+          where: { id: productId },
+          data: { deletedAt: new Date(), isActive: false },
+        }),
+        prisma.productVariant.deleteMany({
+          where: { productId },
+        }),
+      ]);
+      adapters.logger.info('Product soft-deleted with variants', { productId });
     } catch (error) {
       adapters.logger.error('Failed to delete product', error as Error, { productId });
       throw new ApiError(ErrorCodes.ERR_DB, 'Failed to delete product');

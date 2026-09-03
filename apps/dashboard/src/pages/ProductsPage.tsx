@@ -26,6 +26,18 @@ interface Category {
   name: string;
 }
 
+interface MpVariantAttr {
+  key: string;
+  value: string;
+}
+
+interface MpVariant {
+  attributes: MpVariantAttr[];
+  price: string;
+  stock: string;
+  sku: string;
+}
+
 interface MagicPasteExtracted {
   name: string | null;
   price: number | null;
@@ -99,6 +111,8 @@ export default function ProductsPage() {
   const [editing, setEditing] = useState<Product | null>(null);
   const [form, setForm] = useState(EMPTY_FORM);
   const [formError, setFormError] = useState('');
+  const [editVariants, setEditVariants] = useState<Array<{ id?: string; attributes: MpVariantAttr[]; price: string; stock: string; sku: string }>>([]);
+  const [editVariantsLoading, setEditVariantsLoading] = useState(false);
   const [detailProduct, setDetailProduct] = useState<Product | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailVariants, setDetailVariants] = useState<Array<{ id: string; price: number; attributes: Record<string, string>; stock: number | null; sku: string | null }>>([]);
@@ -123,7 +137,76 @@ export default function ProductsPage() {
       warning: string[] | null;
     }>;
     summary: { total: number; success: number; failed: number; skipped: number };
-  } | null>(null);
+   } | null>(null);
+
+  // ── Magic Paste — merchant-edited variant state (PV-P3 preview edit) ──
+  const [mpVariants, setMpVariants] = useState<MpVariant[]>([]);
+
+  const syncMpVariantsFromExtracted = (extracted: MagicPasteExtracted | null) => {
+    if (!extracted?.variants?.length) {
+      setMpVariants([]);
+      return;
+    }
+    setMpVariants(
+      extracted.variants.map((v) => ({
+        attributes: Object.entries(v.attributes ?? {}).map(([key, value]) => ({ key, value: String(value ?? '') })),
+        price: v.price === undefined ? '' : String(v.price),
+        stock: v.stock == null ? '' : String(v.stock),
+        sku: v.sku ?? '',
+      }))
+    );
+  };
+
+  const addMpVariant = () =>
+    setMpVariants((prev) => [...prev, { attributes: [{ key: '', value: '' }], price: '', stock: '', sku: '' }]);
+
+  const removeMpVariant = (idx: number) =>
+    setMpVariants((prev) => prev.filter((_, i) => i !== idx));
+
+  const clearAllMpVariants = () => {
+    if (window.confirm('Hapus semua varian? Produk akan dibuat sebagai simple product.')) {
+      setMpVariants([]);
+    }
+  };
+
+  const updateMpVariantField = (idx: number, field: 'price' | 'stock' | 'sku', value: string) => {
+    setMpVariants((prev) => prev.map((v, i) => (i === idx ? { ...v, [field]: value } : v)));
+  };
+
+  const updateMpAttr = (vi: number, ai: number, field: 'key' | 'value', value: string) => {
+    setMpVariants((prev) =>
+      prev.map((v, i) =>
+        i === vi ? { ...v, attributes: v.attributes.map((a, j) => (j === ai ? { ...a, [field]: value } : a)) } : v
+      )
+    );
+  };
+
+  const addMpAttr = (vi: number) => {
+    setMpVariants((prev) =>
+      prev.map((v, i) => (i === vi ? { ...v, attributes: [...v.attributes, { key: '', value: '' }] } : v))
+    );
+  };
+
+  const removeMpAttr = (vi: number, ai: number) => {
+    setMpVariants((prev) =>
+      prev.map((v, i) => (i === vi ? { ...v, attributes: v.attributes.filter((_, j) => j !== ai) } : v))
+    );
+  };
+
+  const mpVariantsToOverrides = (): Array<{ attributes: Record<string, string>; price: number; stock: number | null; sku: string | null }> => {
+    return mpVariants.map((v) => {
+      const attrs: Record<string, string> = {};
+      for (const a of v.attributes) {
+        if (a.key.trim()) attrs[a.key.trim()] = a.value.trim();
+      }
+      return {
+        attributes: attrs,
+        price: Number(v.price),
+        stock: v.stock.trim() === '' ? null : Number(v.stock),
+        sku: v.sku.trim() === '' ? null : v.sku.trim(),
+      };
+    });
+  };
 
   const showFeedback = (type: 'success' | 'error', msg: string) => {
     setFeedback({ type, msg });
@@ -169,7 +252,7 @@ export default function ProductsPage() {
     setModalOpen(true);
   };
 
-  const openEdit = (p: Product) => {
+  const openEdit = async (p: Product) => {
     setEditing(p);
     setForm({
       name: p.name,
@@ -179,7 +262,29 @@ export default function ProductsPage() {
       categoryId: p.categoryId || '',
     });
     setFormError('');
+    setEditVariants([]);
     setModalOpen(true);
+
+    if (p.hasVariants) {
+      setEditVariantsLoading(true);
+      try {
+        const res = await api.get(`/products/my/${p.id}/variants`);
+        const variants = res.data.data.variants ?? [];
+        setEditVariants(
+          variants.map((v: any) => ({
+            id: v.id,
+            attributes: Object.entries(v.attributes ?? {}).map(([key, value]) => ({ key, value: String(value ?? '') })),
+            price: String(v.price ?? ''),
+            stock: v.stock == null ? '' : String(v.stock),
+            sku: v.sku ?? '',
+          }))
+        );
+      } catch {
+        setEditVariants([]);
+      } finally {
+        setEditVariantsLoading(false);
+      }
+    }
   };
 
   const openDetail = async (p: Product) => {
@@ -227,6 +332,29 @@ export default function ProductsPage() {
     try {
       if (editing) {
         await api.put(`/products/my/${editing.id}`, payload);
+        if (editing.hasVariants) {
+          for (const ev of editVariants) {
+            const attrs: Record<string, string> = {};
+            for (const a of ev.attributes) {
+              if (a.key.trim()) attrs[a.key.trim()] = a.value.trim();
+            }
+            if (ev.id) {
+              await api.patch(`/products/my/variants/${ev.id}`, {
+                price: Number(ev.price),
+                stock: ev.stock.trim() === '' ? null : Number(ev.stock),
+                sku: ev.sku.trim() || undefined,
+                attributes: attrs,
+              });
+            } else if (attrs && Object.keys(attrs).length > 0 && ev.price) {
+              await api.post(`/products/my/${editing.id}/variants`, {
+                price: Number(ev.price),
+                stock: ev.stock.trim() === '' ? null : Number(ev.stock),
+                sku: ev.sku.trim() || undefined,
+                attributes: attrs,
+              });
+            }
+          }
+        }
         showFeedback('success', 'Produk berhasil diupdate');
       } else {
         await api.post('/products/my', payload);
@@ -239,6 +367,36 @@ export default function ProductsPage() {
     } finally {
       setSaving(false);
     }
+  };
+
+  const addEditVariant = () =>
+    setEditVariants((prev) => [...prev, { id: undefined, attributes: [{ key: '', value: '' }], price: '', stock: '', sku: '' }]);
+
+  const removeEditVariant = (idx: number) =>
+    setEditVariants((prev) => prev.filter((_, i) => i !== idx));
+
+  const updateEditVariantField = (idx: number, field: 'price' | 'stock' | 'sku', value: string) => {
+    setEditVariants((prev) => prev.map((v, i) => (i === idx ? { ...v, [field]: value } : v)));
+  };
+
+  const updateEditAttr = (vi: number, ai: number, field: 'key' | 'value', value: string) => {
+    setEditVariants((prev) =>
+      prev.map((v, i) =>
+        i === vi ? { ...v, attributes: v.attributes.map((a, j) => (j === ai ? { ...a, [field]: value } : a)) } : v
+      )
+    );
+  };
+
+  const addEditAttr = (vi: number) => {
+    setEditVariants((prev) =>
+      prev.map((v, i) => (i === vi ? { ...v, attributes: [...v.attributes, { key: '', value: '' }] } : v))
+    );
+  };
+
+  const removeEditAttr = (vi: number, ai: number) => {
+    setEditVariants((prev) =>
+      prev.map((v, i) => (i === vi ? { ...v, attributes: v.attributes.filter((_, j) => j !== ai) } : v))
+    );
   };
 
   const handleDelete = (p: Product) => {
@@ -349,11 +507,14 @@ export default function ProductsPage() {
       const url = create ? '/products/my/magic-paste' : '/products/my/magic-paste?preview=true';
       const body: Record<string, unknown> = { text };
       if (overrides) body.overrides = overrides;
-      if (create && mpExtracted?.variants?.length) body.variantOverrides = mpExtracted.variants;
+      if (create) {
+        const overridesToSend = mpVariants.length > 0 ? mpVariantsToOverrides() : (mpExtracted?.variants ?? []);
+        if (overridesToSend.length) body.variantOverrides = overridesToSend;
+      }
       const res = await api.post(url, body);
       if (res.data.success) {
         const d = res.data.data;
-        setMpExtracted({
+        const nextExtracted: MagicPasteExtracted = {
           name: d.extractedEntities?.name ?? null,
           price: d.extractedEntities?.price ?? null,
           stock: d.extractedEntities?.stock ?? null,
@@ -363,7 +524,9 @@ export default function ProductsPage() {
           weight: d.extractedEntities?.weight ?? null,
           variants: d.extractedEntities?.variants ?? null,
           variantConfidence: d.extractedEntities?.variantConfidence ?? null,
-        });
+        };
+        setMpExtracted(nextExtracted);
+        syncMpVariantsFromExtracted(nextExtracted);
         setMpBatch(null);
         if (create && d.needsWeightInput) {
           setMpEdit(true);
@@ -373,6 +536,7 @@ export default function ProductsPage() {
           showFeedback('success', 'Produk berhasil dibuat via Magic Paste!');
           setMpText('');
           setMpExtracted(null);
+          setMpVariants([]);
           loadProducts();
         } else {
           setMpEdit(false);
@@ -931,17 +1095,125 @@ className="flex items-center gap-2 bg-brand text-white px-4 py-2 rounded-lg text
                   <p className="font-medium text-ink dark:text-surface">{mpExtracted.categoryHint || mpExtracted.categoryId || '—'}</p>
                 </div>
               </div>
-              {mpExtracted.variants && mpExtracted.variants.length > 0 && (
+              {mpVariants.length > 0 && (
                 <div className="mt-3 pt-3 border-t border-line dark:border-dline">
-                  <span className="text-xs text-muted block mb-1">Varian terdeteksi ({mpExtracted.variants.length})</span>
-                  <div className="flex flex-wrap gap-2">
-                    {mpExtracted.variants.map((v) => (
-                      <span key={Math.random()} className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-brand-soft dark:bg-brand/15 text-xs font-medium text-brand">
-                        {Object.entries(v.attributes).map(([_, val]) => `${val}`).join(' / ')}
-                        <span className="text-brand/70">{formatRupiah(v.price)}</span>
-                      </span>
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs text-muted block">Varian ({mpVariants.length})</span>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={clearAllMpVariants}
+                        disabled={mpLoading}
+                        className="text-xs font-medium text-slate-600 underline decoration-slate-300 underline-offset-2 hover:text-slate-800 disabled:cursor-not-allowed"
+                      >
+                        Clear all
+                      </button>
+                    </div>
+                  </div>
+                  <div className="space-y-3">
+                    {mpVariants.map((v, vi) => (
+                      <div key={vi} className="rounded-lg border border-line dark:border-dline p-3 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-medium text-muted">Varian #{vi + 1}</span>
+                          <button
+                            type="button"
+                            onClick={() => removeMpVariant(vi)}
+                            disabled={mpLoading}
+                            className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                            aria-label={`Hapus varian #${vi + 1}`}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+
+                        {/* attributes (key/value pairs — konvensi ConfirmCreateModal) */}
+                        <div className="space-y-1.5">
+                          {v.attributes.map((a, ai) => (
+                            <div key={ai} className="flex items-center gap-1.5">
+                              <input
+                                type="text"
+                                value={a.key}
+                                onChange={(e) => updateMpAttr(vi, ai, 'key', e.target.value)}
+                                disabled={mpLoading}
+                                placeholder="size"
+                                className="w-1/2 rounded-lg border border-line dark:border-dline px-2 py-1 text-sm bg-surface dark:bg-dsurface text-ink focus:outline-none focus:ring-1 focus:ring-brand"
+                              />
+                              <input
+                                type="text"
+                                value={a.value}
+                                onChange={(e) => updateMpAttr(vi, ai, 'value', e.target.value)}
+                                disabled={mpLoading}
+                                placeholder="L"
+                                className="w-1/2 rounded-lg border border-line dark:border-dline px-2 py-1 text-sm bg-surface dark:bg-dsurface text-ink focus:outline-none focus:ring-1 focus:ring-brand"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => removeMpAttr(vi, ai)}
+                                disabled={mpLoading}
+                                className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                                aria-label="Hapus atribut"
+                              >
+                                <X className="h-3 w-3" />
+                              </button>
+                            </div>
+                          ))}
+                          <button
+                            type="button"
+                            onClick={() => addMpAttr(vi)}
+                            disabled={mpLoading}
+                            className="flex items-center gap-1 text-xs font-medium text-brand hover:text-brand-deep"
+                          >
+                            <Plus className="h-3 w-3" /> Tambah atribut
+                          </button>
+                        </div>
+
+                        {/* price / stock / sku */}
+                        <div className="grid grid-cols-3 gap-2">
+                          <div>
+                            <label className="block text-xs text-muted">Harga (IDR)</label>
+                            <input
+                              type="number"
+                              value={v.price}
+                              onChange={(e) => updateMpVariantField(vi, 'price', e.target.value)}
+                              disabled={mpLoading}
+                              placeholder="10000"
+                              className="mt-0.5 w-full rounded-lg border border-line dark:border-dline px-2 py-1 text-sm bg-surface dark:bg-dsurface text-ink focus:outline-none focus:ring-1 focus:ring-brand"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs text-muted">Stok</label>
+                            <input
+                              type="number"
+                              value={v.stock}
+                              onChange={(e) => updateMpVariantField(vi, 'stock', e.target.value)}
+                              disabled={mpLoading}
+                              placeholder="100"
+                              className="mt-0.5 w-full rounded-lg border border-line dark:border-dline px-2 py-1 text-sm bg-surface dark:bg-dsurface text-ink focus:outline-none focus:ring-1 focus:ring-brand"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs text-muted">SKU</label>
+                            <input
+                              type="text"
+                              value={v.sku}
+                              onChange={(e) => updateMpVariantField(vi, 'sku', e.target.value)}
+                              disabled={mpLoading}
+                              placeholder="opsional"
+                              className="mt-0.5 w-full rounded-lg border border-line dark:border-dline px-2 py-1 text-sm bg-surface dark:bg-dsurface text-ink focus:outline-none focus:ring-1 focus:ring-brand"
+                            />
+                          </div>
+                        </div>
+                      </div>
                     ))}
                   </div>
+                  <button
+                    type="button"
+                    onClick={addMpVariant}
+                    disabled={mpLoading}
+                    className="mt-3 flex items-center gap-1.5 rounded-lg border border-line dark:border-dline px-3 py-1.5 text-sm font-medium text-ink dark:text-surface hover:bg-surface dark:hover:bg-dline disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <Plus className="h-3.5 w-3.5" /> Tambah varian
+                  </button>
                 </div>
               )}
               {mpExtracted.confidence < 0.8 && (
@@ -1034,6 +1306,123 @@ className="flex items-center gap-2 bg-brand text-white px-4 py-2 rounded-lg text
                   className="w-full resize-y rounded-lg border border-line dark:border-dline px-3 py-2 text-sm bg-surface dark:bg-dsurface text-ink placeholder-muted focus:outline-none focus:ring-2 focus:ring-brand"
                 />
               </div>
+
+              {/* ── Variant editing section (post-create) ── */}
+              {editing?.hasVariants && (
+                <div className="mt-4 pt-4 border-t border-line dark:border-dline space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-sm font-semibold text-ink dark:text-surface">Varian Produk</h3>
+                    <button
+                      type="button"
+                      onClick={addEditVariant}
+                      disabled={saving}
+                      className="flex items-center gap-1 rounded-lg border border-line dark:border-dline px-3 py-1.5 text-xs font-medium text-ink dark:text-surface hover:bg-surface dark:hover:bg-dline disabled:cursor-not-allowed disabled:opacity/50"
+                    >
+                      <Plus className="h-3.5 w-3.5" /> Tambah varian
+                    </button>
+                  </div>
+                  {editVariantsLoading ? (
+                    <div className="flex justify-center py-4">
+                      <Loader2 className="w-5 h-5 animate-spin text-brand" />
+                    </div>
+                  ) : editVariants.length === 0 ? (
+                    <p className="text-xs text-muted">Belum ada varian.</p>
+                  ) : (
+                    <div className="space-y-3">
+                      {editVariants.map((v, vi) => (
+                        <div key={vi} className="rounded-lg border border-line dark:border-dline p-3 space-y-2">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-medium text-muted">Varian #{vi + 1}</span>
+                            <button
+                              type="button"
+                              onClick={() => removeEditVariant(vi)}
+                              disabled={saving}
+                              className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                              aria-label={`Hapus varian #${vi + 1}`}
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                          <div className="space-y-1.5">
+                            {v.attributes.map((a, ai) => (
+                              <div key={ai} className="flex items-center gap-1.5">
+                                <input
+                                  type="text"
+                                  value={a.key}
+                                  onChange={(e) => updateEditAttr(vi, ai, 'key', e.target.value)}
+                                  disabled={saving}
+                                  placeholder="size"
+                                  className="w-1/2 rounded-lg border border-line dark:border-dline px-2 py-1 text-sm bg-surface dark:bg-dsurface text-ink focus:outline-none focus:ring-1 focus:ring-brand"
+                                />
+                                <input
+                                  type="text"
+                                  value={a.value}
+                                  onChange={(e) => updateEditAttr(vi, ai, 'value', e.target.value)}
+                                  disabled={saving}
+                                  placeholder="L"
+                                  className="w-1/2 rounded-lg border border-line dark:border-dline px-2 py-1 text-sm bg-surface dark:bg-dsurface text-ink focus:outline-none focus:ring-1 focus:ring-brand"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => removeEditAttr(vi, ai)}
+                                  disabled={saving}
+                                  className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                                  aria-label="Hapus atribut"
+                                >
+                                  <X className="h-3 w-3" />
+                                </button>
+                              </div>
+                            ))}
+                            <button
+                              type="button"
+                              onClick={() => addEditAttr(vi)}
+                              disabled={saving}
+                              className="flex items-center gap-1 text-xs font-medium text-brand hover:text-brand-deep"
+                            >
+                              <Plus className="h-3 w-3" /> Tambah atribut
+                            </button>
+                          </div>
+                          <div className="grid grid-cols-3 gap-2">
+                            <div>
+                              <label className="block text-xs text-muted">Harga (IDR)</label>
+                              <input
+                                type="number"
+                                value={v.price}
+                                onChange={(e) => updateEditVariantField(vi, 'price', e.target.value)}
+                                disabled={saving}
+                                placeholder="10000"
+                                className="mt-0.5 w-full rounded-lg border border-line dark:border-dline px-2 py-1 text-sm bg-surface dark:bg-dsurface text-ink focus:outline-none focus:ring-1 focus:ring-brand"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-xs text-muted">Stok</label>
+                              <input
+                                type="number"
+                                value={v.stock}
+                                onChange={(e) => updateEditVariantField(vi, 'stock', e.target.value)}
+                                disabled={saving}
+                                placeholder="100"
+                                className="mt-0.5 w-full rounded-lg border border-line dark:border-dline px-2 py-1 text-sm bg-surface dark:bg-dsurface text-ink focus:outline-none focus:ring-1 focus:ring-brand"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-xs text-muted">SKU</label>
+                              <input
+                                type="text"
+                                value={v.sku}
+                                onChange={(e) => updateEditVariantField(vi, 'sku', e.target.value)}
+                                disabled={saving}
+                                placeholder="opsional"
+                                className="mt-0.5 w-full rounded-lg border border-line dark:border-dline px-2 py-1 text-sm bg-surface dark:bg-dsurface text-ink focus:outline-none focus:ring-1 focus:ring-brand"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
             <div className="flex justify-end gap-2 px-5 py-4 border-t border-line dark:border-dline">
               <button
