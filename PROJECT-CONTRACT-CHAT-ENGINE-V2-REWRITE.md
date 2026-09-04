@@ -134,9 +134,53 @@ sebagai permanent regression test — bukan cuma fix sekali lalu hilang lagi.
 
 ## 7. keputusan owner sebelum P1
 
-§7.1 — Window canary: minimal 3 hari operasional NYATA DAN minimal 30 percakapan customer asli (bukan test sintetis), dengan syarat nol bug kritis selama window itu (false-cancel, silent-add-tanpa-echo, salah kirim varian/harga). Kalau ketemu bug kritis, window reset dari nol setelah fix — bukan lanjut hitungan lama.
-§7.2 — Toko canary: ganti dari store-f7140b5c (dummy lama, minim data) ke store-4f4f67bd (Bengkel Didik) — itu toko yang paling representatif (produk+varian nyata, dan sudah ketahuan riwayat bug-nya, jadi paling ketat mengetes perbaikan).
+§7.1 — Window canary: tergantung pada apakah ada merchant asli di sistem.
+
+> **UPDATE 4 Sep 2026**: TIDAK ADA toko produksi/merchant asli yang terdaftar
+> di sistem. SELURUH toko (termasuk store-4f4f67bd "Bengkel Didik") adalah data
+> uji/dummy. Akibatnya, syarat Fase 1 harus langsung dieksekusi — tidak perlu
+> menunggu merchant asli. Dokumen ini mencatat dua fase:
+
+**Fase 1 (Pre-merchant / sekarang)**: berjalan sampai ada merchant asli pertama
+terdaftar. Minimal 3 hari operasional + minimal 30 percakapan test manual yang
+terstruktur mensimulasikan skenario nyata, dengan syarat nol bug kritis selama
+window itu. WAJIB mereplay keempat skenario bug yang sudah ditemukan:
+  1. `false-cancel` — konfirmasi harga → kirim cancel tanpa konfirmasi ulang
+  2. `silent-ADD_TO_CART` — aksi berhasil tidak echo ke conversation_history
+  3. `magic-paste batch weight gate` — batch import produk melewati gerbang
+     berat otomatis tapi tidak meneruskan ke layer CartAuthority
+  4. `variant parsing ambigu` — parsing nama/varian yang ambigu menghasilkan
+     SKU yang salah
+
+Kalau ketemu bug kritis, window reset dari nol setelah fix — bukan lanjut
+hitungan lama.
+
+**Fase 2 (Post-merchant / sebelum full cutover)**: SELESAIKAN 30 percakapan
+customer asli (bukan test sintetis). Ini WAJIB dijalankan ulang — bukan cuma
+andalkan test dummy. Hanya setelah **Fase 1 hijau penuh** + owner explicit
+approve + **Fase 2 hijau penuh** → baru cutover ke SEMUA toko. Ini adalah
+kebijakan tambahan, bukan pelonggaran: regression gate tetap WAJIB di setiap unit.
+
+§7.2 — Toko canary: tetap store-4f4f67bd (Bengkel Didik). Meskipun ini adalah
+toko **dummy/test data** (bukan merchant asli — tidak ada toko produksi di
+sistem saat ini 4 Sep 2026), tetap dipilih sebagai canary store karena:
+- Punya riwayat bug nyata (false-cancel, silent-ADD_TO_CART) yang bisa
+  direplay sebagai regression test (lihat BENGKEL-DIDIK-BUG1-TRACE.md)
+- Data varian/produk paling lengkap di antara test store yang ada
+- Berguna sebagai regression bed — bukan test sintetis yang buta sama sekali
+
+Ganti dari store-f7140b5c (dummy lama, minim data) ke store-4f4f67bd.
+Fokus: gunakan riwayat bug-nya sebagai regression bed, bukan karena
+status "representatif produksi".
+
 §7.3 — Model AI: tidak dikunci ke 1 provider. Project ini sudah punya sistem provider dinamis (AIProviderConfig, resolver, N-provider rotation — sudah live sejak sesi lalu). Saya arahkan robot untuk PAKAI sistem itu untuk role intent-classification baru, jadi kualitas bisa dibandingkan lintas provider (Mistral/SambaNova/Gemini/Groq/dll) via test-connection yang sudah ada, tanpa hardcode ke satu vendor. Kalau nanti audit P1 nemu alasan teknis kenapa harus dikunci (mis. fitur structured-output cuma stabil di 1 provider), itu dilaporkan sebagai temuan, bukan diasumsikan dari awal.
+
+> **Amandemen kontrak (4 Sep 2026)**: Klarifikasi status data — seluruh toko
+> di sistem adalah data uji/dummy. §7.1 dan §7.2 diperbarui untuk mencerminkan
+> dua fase canary (pre-merchant test simulation + post-merchant real conversation
+> gate). Ini adalah ketentuan tambahan, bukan pelonggaran: regression gate
+> (test:chat + test:golden + test:structured + test:payment + test:shipping)
+> tetap WAJIB di setiap unit.
 
 ## 8. Approval Gate
 
