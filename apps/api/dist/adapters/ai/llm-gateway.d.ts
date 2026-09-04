@@ -41,11 +41,11 @@ export declare class LLMGateway {
     /** Resolve the dynamic-provider flag. Absence of the key => OFF (never throws). */
     private isDynamicProvidersEnabled;
     /**
-     * Resolve the primary/fallback adapter instances for this request.
-     * OFF (default): returns the original singletons -> OFF path runs UNCHANGED.
+     * Resolve the primary/fallback provider lists for this request.
+     * OFF (default): returns singleton lists -> OFF path runs UNCHANGED.
      * ON: reads active AIProviderConfig rows via the resolver (3a), highest-priority
      * first. Empty DB list for a role -> warn + fall back to the default singleton
-     * (customer chat is NOT disrupted; the cutover is safe by default).
+     * list (customer chat is NOT disrupted; the cutover is safe by default).
      *
      * NOTE: the gatekeeper is intentionally NOT resolved here. extractIntent is a
      * GroqAdapter-specific method (groq.adapter.ts:329) — not on AIProvider and
@@ -55,7 +55,6 @@ export declare class LLMGateway {
      * and `chat_gatekeeper` AIProviderConfig rows are cosmetic for now.
      */
     private resolveEffectiveProviders;
-    private warnEmptyRole;
     private isCircuitOpen;
     private recordSuccess;
     private recordFailure;

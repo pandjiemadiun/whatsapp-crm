@@ -79,11 +79,11 @@ export class LLMGateway {
         return enabled;
     }
     /**
-     * Resolve the primary/fallback adapter instances for this request.
-     * OFF (default): returns the original singletons -> OFF path runs UNCHANGED.
+     * Resolve the primary/fallback provider lists for this request.
+     * OFF (default): returns singleton lists -> OFF path runs UNCHANGED.
      * ON: reads active AIProviderConfig rows via the resolver (3a), highest-priority
      * first. Empty DB list for a role -> warn + fall back to the default singleton
-     * (customer chat is NOT disrupted; the cutover is safe by default).
+     * list (customer chat is NOT disrupted; the cutover is safe by default).
      *
      * NOTE: the gatekeeper is intentionally NOT resolved here. extractIntent is a
      * GroqAdapter-specific method (groq.adapter.ts:329) — not on AIProvider and
@@ -94,31 +94,14 @@ export class LLMGateway {
      */
     async resolveEffectiveProviders() {
         if (!(await this.isDynamicProvidersEnabled())) {
-            return { primary: this.primary, fallback: this.fallback };
+            return { primaryList: [this.primary], fallbackList: [this.fallback] };
         }
         const primaryList = await this.resolver.getProvidersForRole('chat_primary');
         const fallbackList = await this.resolver.getProvidersForRole('chat_fallback');
-        let primary;
-        if (primaryList.length > 0) {
-            primary = primaryList[0];
-        }
-        else {
-            this.warnEmptyRole('chat_primary');
-            primary = this.primary;
-        }
-        let fallback;
-        if (fallbackList.length > 0) {
-            fallback = fallbackList[0];
-        }
-        else {
-            this.warnEmptyRole('chat_fallback');
-            fallback = this.fallback;
-        }
-        return { primary, fallback };
-    }
-    warnEmptyRole(role) {
-        console.warn(`[LLMGateway] dynamic providers ON but role '${role}' returned 0 active ` +
-            `AIProviderConfig rows; falling back to default singleton provider.`);
+        return {
+            primaryList: primaryList.length > 0 ? primaryList : [this.primary],
+            fallbackList: fallbackList.length > 0 ? fallbackList : [this.fallback],
+        };
     }
     // ─── Circuit breaker (gateway-level, one owner) ─────────────────────────
     isCircuitOpen() {
@@ -199,63 +182,74 @@ export class LLMGateway {
         //   The gatekeeper is NOT swapped: extractIntent is GroqAdapter-specific
         //   (groq.adapter.ts:329), not on AIProvider; swapping it would silently
         //   degrade intent extraction. Gatekeeper cutover is deferred to Unit 5.
-        const { primary, fallback } = await this.resolveEffectiveProviders();
+        const { primaryList, fallbackList } = await this.resolveEffectiveProviders();
         // Circuit breaker gate
         if (this.isCircuitOpen()) {
             throw new CircuitOpenError('Gateway circuit breaker OPEN — AI providers exhausted');
         }
-        const primaryName = primary.getName();
-        const fallbackName = fallback.getName();
         let lastError = null;
-        const providers = [
-            { name: primaryName, provider: primary, key: 'primary' },
-            { name: fallbackName, provider: fallback, key: 'fallback' },
+        const roleLists = [
+            { providers: primaryList, roleKey: 'primary' },
+            { providers: fallbackList, roleKey: 'fallback' },
         ];
-        for (const { name, provider, key } of providers) {
-            // Per-provider cooldown via provider-cooldown service
-            if (shouldSkipProvider(name)) {
-                continue;
-            }
-            for (let attempt = 0; attempt < this.maxAttempts; attempt++) {
-                try {
-                    const response = await this.executeWithDeadline(provider, prompt, options);
-                    // Success — update all stats
-                    this.stats[key].success++;
-                    this.recordSuccess();
-                    // Token usage tracking
-                    logTokenUsage({
-                        timestamp: Date.now(),
-                        provider: response.provider,
-                        role: key === 'primary' ? 'chat_primary' : 'chat_fallback',
-                        model: response.model,
-                        intent,
-                        conversationId: options?.conversationId || 'unknown',
-                        inputTokens: response.tokens.input,
-                        outputTokens: response.tokens.output,
-                        totalTokens: response.tokens.input + response.tokens.output,
-                        costUsd: response.cost,
-                    });
-                    return response;
+        for (const { providers, roleKey } of roleLists) {
+            for (const provider of providers) {
+                const name = provider.getName();
+                if (shouldSkipProvider(name)) {
+                    continue;
                 }
-                catch (err) {
-                    const error = this.normalizeError(err, name);
-                    lastError = error;
-                    // Report rate-limited keys to cooldown router
-                    if (error.category === ErrorCategory.RATE_LIMIT || error.statusCode === 429) {
-                        triggerCooldown(error.provider || name, error.retryAfter ? error.retryAfter * 1000 : undefined);
+                for (let attempt = 0; attempt < this.maxAttempts; attempt++) {
+                    try {
+                        const response = await this.executeWithDeadline(provider, prompt, options);
+                        // Success — update all stats
+                        this.stats[roleKey].success++;
+                        this.recordSuccess();
+                        // Token usage tracking
+                        logTokenUsage({
+                            timestamp: Date.now(),
+                            provider: response.provider,
+                            role: roleKey === 'primary' ? 'chat_primary' : 'chat_fallback',
+                            model: response.model,
+                            intent,
+                            conversationId: options?.conversationId || 'unknown',
+                            inputTokens: response.tokens.input,
+                            outputTokens: response.tokens.output,
+                            totalTokens: response.tokens.input + response.tokens.output,
+                            costUsd: response.cost,
+                        });
+                        return response;
                     }
-                    const retryable = this.isRetryableError(error);
-                    if (!retryable) {
-                        this.stats[key].failed++;
-                        this.recordFailure();
-                        break; // non-retryable → move to next provider
-                    }
-                    if (attempt < this.maxAttempts - 1) {
-                        await this.sleep(this.backoffDelay(attempt));
-                    }
-                    else {
-                        this.stats[key].failed++;
-                        this.recordFailure();
+                    catch (err) {
+                        const error = this.normalizeError(err, name);
+                        lastError = error;
+                        // Report rate-limited providers to cooldown router
+                        if (error.category === ErrorCategory.RATE_LIMIT || error.statusCode === 429) {
+                            triggerCooldown(error.provider || name, error.retryAfter ? error.retryAfter * 1000 : undefined);
+                            // On 429/RATE_LIMIT: trigger cooldown and move to the NEXT provider
+                            // in the SAME role's list immediately (it just told us to slow down).
+                            // Only when there are 2+ providers in this role (dynamic ON path) —
+                            // with a single provider (OFF path / singleton) the original
+                            // retry-with-backoff behavior is preserved so the OFF path stays
+                            // completely unaffected.
+                            if (providers.length > 1) {
+                                this.stats[roleKey].failed++;
+                                this.recordFailure();
+                                break; // rate-limited → next provider in same role
+                            }
+                        }
+                        const retryable = this.isRetryableError(error);
+                        if (!retryable) {
+                            this.stats[roleKey].failed++;
+                            this.recordFailure();
+                            break; // non-retryable → move to next provider in same role
+                        }
+                        if (attempt < this.maxAttempts - 1) {
+                            await this.sleep(this.backoffDelay(attempt));
+                        }
+                        else {
+                            this.stats[roleKey].failed++;
+                            this.recordFailure();
+                        }
                     }
                 }
             }
