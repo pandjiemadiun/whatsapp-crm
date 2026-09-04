@@ -1,5 +1,6 @@
 .aider*
 .env*
+!.env.example
 .commandcode/
 .poolside/
 node_modules/
