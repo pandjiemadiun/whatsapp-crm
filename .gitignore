@@ -8,3 +8,4 @@ apps/*/screenshot-output/
 apps/screenshot-output/
 apps/api/logs/*.log
 marketplace/
+dist/
