@@ -21,7 +21,7 @@ export function resolvePending(ctx, message) {
         return { action: 'EXECUTE', ops: ctx.pending.ops };
     }
     // Baru cek negasi → ROLLBACK
-    if (NEGATIVE.some((neg) => message.includes(neg))) {
+    if (NEGATIVE.some((neg) => new RegExp(`\\b${neg}\\b`).test(message))) {
         return { action: 'ROLLBACK', snapshot: ctx.pending.snapshot };
     }
     // Retry maks 1, lalu escelate
