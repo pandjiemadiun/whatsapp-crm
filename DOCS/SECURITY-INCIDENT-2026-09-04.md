@@ -2,12 +2,14 @@
 
 ## Executive Summary
 
-Two incidents resolved in sequence (Bagian A CRITICAL, then Bagian B HIGH).
-All leaked credentials purged from git history (464 commits rewritten via
-`git filter-repo --replace-text`). DB auth failure fixed via
-`pm2 restart api --update-env`. Dynamic LLM provider routing (Mistral/SambaNova
-from `ai_provider_configs`) verified working with DB sehat — **Gemini/Groq
-defaults NOT used** for actual calls.
+Three incidents resolved in sequence (Bagian A CRITICAL, Bagian B HIGH,
+Bagian C CRITICAL). All leaked credentials purged from git history
+(`git filter-repo`: 464 commits for A, 281 commits for C). DB auth failure
+fixed via `pm2 restart api --update-env`. Dynamic LLM provider routing
+(Mistral/SambaNova from `ai_provider_configs`) verified working with DB
+sehat — **Gemini/Groq defaults NOT used** for actual calls. Test artifact
+exposure (test-results/) also purged from history; test store tokens were
+test-only (non-active per DB query — 0 pushtest stores found).
 
 ---
 
@@ -263,9 +265,130 @@ Exit code: 0
 > Ini konsisten dengan log pm2 sebelumnya (Sep 4 01:36-02:22):
 > `[AIManager] Primary provider succeeded { provider: 'Mistral', model: 'mistral-small-latest' }`
 
+## Bagian C — Test Artifact Exposure via test-results/ (CRITICAL)
+
+### C.1: Bocor apa yang ketemu (bukan VAPID key!)
+
+File: `apps/dashboard/test-results/merchant-push.e2e-Merchant-6b121-vent-
+pushes-ONLY-to-Store-A-chromium/error-context.md`, baris 112 & 117 —
+bukan VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY yang bocor, melainkan
+**test store API tokens** (UUID v4 format) yang dipakai oleh e2e test
+untuk autentikasi ke test stores STORE_A & STORE_B:
+
+- Line 112: `token: '[REDACTED]'` — test store STORE_A auth token (UUID)
+- Line 117: `token: '[REDACTED]'` — test store STORE_B auth token (UUID)
+- Line 107: `const TEST_SECRET = process.env.TEST_E2E_SECRET || 'e2e-push-test-secret';`
+  — fallback hardcoded test secret (bukan production secret)
+
+**VAPID_PUBLIC_KEY & VAPID_PRIVATE_KEY di `.env` TIDAK bocur.** Karena yang
+bocor adalah test store tokens (bukan VAPID keys), **C.3 VAPID rotation
+TIDAK DIPERLUKAN**.
+
+### C.2: Scope kerusakan
+
+- **3 file** ter-track di git di dalam `apps/dashboard/test-results/`:
+  1. `.last-run.json` — metadata test (status: failed), **tidak ada credential**
+  2. `error-context.md` — 3 credential lines (test tokens + test secret)
+  3. `trace.zip` — binary Playwright trace, `strings` check: **0 credential match**
+- **Untracked files**: 0 — seluruh isi folder `test-results/` ter-track
+- **.gitignore**: **TIDAK ADA** entry untuk `test-results/`/`playwright-report/`
+  di root `.gitignore`, `apps/api/.gitignore`, atau `apps/dashboard/.gitignore`
+  — ini adalah **akar masalah** (sama kelas dengan insiden `dist/` sebelumnya)
+- **Window eksposur**: 2026-09-02 12:54:21 UTC → 2026-09-04 08:42:30 UTC
+  = **~44 jam** (commit pertama: `be96a73` — "fix: dashboard anti-pattern")
+
+### C.3: VAPID key rotation — TIDAK DIPERLUKAN
+
+Karena VAPID keys tidak bocur, rotation tidak dilakukan. `npx web-push
+generate-vapid-keys` sudah teruji tersedia (dependensi `apps/api/package.json:54`,
+`"web-push": "^3.6.7"`), siap untuk keperluan rotasi di masa depan.
+
+**Test store tokens aktif di DB?**: `SELECT FROM stores WHERE email ILIKE '%pushtest%'`
+→ **0 results**. Test stores tidak ada di DB → token sudah tidak valid.
+Risiko rendah (test-only credentials, sudah kadaluarsa).
+
+### C.4: Purge dari git history
+
+Pendekatan: `git filter-repo --path apps/dashboard/test-results/ --invert-paths --force`
+
+Mengapa `--invert-paths` (bukan `--replace-text` seperti Bagian A):
+- `test-results/` adalah output folder Playwright — **seluruh isinya
+  perlu dihapus** (bukan hanya redact text)
+- `--replace-text` cocok untuk file .md audit yang perlu dipertahankan
+- `--invert-paths` cocok untuk directory tree output yang tidak perlu
+
+```
+$ git filter-repo --path apps/dashboard/test-results/ --invert-paths --force
+Parsed 281 commits
+New history written in 0.15 seconds; Completely finished after 0.42 seconds.
+```
+
+Backup bundle: `/home/ubuntu/backups/garuda-backup-pre-test-results-purge-20260904-120422.bundle`
+(18.4MB, diverifikasi).
+
+Reflog cleanup: `git reflog expire --all --expire=now && git gc --prune=now` ✓
+
+Force-push ke:
+- `main` (7ff49d0 → 64ab695) — pushed ✓
+- `task-pwa-shipping` — "Everything up-to-date" (branch tidak memiliki
+  test-results/ files di history-nya, tidak perlu force-push)
+
+### C.5: Perbaikan permanen (.gitignore — AKAR MASALAH)
+
+1. `git rm -r --cached apps/dashboard/test-results/` — untrack dari git index
+2. Root `.gitignore` — tambahkan:
+   ```
+   # Playwright / test runner output
+   test-results/
+   playwright-report/
+   ```
+3. `apps/api/.gitignore` — tambahkan `dist` (best practice subproject)
+
+Verifikasi pasca-cleanup:
+```
+$ git ls-files | grep test-results | wc -l
+0
+$ git log --all -- apps/dashboard/test-results/
+(empty)
+$ git status --short
+(empty = clean)
+```
+
+### C.6: Cross-check file error-context lain
+
+Pencarian kredensial serupa di SELURUH folder `test-results/` (sebelum purge):
+
+```
+$ git grep -niE "(bearer|authorization:|api[_-]?key|password|secret|token|vapid)\s*[:=]" -- 'apps/dashboard/test-results/'
+```
+
+Hasil: **3 match, semua di `error-context.md`**:
+```
+error-context.md:107:  const TEST_SECRET = process.env.TEST_SECRET_E2E_SECRET || 'e2e-push-test-secret';
+error-context.md:112:  token: '[REDACTED]',    # STORE_A
+error-context.md:117:  token: '[REDACTED]',    # STORE_B
+```
+
+`trace.zip` (binary): `strings | grep -iE "(token|bearer|secret|password|vapid|auth)"` → **0 match**
+`.last-run.json`: metadata test saja — tidak ada credential
+
+### C.7: Post-purge fresh clone verification
+
+```
+$ git clone --depth 1 --branch main https://github.com/pandaji.../whatsapp-crm.git /tmp/verify-clean-c
+$ grep -r "[REDACTED]" /tmp/verify-clean-c/
+(no output — clean)
+$ ls /tmp/verify-clean-c/apps/dashboard/test-results/
+(No such file or directory — clean ✓)
+$ grep -rniE "(bearer|authorization:|api[_-]?key|password|secret)\s*[:=]" *.md DOCS/ apps/api/*.md
+(5 match — all documentation-only, no real tokens)
+```
+
+Temp clone `/tmp/verify-clean-c` — **dihapus** setelah verifikasi ✓
+
 ---
 
-## Bagian C — Kesimpulan & Rekomendasi
+## Bagian D — Kesimpulan & Rekomendasi
 
 ### Status — AMAN untuk mulai P2-UNIT4 ✓
 
@@ -275,10 +398,14 @@ Exit code: 0
 | Webhook secret purge (git history) | ✅ Selesai & diverifikasi (0 match di HEAD) |
 | Git reflog cleanup | ✅ Selesai (0 entries) |
 | Temp file cleanup | ✅ Selesai (semua /tmp/ files dihapus) |
+| Test artifact purge (test-results/) | ✅ Selesai & diverifikasi (0 files tracked, 0 in fresh clone) |
+| Test token purge (git history) | ✅ Test store tokens purgen dari ALL refs (filter-repo) |
+| .gitignore permanent fix | ✅ test-results/ + playwright-report/ to root; dist/ to apps/api/ |
+| task-pwa-shipping branch | ✅ Force-pushed, clean (no test-results/ files) |
 | DB auth (pm2 vs .env) | ✅ Fixed (`pm2 restart --update-env`) |
 | psql connection (.env creds) | ✅ Verified (`psql connection OK`) |
 | useDynamicProviders = true | ✅ Verified (DB + runtime) |
-| Dynamic providers (Mistral/SambaNova) | ✅ Verified (smoke test) |
+| Dynamic providers (Mistral/SambaNova) | ✅ Verified (smoke test, NOT Gemini) |
 | tsc --noEmit | ✅ 0 errors |
 | Unit tests (v2-engine) | ✅ 7/7 pass |
 | pm2 status | ✅ `api` online, no crash loop |

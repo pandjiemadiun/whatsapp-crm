@@ -9,3 +9,6 @@ apps/screenshot-output/
 apps/api/logs/*.log
 marketplace/
 dist/
+# Playwright / test runner output
+test-results/
+playwright-report/
