@@ -132,6 +132,7 @@ export default function ProductsPage() {
       extractedEntities: MagicPasteExtracted | null;
       error: string | null;
       warning: string[] | null;
+      needsWeightInput?: boolean;
     }>;
     summary: { total: number; success: number; failed: number; skipped: number };
    } | null>(null);
@@ -352,6 +353,7 @@ export default function ProductsPage() {
           const d = res.data.data;
           const items = d.items.map((it: any) => ({
             ...it,
+            needsWeightInput: (it.warning ?? []).some((w: string) => /berat/i.test(w)),
             extractedEntities: it.extractedEntities
               ? {
                   name: it.extractedEntities?.name ?? null,
@@ -435,8 +437,16 @@ export default function ProductsPage() {
     try {
       const res = await api.post('/products/my/magic-paste/batch', { text });
       if (res.data.success) {
-        const s = res.data.data.summary;
-        showFeedback('success', `${s.success} produk berhasil dibuat (${s.failed} gagal, ${s.skipped} dilewati).`);
+        const d = res.data.data;
+        const created = d.items.filter((it: any) => it.product !== null);
+        const skipped = d.items.filter((it: any) => it.product === null && (it.warning ?? []).some((w: string) => /berat/i.test(w)));
+        if (created.length > 0 && skipped.length === 0) {
+          showFeedback('success', `${created.length} produk berhasil dibuat dari ${d.items.length} baris.`);
+        } else if (created.length > 0 && skipped.length > 0) {
+          showFeedback('success', `${created.length} produk berhasil dibuat, ${skipped.length} baris dilewati (berat belum diisi).`);
+        } else {
+          showFeedback('error', `Tidak ada produk yang dibuat. Semua baris membutuhkan input berat.`);
+        }
         setMpText('');
         setMpBatch(null);
         setMpExtracted(null);
@@ -783,16 +793,25 @@ className="flex items-center gap-2 bg-brand text-white px-4 py-2 rounded-lg text
                 Buat Produk
               </button>
             )}
-            {mpBatch && mpBatch.summary.success > 0 && (
-              <button
-                onClick={handleMpCreateBatch}
-                disabled={mpLoading}
-                className="flex items-center gap-2 bg-green-600 text-white px-5 py-2.5 rounded-lg text-sm font-semibold hover:bg-green-700 focus-visible:ring-2 focus:ring-brand disabled:bg-green-300 transition"
-              >
-                {mpLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
-                {mpLoading ? 'Membuat...' : `Buat ${mpBatch.summary.success} Produk`}
-              </button>
-            )}
+            {mpBatch && (() => {
+              const creatable = mpBatch.items.filter((it: any) => !it.needsWeightInput).length;
+              const blocked = mpBatch.items.filter((it: any) => it.needsWeightInput).length;
+              const canCreate = creatable > 0;
+              return canCreate ? (
+                <button
+                  onClick={handleMpCreateBatch}
+                  disabled={mpLoading}
+                  className="flex items-center gap-2 bg-green-600 text-white px-5 py-2.5 rounded-lg text-sm font-semibold hover:bg-green-700 focus-visible:ring-2 focus:ring-brand disabled:bg-green-300 transition"
+                >
+                  {mpLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
+                  {mpLoading ? 'Membuat...' : `Buat ${creatable} Produk${blocked > 0 ? ` (${blocked} dilewati)` : ''}`}
+                </button>
+              ) : (
+                <p className="text-xs text-red-600 dark:text-red-400">
+                  {blocked} baris membutuhkan input berat sebelum dapat dibuat.
+                </p>
+              );
+            })()}
           </div>
           </div>
 
@@ -843,6 +862,11 @@ className="flex items-center gap-2 bg-brand text-white px-4 py-2 rounded-lg text
                           ? `${formatRupiah(it.extractedEntities?.price ?? null)}${it.extractedEntities?.stock != null ? ` · stok ${it.extractedEntities.stock}` : ''}`
                           : it.error || 'Baris dilewati'}
                       </p>
+                      {(it.status === 'success' && it.needsWeightInput) && (
+                        <p className="text-xs text-red-600 dark:text-red-400 truncate">
+                          {(it.warning ?? []).find((w: string) => /berat/i.test(w)) || 'Berat produk belum diisi'}
+                        </p>
+                      )}
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
                       {it.status === 'success' && it.extractedEntities && (
@@ -873,6 +897,11 @@ className="flex items-center gap-2 bg-brand text-white px-4 py-2 rounded-lg text
               {mpBatch.summary.failed > 0 && (
                 <p className="text-xs text-red-600 dark:text-red-400">
                   {mpBatch.summary.failed} baris tidak bisa diproses (nama/harga tidak terdeteksi). Perbaiki barisnya lalu coba lagi.
+                </p>
+              )}
+              {mpBatch.items.some((it: any) => it.needsWeightInput) && (
+                <p className="text-xs text-amber-600 dark:text-amber-400">
+                  {mpBatch.items.filter((it: any) => it.needsWeightInput).length} baris membutuhkan input berat (gram) sebelum dapat dibuat.
                 </p>
               )}
             </div>
