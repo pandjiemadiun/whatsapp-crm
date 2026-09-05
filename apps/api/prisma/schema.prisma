@@ -599,6 +599,27 @@ model AIProviderConfig {
   @@map("ai_provider_configs")
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// V2 Engine Shadow Log — P2-UNIT5
+// Read-only log of V2 engine output (parallel to V1) in shadow mode.
+// Used for offline comparison only — never read back by engine or delivery.
+// ─────────────────────────────────────────────────────────────────────────────
+model V2ShadowLog {
+  id              String   @id @default(uuid())
+  storeId         String   // tenant scope for isolation
+  conversationId  String   // conversation this message belongs to
+  customerMessage String   // raw customer input (verbatim)
+  v1ActualReply   String   // V1 engine's reply (what customer actually received)
+  v2Output        Json     // full V2EngineOutput (or error object if V2 failed)
+  v2EnrichedReply String?  // reply_text after system-enrichment (with prices from CartAuthority)
+  createdAt       DateTime @default(now())
+
+  @@index([storeId])
+  @@index([conversationId])
+  @@index([createdAt])
+  @@map("v2_shadow_logs")
+}
+
 model TokenUsageLog {
   id           String   @id @default(uuid())
   provider     String

@@ -26,6 +26,7 @@ import { gowaAdapter } from '../adapters/whatsapp/gowa.adapter.js';
 import { fonnteService } from '../services/fonnte.service.js';
 import type { IWhatsAppGateway, SendMessageConfig } from './whatsapp-gateway.interface.js';
 import type { ProcessedMessage } from './message-queue.service.js';
+import { fireShadowV2Call } from '../services/chat/v2-engine/shadow-wiring.js';
 
 // Smart retry backoff: 10s, 30s, 2m
 const RETRY_BACKOFF_MS = [10_000, 30_000, 120_000];
@@ -298,6 +299,21 @@ result = await this.llmCircuitBreaker.wrap(() =>
 
     // 8. Send with presence simulation + smart retry
     await this.sendWithPresence(input, result.message.content);
+
+    // 8b. Fire-and-forget V2 shadow call (P2-UNIT5)
+    // AFTER V1 reply is sent to customer. Never blocks, never affects V1 response.
+    // Total try-catch is inside fireShadowV2Call — errors are logged only.
+    // Only fires for chatEngine.v2Mode==='shadow' AND store-4f4f67bd.
+    fireShadowV2Call({
+      storeId: input.storeId,
+      conversationId: input.conversationId,
+      customerMessage: input.text,
+      v1Reply: result.message.content,
+    }).catch((err) => {
+      // Defense-in-depth: fireShadowV2Call has internal try-catch, but
+      // guard against any uncaught promise rejection that could crash the process.
+      adapters.logger.error('P2-UNIT5 shadow wiring: unhandled rejection', err as Error);
+    });
 
     // 9. QRIS image follow-up (pengiriman setelah teks payment response)
     if (result.source === 'payment' && result.metadata?.qrisImageUrl) {

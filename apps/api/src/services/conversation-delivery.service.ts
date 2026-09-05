@@ -9,6 +9,7 @@ import {
   type StructuredMessageType,
 } from './structured-message.mapper.js';
 import type { ResponseResult, ResponseSource } from '../domain/types.js';
+import { fireShadowV2Call } from '../services/chat/v2-engine/shadow-wiring.js';
 
 /**
  * FASE 1 — Web realtime foundation.
@@ -267,6 +268,22 @@ export const conversationDeliveryService = {
     } catch (e) {
       adapters.logger.error('delivery conversation.updated publish failed', e as Error);
     }
+
+    // ─────────────────────────────────────────────────────────────────
+    // P2-UNIT5: Fire-and-forget V2 shadow call
+    // AFTER V1 reply is fully processed (persist + publish). Never blocks,
+    // never affects V1 customer response. Total try-catch inside
+    // fireShadowV2Call. Only fires for chatEngine.v2Mode==='shadow'
+    // AND storeId === store-4f4f67bd.
+    // ─────────────────────────────────────────────────────────────────
+    fireShadowV2Call({
+      storeId,
+      conversationId,
+      customerMessage: message, // original request from PWA
+      v1Reply: msg.content,     // V1's actual reply (already persisted + published)
+    }).catch((err) => {
+      adapters.logger.error('P2-UNIT5 shadow wiring: unhandled rejection (PWA)', err as Error);
+    });
 
     return {
       kind: 'ok',
