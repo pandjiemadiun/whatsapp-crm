@@ -66,6 +66,7 @@ import { metricsMiddleware } from './middleware/metrics.middleware.js';
 import systemMetricsRouter from './routes/admin/system-metrics.js';
 import logger from './utils/logger.js';
 import { getEncryptionKey, hashField } from './utils/encryption.js';
+import v2ShadowTestRouter from './routes/internal/v2-engine-shadow-test.js';
 
 // Menyesuaikan __dirname untuk TypeScript ESM
 const __filename = fileURLToPath(import.meta.url);
@@ -159,6 +160,8 @@ app.use('/api/store/locations', authMiddleware, locationRouter);
 // NO auth — used by the PWA checkout cascading address dropdown). Rate-limited
 // tightly because each hit also consumes the shared external RajaOngkir quota.
 app.use('/api/pwa-locations', pwaLocationsLimiter, locationRouter);
+// P2-UNIT4: V2 engine shadow test endpoint (admin-gated, read-only, internal-only)
+app.use('/api/internal', adminAuthMiddleware, v2ShadowTestRouter);
 app.use('/api/admin', adminProductsRoutes);
 app.use('/api/admin', adminVariantsRoutes);
 // Store-owner product routes (auth) — mounted BEFORE public catalog
