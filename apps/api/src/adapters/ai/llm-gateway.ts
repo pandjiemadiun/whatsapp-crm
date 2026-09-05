@@ -46,6 +46,22 @@ export class CircuitOpenError extends AIProviderError {
   }
 }
 
+/**
+ * Thrown when EVERY provider in every role was skipped (e.g. all in cooldown)
+ * — lastError stays null because no provider was ever attempted.
+ *
+ * Before this error type (BUGFIX A.1): line 336 did `lastError!.category`
+ * which threw a generic `TypeError: Cannot read properties of null`
+ * that was misclassified by the interpreter as non-retryable infrastructure
+ * failure, masking the real cause (transient 429 cooldown cascade).
+ */
+export class AllProvidersCooldownError extends AIProviderError {
+  constructor(message: string) {
+    super(message, ErrorCategory.RATE_LIMIT, 'gateway', undefined, true);
+    this.name = 'AllProvidersCooldownError';
+  }
+}
+
 export class LLMGateway {
   private primary: AIProvider;
   private fallback: AIProvider;
@@ -266,6 +282,15 @@ export class LLMGateway {
         }
 
         for (let attempt = 0; attempt < this.maxAttempts; attempt++) {
+          // Re-check cooldown on each retry — a provider that just returned
+          // 429 is now in cooldown (triggerCooldown was called above), so
+          // retrying it immediately is pointless. Break to the next provider.
+          // This also catches the case where a provider exits cooldown DURING
+          // the backoff sleep — it will be retried on a later message cycle.
+          if (attempt > 0 && shouldSkipProvider(name)) {
+            break;
+          }
+
           try {
             const response = await this.executeWithDeadline(provider, prompt, options);
 
@@ -331,18 +356,28 @@ export class LLMGateway {
     }
 
     // All providers exhausted
+    if (lastError === null) {
+      // Every provider was skipped (e.g., all in cooldown) — none was ever
+      // attempted, so lastError was never set. Throw a CLEAR, actionable error
+      // instead of crashing with `lastError!.category` (TypeError on null).
+      this.stats.errors.push({
+        provider: 'gateway',
+        category: 'ALL_PROVIDERS_COOLDOWN',
+        timestamp: Date.now(),
+      });
+      throw new AllProvidersCooldownError(
+        'All LLM providers are in cooldown — none were available to attempt. ' +
+        'This is a transient rate-limit condition (HTTP 429 cascade), not a system error.',
+      );
+    }
+
     this.stats.errors.push({
-      provider: lastError?.provider || 'gateway',
-      category: lastError!.category,
+      provider: lastError.provider,
+      category: lastError.category,
       timestamp: Date.now(),
     });
 
-    if (lastError) throw lastError;
-    throw new AIProviderError(
-      'All LLM providers exhausted',
-      ErrorCategory.SERVER_ERROR,
-      'all-providers-exhausted',
-    );
+    throw lastError;
   }
 
   /**
