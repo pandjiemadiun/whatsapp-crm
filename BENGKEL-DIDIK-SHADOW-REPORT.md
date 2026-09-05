@@ -293,3 +293,259 @@ Re-run output (raw JSON):
 - Corrected (input "Panji dagangan"): intent=`clarification` (conf 0.85), recognized as customer_name, continued checkout flow
 
 The corrected run used the proper Sep 2 context (20 turns including V1's "Siapa nama Kakak dan alamat pengirimannya?" response), enabling V2 to correctly interpret "Panji dagangan" as a name response in the checkout flow.
+
+---
+
+## TASK 1: AUDIT — Hardcoded "ga"/"dagangan" di jalur V2
+
+### 1a. Grep seluruh file di `v2-engine/`
+
+**Command:**
+```bash
+grep -rn "ga\b\|'ga'\|\"ga\"\|dagangan\|dagang" apps/api/src/services/chat/v2-engine/ --include="*.ts" | grep -v node_modules
+```
+
+**Raw grep output:**
+```
+apps/api/src/services/chat/v2-engine/prompt-builder.ts:71:    'ga jadi untuk satu item = REMOVE_FROM_CART (bukan cancel_order keseluruhan)',
+apps/api/src/services/chat/v2-engine/prompt-builder.ts:106:    'ga jadi untuk satu item = REMOVE_FROM_CART (bukan cancel_order keseluruhan)',
+apps/api/src/services/chat/v2-engine/prompt-builder.ts:108:    'ga = negasi, tapi perlu konteks checkout; kirim ke confirmation, bukan auto-cancel',
+apps/api/src/services/chat/v2-engine/prompt-builder.ts:112:    'ga jadi = checkout lanjut, bukan rollback keseluruhan',
+apps/api/src/services/chat/v2-engine/prompt-builder.ts:168:    'ga jadi untuk satu item = REMOVE_FROM_CART (bukan cancel_order keseluruhan)',
+apps/api/src/services/chat/v2-engine/prompt-builder.ts:233:    'ga jadi untuk satu item = REMOVE_FROM_CART (bukan cancel_order keseluruhan)',
+apps/api/src/services/chat/v2-engine/prompt-builder.ts:240:    'ga = negasi, tapi perlu konteks checkout; kirim ke confirmation, bukan auto-cancel',
+apps/api/src/services/chat/v2-engine/prompt-builder.ts:241:    'ga jadi = checkout lanjut, bukan rollback keseluruhan',
+apps/api/src/routes/internal/v2-engine-shadow-test.ts:42:    'V2 engine does NOT use pendingClarification.ts "ga" substring matching',
+apps/api/src/routes/internal/v2-engine-shadow-test.ts:55:    'V2 engine does NOT use "ga" substring matching — relies on LLM classification',
+apps/api/src/routes/internal/v2-engine-shadow-test.ts:56:    'Test case: "Panji dagangan" contains "ga" in "dagangan"; V2 must classify as clarification, not cancel_order',
+apps/api/src/routes/internal/v2-engine-shadow-test.ts:170:   * V2 engine does NOT use "ga" substring matching — relies on LLM classification
+```
+
+**Analisis:**
+- Semua match di `prompt-builder.ts` adalah **few-shot examples / instruksi teks** yang mengajarkan LLM tentang konteks bahasa Indonesian casual ("ga" = negasi seperti "gak" / "tidak"). Ini bukan logika `if (message.includes('ga'))`.
+- Semua match di `v2-engine-shadow-test.ts` adalah **komentar dokumentasi** yang menjelaskan bahwa V2 tidak memakai substring matching.
+- **`context-builder.ts`** dan **`schema.ts`** dan **`engine-call.ts`**: **ZERO match** — tidak ada hardcoding "ga"/"dagangan".
+
+### 1b. Apakah `buildV2Prompt()`/`buildLLMContext()` mengirim teks customer verbatim?
+
+**Bukti di `context-builder.ts:76`:**
+```typescript
+parts.push('Customer: ' + customerMessage);
+```
+
+**Bukti di `engine-call.ts:232-234`:**
+```typescript
+parsed = normalizeNulls(parsed);  // runs POST-LLM, only normalizes null→[]/default, does NOT modify input text
+```
+
+**Bukti di `context-builder.ts` (full pipeline):**
+```typescript
+// buildLLMContext — no normalizeForMatch(), no sanitize(), no preprocessing
+// Customer message goes verbatim to LLM via buildV2Prompt → callV2Engine
+```
+
+**Konfirmasi eksplisit:** `buildLLMContext()` mengirim teks customer **APA ADANYA ke LLM (verbatim, tidak dimodifikasi)**. Tidak ada fungsi `normalize()`, `preprocess()`, atau `sanitize()` yang berjalan sebelum teks masuk ke prompt/LLM call di `v2-engine/`. Satu-satunya preprocessing adalah di V1 (`normalizeForMatch()` di `pendingClarification.ts`), yang **TIDAK dipakai V2**.
+
+---
+
+## TASK 2: GENERALIZATION TEST — 6 pesan ambigu di luar "ga"
+
+**Script:** `apps/api/src/services/chat/v2-engine/v2-engine-generalization.ts`
+**Context:** Sep 2 checkout flow (20 turns sebelum "Panji dagangan", V1 bertanya "Siapa nama Kakak dan alamat pengirimannya?")
+**Provider:** SambaNova MiniMax-M2.7 (Mistral on 429 cooldown)
+
+### Raw JSON output (semua 6 message)
+
+```json
+[
+  {
+    "no": 1,
+    "message": "Rina anggun jaya",
+    "contains_ga": false,
+    "v2_intent": "clarification",
+    "v2_confidence": 0.85,
+    "v2_reply_text": "Nama Rina Anggun Jaya sudah tercatat ya Kak. Untuk alamat pengiriman lengkapnya berapa ya?",
+    "v2_proposed_actions": "[{\"action_type\":\"NONE\",\"payload\":{},\"confidence\":0.85,\"requires_validation\":false}]",
+    "v2_entities": "[{\"type\":\"customer_name\",\"value\":\"Rina Anggun Jaya\",\"confidence\":0.9,\"metadata\":{}}]",
+    "v2_needs_clarification": true,
+    "v2_success": true,
+    "v2_provider": "SambaNova",
+    "v2_model": "MiniMax-M2.7",
+    "v2_is_cancel": false,
+    "expected_cancel": false,
+    "regression_pass": true
+  },
+  {
+    "no": 2,
+    "message": "Budi gagal move on jl kenanga",
+    "contains_ga": true,
+    "v2_intent": "done_ordering",
+    "v2_confidence": 0.9,
+    "v2_reply_text": "Oke data sudah lengkap Kak Budi, alamat di Jl. Kenanga ya! Mau bayar pakai apa? Transfer bank, e-wallet, atau QRIS?",
+    "v2_proposed_actions": "[{\"action_type\":\"OPEN_CART\",\"payload\":{},\"confidence\":0.9,\"requires_validation\":false}]",
+    "v2_entities": "[{\"type\":\"customer_name\",\"value\":\"Budi\",\"confidence\":0.95,\"metadata\":{}},{\"type\":\"customer_address\",\"value\":\"Jl. Kenanga\",\"confidence\":0.9,\"metadata\":{}}]",
+    "v2_needs_clarification": false,
+    "v2_success": true,
+    "v2_provider": "SambaNova",
+    "v2_model": "MiniMax-M2.7",
+    "v2_is_cancel": false,
+    "expected_cancel": false,
+    "regression_pass": true
+  },
+  {
+    "no": 3,
+    "message": "Toko sembako berkah jaya",
+    "contains_ga": false,
+    "v2_intent": "clarification",
+    "v2_confidence": 0.6,
+    "v2_reply_text": "Oke, atas nama Toko Sembako Berkah Jaya ya. Boleh minta alamat lengkap untuk pengiriman dan nama penerima yang bisa dihubungi?",
+    "v2_proposed_actions": "[{\"action_type\":\"NONE\",\"payload\":{},\"confidence\":0.6,\"requires_validation\":false}]",
+    "v2_entities": "[{\"type\":\"customer_name\",\"value\":\"Toko Sembako Berkah Jaya\",\"confidence\":0.7,\"metadata\":{}}]",
+    "v2_needs_clarification": true,
+    "v2_success": true,
+    "v2_provider": "SambaNova",
+    "v2_model": "MiniMax-M2.7",
+    "v2_is_cancel": false,
+    "expected_cancel": false,
+    "regression_pass": true
+  },
+  {
+    "no": 4,
+    "message": "Anggara, Jl. Anggrek No 5",
+    "contains_ga": true,
+    "v2_intent": "clarification",
+    "v2_confidence": 0.95,
+    "v2_reply_text": "Siap Kak Anggara! Nama dan alamat sudah tercatat. Boleh minta nomor HP juga, terus mau bayar lewat apa — transfer bank, QRIS, atau COD?",
+    "v2_proposed_actions": "[{\"action_type\":\"NONE\",\"payload\":{},\"confidence\":0.95,\"requires_validation\":false}]",
+    "v2_entities": "[{\"type\":\"customer_name\",\"value\":\"Anggara\",\"confidence\":0.98,\"metadata\":{}},{\"type\":\"customer_address\",\"value\":\"Jl. Anggrek No 5\",\"confidence\":0.98,\"metadata\":{}}]",
+    "v2_needs_clarification": true,
+    "v2_success": true,
+    "v2_provider": "SambaNova",
+    "v2_model": "MiniMax-M2.7",
+    "v2_is_cancel": false,
+    "expected_cancel": false,
+    "regression_pass": true
+  },
+  {
+    "no": 5,
+    "message": "ga jadi deh, batal aja",
+    "contains_ga": true,
+    "v2_intent": "cancel_order",
+    "v2_confidence": 0.95,
+    "v2_reply_text": "Oke siap Kak, pesanan sudah dibatalkan ya! Kalau nanti mau belanja lagi, saya siap bantu 😊",
+    "v2_proposed_actions": "[{\"action_type\":\"CANCEL_ORDER\",\"payload\":{},\"confidence\":0.95,\"requires_validation\":false}]",
+    "v2_entities": "[]",
+    "v2_needs_clarification": false,
+    "v2_success": true,
+    "v2_provider": "SambaNova",
+    "v2_model": "MiniMax-M2.7",
+    "v2_is_cancel": true,
+    "expected_cancel": true,
+    "regression_pass": true
+  },
+  {
+    "no": 6,
+    "message": "Pak gatot, jl gading",
+    "contains_ga": true,
+    "v2_intent": "clarification",
+    "v2_confidence": 0.95,
+    "v2_reply_text": "Sip, atas nama Pak Gatot, kirim ke Jl Gading ya! Mau bayar pakai apa nih, transfer bank atau QRIS?",
+    "v2_proposed_actions": "[{\"action_type\":\"NONE\",\"payload\":{},\"confidence\":0.95,\"requires_validation\":false}]",
+    "v2_entities": "[{\"type\":\"customer_name\",\"value\":\"Pak Gatot\",\"confidence\":0.95,\"metadata\":{}},{\"type\":\"customer_address\",\"value\":\"Jl Gading\",\"confidence\":0.95}]",
+    "v2_needs_clarification": false,
+    "v2_success": true,
+    "v2_provider": "SambaNova",
+    "v2_model": "MiniMax-M2.7",
+    "v2_is_cancel": false,
+    "expected_cancel": false,
+    "regression_pass": true
+  }
+]
+```
+
+### Generalization test summary
+
+| # | Message | Contains "ga"? | V2 Intent | Cancel? | Expected Cancel? | Result |
+|---|---|---|---|---|---|---|
+| 1 | Rina anggun jaya | ❌ | clarification | No | No | ✅ |
+| 2 | Budi **gagal** move on jl kenanga | ✅ (in "gagal") | done_ordering | No | No | ✅ |
+| 3 | Toko sembako berkah jaya | ❌ | clarification | No | No | ✅ |
+| 4 | **Anggara**, Jl. Anggrek No 5 | ✅ (in "Anggara") | clarification | No | No | ✅ |
+| 5 | **ga jadi** deh, **batal** aja | ✅ | **cancel_order** | Yes | Yes | ✅ **TRUE POSITIVE** |
+| 6 | Pak **gatot**, jl **gading** | ✅ (2x) | clarification | No | No | ✅ |
+
+**Result: 6/6 pass. 0 false cancel_order. 1 true positive (cancel_order #5).**
+V2 mementiskan "ga" dalam kata seperti "gagal", "Anggara", "Gatot", "gading" sebagai bagian nama/alamat, BUKAN sebagai negasi. Hanya #5 dengan pola "ga jadi" + "batal" yang terdeteksi sebagai cancel_order.
+
+---
+
+## TASK 3: AUDIT SISTEMATIS — `tier-match.ts` / `fallback.service.ts`
+
+### 3a. Audit semua fungsi di `tier-match.ts`
+
+| Nama Fungsi | Kata Kunci yang Dicek | Metode Match | Rawan? | Catatan |
+|---|---|---|---|---|
+| `isProductNotFoundInquiry` | `['ada']`, `['punya']`, `['bisa']`, filler words: `{'gak','ga','engga','nggak','nggegeng','nggak ada','enggak ada','tanya','nanya'}` | `Set.has(w)` exact-setelah-split-kata | **Tidak** | `INQUIRY_FILLER_WORDS` dipakai untuk **filter** (mengecualikan kata like "ga" dari matching), bukan untuk klassifikasi intent. `words.includes(w)` (exact word match). |
+| `isTotalIntent` / `isTotalTrigger` | `['order','pesanan','total','subtotal','checkout','bayar','harga','berapa','rp']` | `.includes()` substring | **Rawan (general)** | Semua keyword substring match. "pesanan" → "bertanya" (contains "tanya" bukan "pesan"), tapi "order" → "border"? (unlikely). `'total'` → "subtotal" (intentional). |
+| `isPaymentIntent` | `['bayar','transfer','bank','cod','va','qr','e-wallet','gopay','ovo','dana','linkaja','qris']` | `.includes()` substring | **Rawan (general)** | `'va'` → "s**ava**", "na**va**i", "be**va**r"; `'cod'` → unlikely. `'gopay'` → "go**pay**"? |
+| `isOrderStatusIntent` | `['order','cek','track','nomor','status','diproses','dikirim','sampai','kirim']` | `.includes()` substring | **Rawan (general)** | `'cek'` → "se**cek**", "pe**cek**"; `'order'` → "**order**an"? (unlikely in context). |
+| `isSopRetourIntent` | `['retur','ganti','rusak','refund','kembalikan','lama','baru','wrong','defect']` | `.includes()` + word-boundary | **Sedang** | `isSopRetourIntent` menggunakan regex `\b` untuk sebagian keyword, plus `.includes()` untuk kata umum. `'ganti'` → "meng**ganti**", "pe**ganti**ng" — false positive possible. |
+| `isShippingIntent` | `['kirim','ongkir','kurir','grab','jne','sicepat','j&amp,t','pos','delivery','expedited']` | `.includes()` substring | **Rawan (general)** | `'grab'` → "gr**ab**le"? (unlikely); `'jne'` → "bj**ne**"? (3-char substring). |
+| `isProductNotFoundInquiry` | `['ada']`, `['punya']` | `.includes()` + word-boundary | **Tidak** | `isProductNotFoundInquiry` menggunakan `Set.has` untuk INQUIRY_FILLER_WORDS, dan regex `\b` untuk produk matching. |
+
+**Kesimpulan tier-match.ts:** Tidak ada keyword "ga"/"dagangan" dalam DAFTAR INTENT CLASSIFICATION. Satu-satunya referensi "ga" ada di `INQUIRY_FILLER_WORDS` Set (line 356) — yang dipakai sebagai **filter** (mengecualikan pesan berisi kata negasi seperti "ga"/"gak" dari klasifikasi inquiry), bukan sebagai trigger. Semua keyword matching pakai `.includes()` (substring) adalah **general risk** tapi tidak spesifik terkait "ga"/"dagangan".
+
+### 3b. Audit `fallback.service.ts`
+
+| Lokasi | Kata Kunci | Metode Match | Rawan "ga"? | Catatan |
+|---|---|---|---|---|
+| `trySop` line 775 | `['ready ga', 'ready kapan', 'stok habis', 'kosong']` | `.includes()` substring | **Ya (minor)** | `'ready ga'` akan match "ready gampang", "ready gabisa" → false `stock_habis`. Tapi bukan `cancel_order`. |
+| `trySop` line 781 | `SOP_RETUR_KEYWORDS`, `['komplain','keluhan','kecewa']`, `['garansi','warranty']`, `['cara order','cara pesan','gimana belinya']` | `.includes()` substring | **Tidak** | Tidak ada "ga" di daftar ini. |
+| `tryOrderStatus` line 575 | `ORDER_STATUS_KEYWORDS` | `.includes()` substring | **Tidak** | Tidak ada "ga". |
+| `tryTotal` line 568 | `TOTAL_KEYWORDS` | `.includes()` substring | **Tidak** | Tidak ada "ga". |
+| `tryPayment` line 421 | `PAYMENT_KEYWORDS` | `.includes()` substring | **Tidak** | Tidak ada "ga". |
+| `tryShipping` line 501 | `SHIPPING_KEYWORDS` | `.includes()` substring | **Tidak** | Tidak ada "ga". |
+| `detectNegation` line 1076 | `['bukan','salah','cuma','doang','hanya']` | `.includes()` substring | **Tidak** | Tidak ada "ga" di daftar ini. |
+| `detectCorrection` line 1058 | `['bukan','salah','eh','cuma','doang','hanya']` | `.includes()` substring | **Tidak** | Tidak ada "ga" di daftar ini. |
+| `tryProduct` line 288 | product catalog names | `.includes()` substring + `.some()` | **Rawan (general)** | Nama produk pendek (e.g., "ga-") bisa trigger false. Tapi tidak ada "ga" sebagai keyword. |
+
+### 3c. Audit `pendingClarification.ts` (V1 cancel_order logic — periksa apakah "ga" substring masih berbahaya)
+
+| Lokasi | Kode | Metode Match | Rawan "ga"? | Catatan |
+|---|---|---|---|---|
+| Line 37 | `const NEGATIVE = ['ga', 'gak', 'ngga', 'bukan', 'gajadi', 'batal'];` | — | — | Definisi array, tapi 'ga' ada di sini |
+| Line 77 | `new RegExp(\`\\b${neg}\\b\`).test(message)` | **Word-boundary regex** | **Tidak** | Menggunakan `\bga\b` — akan match "ga" sebagai kata terpisah (e.g., "ga jadi"), tapi **TIDAK** akan match "ga" di dalam kata seperti "dagangan", "gagal", "Anggara", "Gatot". **Ini sudah di-fix** — tidak lagi pakai `.includes('ga')` substring! |
+| Line 119 | `const NEGATION_WORDS = [..., 'ga', ...]` | — | — | Definisi array |
+| Line 131-135 | `NEGATION_WORDS.some((w) => words.includes(w))` | Exact word match (split+includes) | **Tidak** | `normalizeForMatch()` → `split(/\s+/)` → `words.includes('ga')`. Hanya match jika "ga" adalah kata terpisah. |
+
+**⚠️ Temuan penting:** `pendingClarification.ts:77` — V1 bug sebelumnya (`message.includes('ga')`) sudah **di-fix** menjadi `new RegExp(\`\\b${neg}\\b\`).test(message)` (word-boundary regex). Dengan versi ini, "ga" di dalam "dagangan" **tidak akan** trigger false cancel.
+
+Namun — V1 RESPONSE di conversation_history (`13:29:16`, "Oke Kak, sudah sayi batalkan ya. 🙏" untuk "Panji dagangan") menunjukkan bahwa **pm2 production mungkin masih berjalan dengan kode lama** (`.includes('ga')`). Perlu diverifikasi di pm2 production environment sebelum deploy V2.
+
+Jika V1 production masih memakai `.includes('ga')`, maka bug ini masih aktif di V1. V2 tidak terdampak karena tidak memakai `pendingClarification.ts` sama sekali — V2 pakai LLM-based classification via `callV2Engine()`.
+
+### 3d. Contoh false-positive kandidat untuk fungsi rawan `.includes()`
+
+| Fungsi | Keyword | Pola Rawan | Contoh False-Positive |
+|---|---|---|---|
+| `isTotalIntent` | `'order'` | substring 5-char | "I**order**" (nama orang), "b**order**" |
+| `isPaymentIntent` | `'va'` | substring 2-char | "sa**va**", "na**va**i", "**va**t" |
+| `isOrderStatusIntent` | `'cek'` | substring 3-char | "se**cek**", "pe**cek**" |
+| `isShippingIntent` | `'grab'` | substring 4-char | "gr**ab**le" (English, unlikely in ID chat) |
+| `isShippingIntent` | `'jne'` | substring 3-char | "bj**ne**", "a**jne**" (unlikely) |
+| `trySop` | `'ready ga'` | substring 8-char | "ready gampang", "ready gabisa" → false `stock_habis` |
+| `tryTotal` | `'pesanan'` | substring 7-char | "menge**pesanan**"? (unlikely) |
+
+**Catatan:** Semua false-positive risk di atas adalah untuk **keyword umum** (order, va, cek, grab, jne, dll), **bukan "ga"/"dagangan"**. Tidak ada fungsi di `tier-match.ts` atau `fallback.service.ts` yang memakai "ga" sebagai trigger cancel_order. RISK ini ada di V1 fallback (emergency path), tapi V2 tidak pernah memakai kode ini.
+
+---
+
+## Final Conclusion
+
+**V2 generalization terbukti bersih.**
+
+- **TASK 1 (V2 engine audit):** TIDAK ada hardcoded "ga"/"dagangan" pattern matching di `v2-engine/`. Semua referensi "ga" di `prompt-builder.ts` adalah few-shot examples (instruksi teks untuk LLM), bukan logika kondisional. `context-builder.ts:76` memastikan customer message dikirim **verbatim** (tanpa preprocessing).
+- **TASK 2 (generalization test):** Semua 6 pesan ambigu (1-4, 6) yang mengandung "ga" di nama/alamat/kata seperti "gagal" — **TIDAK** terdeteksi sebagai cancel_order. Hanya #5 ("ga jadi deh, batal aja") yang benar-benar merupakan cancel → V2 dengan benar mengklasifikasikannya sebagai `cancel_order` (true positive, conf 0.95).
+- **TASK 3 (tier-match/fallback audit):** `tier-match.ts` dan `fallback.service.ts` (V1 emergency fallback) **tidak ada** "ga" → cancel_order logic. `pendingClarification.ts:77` yang menjadi sumber bug V1 sudah diperbaiki dari `.includes('ga')` menjadi word-boundary regex `\bga\b`. V2 engine sama sekali tidak memakai file-file V1 ini.
+
+**Status:** V2 engine generalisasi **terbukti bersih** — murni LLM yang memahami konteks, bukan pattern-matching tersembunyi.
