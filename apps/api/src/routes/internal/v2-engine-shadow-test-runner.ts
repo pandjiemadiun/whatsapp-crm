@@ -80,11 +80,11 @@ const V1_RESPONSES: Record<string, V1Response> = {
     source: 'sop',
     notes: 'V1 triggered checkout flow — asked for name + shipping address',
   },
-  'Panji dagungan': {
+  'Panji dagangan': {
     reply_text: 'Oke Kak, sudah sayi batalkan ya. 🙏',
     messageType: '—',
     source: 'sop',
-    notes: '❌ FALSE CANCEL BUG — "Panji dagungan" contains substring "ga" which matched pendingClarification.ts:77 (message.includes("ga")) → v1 incorrectly classified as rollback/cancel',
+    notes: '❌ FALSE CANCEL BUG — "Panji dagangan" contains substring "ga" (in "dagangan") which matched pendingClarification.ts:77 (message.includes("ga")) → v1 incorrectly classified as rollback/cancel',
   },
   'Ban luar Vario depan 100.000 belakang 150.000': {
     reply_text: '[MAGIC-PASTE] product: "Ban luar Vario depan belakang", price: 100000, variants: [{posisi: depan, price: 100000}, {posisi: belakang, price: 150000}]',
@@ -110,7 +110,7 @@ const TEST_MESSAGES: ReadonlyArray<string> = [
   'Mau',
   'Totalnya kak',
   'Ok, saya mau bayar',
-  'Panji dagungan',
+  'Panji dagangan',
   'Ban luar Vario depan 100.000 belakang 150.000',
   'Kampas rem depan 50.000 belakang 100.000',
 ];

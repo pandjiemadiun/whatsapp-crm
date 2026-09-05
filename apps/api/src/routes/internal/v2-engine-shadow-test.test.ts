@@ -13,7 +13,7 @@
  * Test cases:
  *   1. Happy path — mock gateway returns valid V2 JSON → verify output format
  *   2. Parse error — mock gateway returns malformed JSON → verify error result
- *   3. Panji-dagungan regression — intent MUST NOT be 'cancel_order'
+ *   3. Panji-dagangan regression — intent MUST NOT be 'cancel_order'
  *   4. Read-only — no DB writes to Order/OrderItem/ActionIdempotency/conversation_history
  */
 import { describe, it, before, after } from 'node:test';
@@ -51,25 +51,28 @@ const VALID_V2_JSON = JSON.stringify({
 });
 
 /**
- * Panji-dagungan regression response.
- * INTENT IS product_inquiry — NOT cancel_order.
+ * Panji-dagangan regression response.
+ * INTENT IS clarification — NOT cancel_order.
  *
- * v1 Bug: "Panji dagungan" (contains "ga") was matched by
+ * v1 Bug: "Panji dagangan" (contains "ga" in "dagangan") was matched by
  * pendingClarification.ts:77 `message.includes('ga')` → false ROLLBACK/cancel.
  * v2 (shadow) MUST NOT classify this as cancel_order.
+ *
+ * Updated to match REAL V2 engine output from focused re-run (SambaNova
+ * MiniMax-M2.7, correct "Panji dagangan" input with "ga" substring):
+ *   intent=clarification, entities=[{type:customer_name, value:"Panji Dagang"}]
  */
-const PANJI_GATEKAN_RESPONSE = JSON.stringify({
+const PANJI_DAGANGAN_RESPONSE = JSON.stringify({
   schema_version: 'v1',
-  intent: V2_INTENTS.PRODUCT_INQUIRY,
-  confidence: 0.88,
-  entities: [{ type: 'product', value: 'panji dagungan', confidence: 0.85 }],
+  intent: V2_INTENTS.CLARIFICATION,
+  confidence: 0.85,
+  entities: [{ type: 'customer_name', value: 'Panji Dagang', confidence: 0.9 }],
   proposed_actions: [
-    { action_type: 'OPEN_CATALOG', payload: {}, confidence: 0.75, requires_validation: false },
+    { action_type: 'NONE', payload: {}, confidence: 0.85, requires_validation: false },
   ],
-  reply_text: 'Ban dagungan tersedia. Mau lihat detailnya kak?',
-  needs_clarification: true,
-  clarification_question: 'Mau ban dagungan merek apa?',
-  summary_update: 'Customer tanya ban dagungan.',
+  reply_text: 'Siap Kak Panji! Sudah tercatat nih namanya. Nah, sekarang tolong kirim alamat lengkapnya ya biar bisa kami hitung ongkirnya.',
+  needs_clarification: false,
+  summary_update: 'Customer memberikan nama Panji Dagang. Masih menunggu alamat pengiriman untuk proses checkout.',
   uncertainty_signals: [],
 });
 
@@ -209,15 +212,16 @@ describe('v2-engine-shadow-test endpoint', () => {
       }
     });
 
-    it('3. Panji-dagungan regression: intent MUST NOT be cancel_order', async () => {
-      // Mock gateway returns PRODUCT_INQUIRY for "Panji dagungan"
+    it('3. Panji-dagangan regression: intent MUST NOT be cancel_order', async () => {
+      // Mock gateway returns CLARIFICATION for "Panji dagangan" (correct spelling,
+      // contains "ga" substring that triggered v1 false-cancel bug).
       // v1 falsely classified this as ROLLBACK/cancel due to substring match.
       // v2 must NOT classify as cancel_order.
-      const mockGateway = makeMockGateway(PANJI_GATEKAN_RESPONSE);
+      const mockGateway = makeMockGateway(PANJI_DAGANGAN_RESPONSE);
 
       const result = await runShadowTest(
         TEST_CONVERSATION_ID,
-        'Panji dagungan',
+        'Panji dagangan',
         mockGateway,
       );
 
@@ -228,11 +232,18 @@ describe('v2-engine-shadow-test endpoint', () => {
         assert.notEqual(
           v2.data.intent,
           V2_INTENTS.CANCEL_ORDER,
-          'v2 MUST NOT classify "Panji dagungan" as cancel_order — regression from v1 false-cancel bug',
+          'v2 MUST NOT classify "Panji dagangan" as cancel_order — regression from v1 false-cancel bug (message.includes("ga"))',
         );
-        // v2 detects ambiguity and asks for clarification
-        assert.equal(v2.data.needs_clarification, true);
-        assert.ok(v2.data.clarification_question, 'Should ask for clarification');
+        // v2 recognizes "Panji" as a customer name, not a product
+        assert.ok(
+          v2.data.entities.some(e => e.type === 'customer_name'),
+          'v2 should extract customer_name entity, not treat as product',
+        );
+        // v2 should NOT take destructive action (no cancel/cancel_order)
+        assert.ok(
+          !v2.data.proposed_actions?.some(a => a.action_type === 'CANCEL_ORDER'),
+          'v2 should NOT propose cancel_order action',
+        );
       }
     });
 
