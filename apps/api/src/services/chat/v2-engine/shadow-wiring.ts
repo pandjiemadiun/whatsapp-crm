@@ -28,7 +28,7 @@ import type { WorkspaceV2 } from '../types-v2.js';
 import type { V2EngineResult } from './engine-call.js';
 
 /** Store yang diizinkan untuk shadow mode (hardcoded untuk P2-UNIT5). */
-export const SHADOW_STORE_ID = 'store-4f4f67bd';
+export const SHADOW_STORE_ID = 'store-a3cd7205';
 
 /** Flag key di system_settings. */
 export const V2_MODE_FLAG_KEY = 'chatEngine.v2Mode';
