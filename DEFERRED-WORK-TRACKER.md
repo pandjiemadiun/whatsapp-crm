@@ -14,7 +14,7 @@
 > di laporan lalu hilang. Setiap baris WAJIB punya kolom "Trigger" — kondisi
 > konkret kapan item ini harus ditagih kembali, bukan "nanti" yang kabur.
 >
-> **Update terakhir:** 3 Sep 2026.
+> **Update terakhir:** 5 Sep 2026.
 
 ---
 
@@ -49,6 +49,7 @@
 | 14 | II-5 — Test DB shared isolation lemah (row lintas file test) | `BUG-BELUM-DIBERESKAN.md` §II-5 | Sudah di-audit "0 assertion rawan", downgrade ke hygiene debt | Kalau ada file test baru — re-audit saat itu |
 | 19 | Magic-paste kadang gabungkan huruf varian pertama ke nama produk (mis. "Baju polos S" bukan "Baju polos") pada input 1-baris 2-varian — keterbatasan LLM, bukan bug kode, dimitigasi oleh preview-sebelum-simpan | DEBUG-CATALOG-EMPTY-AFTER-CREATE, 2 Sep 2026 | LLM variance pada kalimat ambiguous, preview UX sudah jadi jaring pengaman | Kalau owner sering ketemu ini dan preview-edit terasa merepotkan |
 | 23 | Redis-backed provider cooldown (`provider-cooldown.ts` pakai `Map` in-memory, hanya valid untuk single pm2 instance — cooldown state hilang saat restart, tidak ter-share antar instance) — dibutuhkan jika scaling ke multi-instance pm2 atau butuh cooldown persisten | N-PROVIDER-ROTATION-UNIT-N1, 3 Sep 2026 | Owner konfirmasi target realistis: 3-5 provider pada single-instance; in-memory cooldown sudah sufficient. Redis migration butuh infra setup tambahan | Kalau owner pindah ke multi-instance pm2, atau butuh cooldown state persist across restarts |
+| 32 | Root cause asli "Decryption failed: Store.phoneNumber" pada store-4f4f67bd DITEMUKAN. Key rotation reset (KEY_A ditimpa, data enkripsi KEY_B) (kunci di .env dan DB terkonfirmasi sama, jadi bukan mismatch env). Toko masih active di DB pada 12:29-12:30; dihapus manual setelah test selesai (bukan "sesi sebelumnya"). Traffic @12:30:35 via direct API port 3000, bukan nginx; dist/ lama masih punya SHADOW_STORE_ID='store-4f4f67bd' sampai rebuild Sep 5 commit 552d489 | URGENT diagnosis + cleanup, 5 Sep | Semua toko dummy, tidak ada dampak nyata — cleanup lebih efisien daripada investigasi mendalam. Tapi row corrupt yang sebenarnya (bug di key-rotation.service.ts, atau corruption lain) belum terbukti sudah tertutup | Kalau kejadian serupa muncul lagi di toko manapun (termasuk toko baru) — investigasi ulang lebih dalam, JANGAN asumsikan "pasti sudah aman" hanya karena kunci cocok |
 
 ---
 

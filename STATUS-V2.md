@@ -348,3 +348,51 @@ P5.1 (5 bug objektif) + P5.2 (3 GAYA) selesai. Commit 0e99fbd, bd607f6.
 3 GAYA sisa: ditunda permanen (topic-switch generic, v1/v2 sudah konsisten
 otomatis, larangan harga reply_draft dipertahankan).
 NEXT: P6 - Golden dataset sebagai architecture gate (terakhir di roadmap).
+
+## UPDATE 5/9 — V1 BUG FIX + BAGIAN B KLARIFIKASI (URGENT-V1-BUG)
+
+### Bagian A — Fix: llm-gateway.ts crash (TypeError on null lastError)
+- **Root cause:** `llm-gateway.ts:336` crash ketika `lastError === null` (semua provider
+  di-skip karena cooldown). `lastError!.category` → `TypeError: Cannot read properties
+  of null (reading 'category')` → interpreter.ts menilainya non-retryable → dead-end
+  fallback "Maaf kak, saya kurang paham. Bisa diulang?"
+- **Fix (commit `552d489`):**
+  - A.1: `AllProvidersCooldownError` class baru (ErrorCategory.RATE_LIMIT, retryable).
+    Branch null-safe: `lastError === null` → throw `AllProvidersCooldownError`, bukan
+    crash. Semua `lastError!` di executable code diilangkan (hanya tersisa di komentar).
+  - A.2: `shouldSkipProvider(name)` re-check di retry loop (line 290-292):
+    `if (attempt > 0 && shouldSkipProvider(name)) { break; }` — provider yang baru
+    keluar cooldown saat retry bisa langsung dicoba lagi.
+  - A.3: Test baru `llm-gateway.cooldown.test.ts` — 3 cases (all cooldown → exception
+    jelas, 429 → called 1x not 3x, cooldown expires → success). **3/3 pass.**
+  - A.4: `npx tsc --noEmit` → EXIT 0. `npm run build` → EXIT 0. `pm2 restart api` →
+    online (PID 1659552, 0% CPU). `curl .../bengkel-didik-test/init` → HTTP 200.
+- **Re-opened:** dist/ tidak di-commit (RAILS §1.158) karena `.gitignore` mem-filter
+  `dist/`. Fix tetap berlaku via pm2 (jalankan dari dist/ lokal). Perlu follow-up
+  force-add `dist/` atau buat CI build step.
+
+### Bagian B — Klarifikasi traffic store-4f4f67bd (12:25-12:35 UTC)
+- **Store-4f4f67bd was NOT deleted before the test** — kekalahan klaim
+  "SUDAH DIHAPUS TOTAL sesi sebelumnya (cleanup H1-REDO)". Bukti:
+  `SELECT ... FROM stores WHERE id = 'store-4f4f67bd'` → 0 rows **sekarang** (Sep 5
+  16:49), tapi pm2 log menunjukkan traffic aktif store-4f4f67bd pada 12:29-12:30
+  Jakarta (05:29-05:30 UTC). Toko dan semua conversation_history-nya dihapus
+  SECARA MANUAL setelah test (bukan otomatis oleh kode).
+- **VERDICT: BUKAN labeling error.** Laporan robot sebelumnya BENAR — ada traffic
+  beneran ke store-4f4f67bd pada 12:30:35.
+- **nginx traffic:** 0 request ke slug lama `bengkeldidik` (tanpa `-test`) selama
+  12:25-12:35 UTC. Traffic store-4f4f67bd berasal dari **direct API call ke
+  port 3000** (bukan lewat nginx reverse proxy).
+- **Sumber traffic:** V2 shadow test runner yang masih pakai dist/ lama dengan
+  `SHADOW_STORE_ID = 'store-4f4f67bd'` (source diperbarui ke `store-a3cd7205` di
+  commit `68f78d5`, tapi dist/ tidak di-rebuild sampai fix ini). Setelah
+  `npm run build` + `pm2 restart`, dist/ sekarang punya `SHADOW_STORE_ID =
+  'store-a3cd7205'` — store-4f4f67bd tidak relevan lagi.
+- **Impact pada crash:** Request store-4f4f67bd ("Panji dagangkan" @12:29:34 &
+  12:30:35) memakan kuota SambaNova. Dengan Mistral sudah di-cooldown, semua LLM call
+  ke store-4f4f67bd lewat SambaNova. Request store-a3cd7205 @12:30:44 (juga lewat
+  SambaNova, karena Mistral cooldown) → 429 pukul 12:30:55 → crash (before fix).
+  Jadi traffic concurrent store-4f4f67bd MEMBANTUKI kaskade 429.
+- **Catatan terpisah:** pm2 log timestamp prefix = UTC (`05:30:35`); JSON field
+  `timestamp` = Jakarta (`12:30:35.518+07:00`). Laporan robot sebelumnya *tidb menyalahkan
+  ini — keduanya entri yang sama.
