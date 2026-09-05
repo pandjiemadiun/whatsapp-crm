@@ -119,13 +119,15 @@ function extractJson(raw: string): unknown {
  *
  * LLMs (especially via json_mode / response_format) frequently emit explicit
  * `null` for absent optional JSON fields — e.g. `{"clarification_question": null}`.
- * Zod's `.optional()` only accepts `undefined`, NOT `null`. Without this
- * normalization every real LLM call that omits an optional field (by emitting
- * null) would be rejected as a parse error.
+ * Zod's `.optional()` and `.default()` only trigger on `undefined`, NOT `null`.
+ * Without this normalization every real LLM call that omits an optional field
+ * (by emitting null) would be rejected as a parse error.
  *
- * This is a presentation-layer concern (UNIT3, the call layer), not a schema
- * concern — the schema (UNIT1) stays strict: `.optional()` means "may be
- * omitted", and null ≠ omitted in JSON.
+ * Two schema fields use defaults: `uncertainty_signals` (`.default([])`) and
+ * optional fields like `clarification_question` / `summary_update` (`.optional()`).
+ * Together, normalizeNulls + Zod defaults ensure missing/null LLM fields are
+ * handled gracefully at UNIT3 (call layer), keeping UNIT1 (schema) strict on
+ * input type validation while applying sensible defaults on absence.
  */
 function normalizeNulls(obj: unknown): unknown {
   if (obj === null) return undefined;

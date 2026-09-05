@@ -259,7 +259,8 @@ describe('callV2Engine', () => {
         `message should mention schema validation: ${result.error.message}`,
       );
       // The schema should flag missing fields — at minimum schema_version,
-      // confidence, entities, reply_text, needs_clarification, uncertainty_signals
+      // confidence, entities, reply_text, needs_clarification (uncertainty_signals
+      // has a .default([]) and will NOT be flagged as missing)
       assert.ok(
         result.error.rawOutput !== undefined,
         'rawOutput should be present for debugging',
@@ -408,6 +409,77 @@ describe('callV2Engine', () => {
       // null fields should be normalized to undefined (absent from output)
       assert.equal(result.data.clarification_question, undefined);
       assert.equal(result.data.summary_update, undefined);
+    }
+  });
+
+  it('case8: LLM omits uncertainty_signals entirely → defaults to [], parse succeeds (P2-UNIT4-FIXUP)', async () => {
+    // MiniMax-M2.7 (SambaNova) sometimes omits uncertainty_signals entirely.
+    // Schema fix: .default([]) on the Zod field + normalizeNulls(null→undefined)
+    // ensures this is handled gracefully.
+    const rawMissingField = JSON.stringify({
+      schema_version: 'v1',
+      intent: V2_INTENTS.PRODUCT_INQUIRY,
+      confidence: 0.92,
+      entities: [{ type: 'product', value: 'ban', confidence: 0.95 }],
+      proposed_actions: [
+        { action_type: 'OPEN_CATALOG', payload: {}, confidence: 0.8, requires_validation: false },
+      ],
+      reply_text: 'Ada ban depan dan ban belakang tersedia.',
+      needs_clarification: false,
+      // uncertainty_signals intentionally OMITTED
+    });
+
+    const provider = makeMockProvider('test-missing-field-8', 'success', rawMissingField);
+    const gateway = new LLMGateway(
+      provider,
+      mockGatekeeper,
+      mockGatekeeper,
+      5000,
+      1,
+      undefined,
+      () => Promise.resolve(false),
+    );
+
+    const result = await callV2Engine(MINIMAL_CONTEXT, 'chat_primary', gateway);
+
+    assert.ok(result.success, `expected success when uncertainty_signals is omitted, got: ${JSON.stringify(result)}`);
+    if (result.success) {
+      assert.deepEqual(result.data.uncertainty_signals, [], 'uncertainty_signals should default to []');
+      assert.equal(result.data.intent, V2_INTENTS.PRODUCT_INQUIRY);
+    }
+  });
+
+  it('case9: LLM returns uncertainty_signals: null → normalized to undefined → defaults to [], parse succeeds', async () => {
+    const rawWithNull = JSON.stringify({
+      schema_version: 'v1',
+      intent: V2_INTENTS.CANCEL_ORDER,
+      confidence: 0.95,
+      entities: [],
+      proposed_actions: [
+        { action_type: 'CANCEL_ORDER', payload: {}, confidence: 0.95, requires_validation: false },
+      ],
+      reply_text: 'Oke siap Kak, pesanan sudah dibatalkan ya!',
+      needs_clarification: false,
+      uncertainty_signals: null, // ← LLM emits null instead of array
+    });
+
+    const provider = makeMockProvider('test-null-9', 'success', rawWithNull);
+    const gateway = new LLMGateway(
+      provider,
+      mockGatekeeper,
+      mockGatekeeper,
+      5000,
+      1,
+      undefined,
+      () => Promise.resolve(false),
+    );
+
+    const result = await callV2Engine(MINIMAL_CONTEXT, 'chat_primary', gateway);
+
+    assert.ok(result.success, `expected success when uncertainty_signals is null, got: ${JSON.stringify(result)}`);
+    if (result.success) {
+      assert.deepEqual(result.data.uncertainty_signals, [], 'null uncertainty_signals should default to []');
+      assert.equal(result.data.intent, V2_INTENTS.CANCEL_ORDER);
     }
   });
 });

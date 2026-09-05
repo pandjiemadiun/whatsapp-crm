@@ -164,7 +164,7 @@ export const V2EngineOutputSchema = z.object({
   needs_clarification: z.boolean(),
   clarification_question: z.string().optional(),
   summary_update: z.string().optional(),
-  uncertainty_signals: z.array(V2UncertaintySignalSchema),
+  uncertainty_signals: z.array(V2UncertaintySignalSchema).default([]),
 });
 
 export type V2EngineOutputValidated = z.infer<typeof V2EngineOutputSchema>;

@@ -121,6 +121,26 @@ describe('V2EngineOutputSchema', () => {
     assert.ok(result.success, `expected success with optional fields omitted, got: ${result.error?.message}`);
   });
 
+  it('uncertainty_signals defaults to [] when omitted (LLM may omit field)', () => {
+    const payload = validBase();
+    delete (payload as any).uncertainty_signals;
+    const result = V2EngineOutputSchema.safeParse(payload);
+    assert.ok(result.success, `expected success with uncertainty_signals omitted, got: ${result.error?.message}`);
+    if (result.success) {
+      assert.deepEqual(result.data.uncertainty_signals, []);
+    }
+  });
+
+  it('uncertainty_signals: null rejected at schema level (normalizeNulls handles null→undefined before parse)', () => {
+    const payload = validBase();
+    payload.uncertainty_signals = null as any;
+    const result = V2EngineOutputSchema.safeParse(payload);
+    // Without normalizeNulls, null is NOT undefined → .default([]) does not apply.
+    // This is by design: normalizeNulls() in engine-call.ts converts null→undefined
+    // BEFORE the schema parse. The full pipeline is tested in engine-call.test.ts case9.
+    assert.ok(!result.success, 'null should be rejected at schema level (pre-normalization)');
+  });
+
   it('proposed_actions with NONE action_type and requires_validation=false is accepted', () => {
     const payload = validBase();
     payload.proposed_actions = [

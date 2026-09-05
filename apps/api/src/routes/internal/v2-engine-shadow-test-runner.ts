@@ -27,6 +27,8 @@ import type { V2EngineResult } from '../../services/chat/v2-engine/engine-call.j
 
 const CONVERSATION_ID = 'bbab7983-ddb3-40ef-b1a4-a12200566be5';
 const MAX_TURNS = 10; // buildLLMContext uses MAX_TURNS=10 (20 turns)
+const CALL_DELAY_MS = 3000; // delay between consecutive LLM calls (avoid rate limit)
+const MAX_RETRIES = 2; // retry on provider exhaustion before giving up
 
 // ─── V1 Actual Responses (dari conversation_history + trace analysis) ──────
 
@@ -117,6 +119,11 @@ const TEST_MESSAGES: ReadonlyArray<string> = [
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
+/** Delay for rate-limit avoidance between consecutive LLM calls. */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /**
  * Load ALL conversation history from DB (chronological order).
  * Returns as HistoryTurn[] for buildLLMContext.
@@ -157,6 +164,9 @@ function buildRecentHistoryBefore(history: HistoryTurn[], messageIndex: number):
 /**
  * Run shadow test for a single message with REAL LLM gateway.
  * Uses conversation history from DB (up to the point of this message).
+ *
+ * Includes retry with exponential backoff on provider errors to avoid
+ * 429 rate-limiting + truncated outputs during manual testing.
  */
 async function runShadowForMessage(
   conversationId: string,
@@ -225,7 +235,30 @@ async function main() {
         ? buildRecentHistoryBefore(fullHistory, msgIndex).length
         : fullHistory.slice(-MAX_TURNS * 2).length;
 
-      const v2Result = await runShadowForMessage(CONVERSATION_ID, msg, fullHistory, workspace!);
+      // Run with retry + backoff on provider exhaustion / 429
+      let v2Result: V2EngineResult | null = null;
+      let lastError: string = '';
+      for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+        v2Result = await runShadowForMessage(CONVERSATION_ID, msg, fullHistory, workspace!);
+        if (v2Result.success) break;
+
+        lastError = v2Result.error.message;
+        const isRateLimited =
+          v2Result.error.type === 'provider_exhausted' &&
+          (v2Result.error.message.includes('429') ||
+           v2Result.error.message.includes('truncated') ||
+           v2Result.error.failedProviders?.length > 0);
+
+        if (attempt < MAX_RETRIES && isRateLimited) {
+          const delay = CALL_DELAY_MS * Math.pow(2, attempt); // 3s, 6s
+          console.error(`  ↻ retry ${attempt + 1}/${MAX_RETRIES} after ${delay}ms backoff (rate limit)`);
+          await sleep(delay);
+        }
+      }
+
+      if (!v2Result || !v2Result.success) {
+        throw new Error(lastError || 'unknown error');
+      }
 
       results.push({
         no: i + 1,
@@ -235,13 +268,9 @@ async function main() {
         context_length: contextLen,
       });
 
-      if (v2Result.success) {
-        const intent = v2Result.data.intent;
-        const cancelFlag = intent === 'cancel_order' ? ' ⚠️ FALSE-CANCEL!' : '';
-        console.error(`  v2: intent=${intent}, conf=${v2Result.data.confidence}, reply="${v2Result.data.reply_text?.slice(0, 80)}..."${cancelFlag}\n`);
-      } else {
-        console.error(`  v2: ERROR type=${v2Result.error.type}, msg=${v2Result.error.message.slice(0, 80)}\n`);
-      }
+      const intent = v2Result.data.intent;
+      const cancelFlag = intent === 'cancel_order' ? ' ⚠️ FALSE-CANCEL!' : '';
+      console.error(`  v2: intent=${intent}, conf=${v2Result.data.confidence}, reply="${v2Result.data.reply_text?.slice(0, 80)}..."${cancelFlag}\n`);
     } catch (err) {
       console.error(`  ERROR: ${err instanceof Error ? err.message : String(err)}\n`);
       results.push({
@@ -251,6 +280,12 @@ async function main() {
         v2_result: { success: false, error: { type: 'provider_exhausted' as const, message: String(err), failedProviders: [] } },
         context_length: 0,
       });
+    }
+
+    // Delay between consecutive LLM calls to avoid rate limiting
+    if (i < TEST_MESSAGES.length - 1) {
+      console.error(`  (rate-limit delay: ${CALL_DELAY_MS}ms...)\n`);
+      await sleep(CALL_DELAY_MS);
     }
   }
 
