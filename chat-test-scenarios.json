@@ -1,0 +1,328 @@
+[
+  {
+    "scenario_id": "pinq_single_product_price",
+    "category": "product_inquiry",
+    "product_refs": ["prod-ban-dalam-test"],
+    "messages": [
+      "Ban dalam motor berapa harganya?"
+    ]
+  },
+  {
+    "scenario_id": "pinq_browse_catalog",
+    "category": "product_inquiry",
+    "messages": [
+      "Ada produk apa saja di toko ini?"
+    ]
+  },
+  {
+    "scenario_id": "pinq_stock_check",
+    "category": "product_inquiry",
+    "product_refs": ["prod-kampas-depan-test"],
+    "messages": [
+      "Stok kampas rem depan masih ada?"
+    ]
+  },
+  {
+    "scenario_id": "pinq_price_comparison",
+    "category": "product_inquiry",
+    "product_refs": ["prod-oli-mesin-test", "prod-accu-test"],
+    "messages": [
+      "Berapa harga oli mesin dan accu motor?"
+    ]
+  },
+  {
+    "scenario_id": "cart_add_single_product",
+    "category": "add_to_cart_via_teks",
+    "product_refs": ["prod-busi-motor-test"],
+    "messages": [
+      "saya mau beli Busi Motor"
+    ]
+  },
+  {
+    "scenario_id": "cart_add_with_quantity",
+    "category": "add_to_cart_via_teks",
+    "product_refs": ["prod-ban-dalam-test"],
+    "messages": [
+      "saya mau beli Ban Dalam Motor 2 buah"
+    ]
+  },
+  {
+    "scenario_id": "cart_add_then_confirm",
+    "category": "add_to_cart_via_teks",
+    "product_refs": ["prod-ban-dalam-test"],
+    "messages": [
+      "ban dalam motor",
+      "ya, masukkan ke keranjang"
+    ]
+  },
+  {
+    "scenario_id": "cart_multi_item_two",
+    "category": "multi_item_cart",
+    "product_refs": ["prod-ban-dalam-test", "prod-busi-motor-test"],
+    "messages": [
+      "saya mau beli Ban Dalam Motor dan Busi Motor"
+    ]
+  },
+  {
+    "scenario_id": "cart_multi_item_three",
+    "category": "multi_item_cart",
+    "product_refs": ["prod-oli-mesin-test", "prod-filter-udara-test", "prod-rantai-520-test"],
+    "messages": [
+      "saya mau beli oli mesin, filter udara, dan rantai roller"
+    ]
+  },
+  {
+    "scenario_id": "cart_multi_item_with_total",
+    "category": "multi_item_cart",
+    "product_refs": ["prod-ban-dalam-test", "prod-busi-motor-test"],
+    "messages": [
+      "ban dalam motor",
+      "ya",
+      "busi motor",
+      "ya",
+      "berapa totalnya?"
+    ]
+  },
+  {
+    "scenario_id": "checkout_single_item",
+    "category": "checkout_full",
+    "product_refs": ["prod-ban-dalam-test"],
+    "messages": [
+      "ban dalam motor",
+      "ya",
+      "saya mau bayar"
+    ]
+  },
+  {
+    "scenario_id": "checkout_with_name",
+    "category": "checkout_full",
+    "product_refs": ["prod-ban-dalam-test"],
+    "messages": [
+      "ban dalam motor",
+      "ya",
+      "saya mau bayar",
+      "Panji Wijaya"
+    ]
+  },
+  {
+    "scenario_id": "checkout_full_complete",
+    "category": "checkout_full",
+    "product_refs": ["prod-busi-motor-test"],
+    "messages": [
+      "busi motor",
+      "ya",
+      "saya mau bayar",
+      "Budi Santoso",
+      "Jl. Merdeka No 10, Jakarta",
+      "Jakarta"
+    ]
+  },
+  {
+    "scenario_id": "trap_panji_dagangan",
+    "category": "clarification_trap",
+    "product_refs": ["prod-ban-dalam-test"],
+    "messages": [
+      "ban dalam motor",
+      "ya",
+      "saya mau bayar",
+      "Panji dagangan"
+    ]
+  },
+  {
+    "scenario_id": "trap_budi_gagal_address",
+    "category": "clarification_trap",
+    "product_refs": ["prod-ban-dalam-test"],
+    "messages": [
+      "ban dalam motor",
+      "ya",
+      "saya mau bayar",
+      "Budi gagal move on jl kenanga"
+    ]
+  },
+  {
+    "scenario_id": "trap_rina_anggun_name",
+    "category": "clarification_trap",
+    "product_refs": ["prod-busi-motor-test"],
+    "messages": [
+      "busi motor",
+      "ya",
+      "saya mau bayar",
+      "Rina anggun jaya"
+    ]
+  },
+  {
+    "scenario_id": "trap_anggara_name_address",
+    "category": "clarification_trap",
+    "product_refs": ["prod-oli-mesin-test"],
+    "messages": [
+      "oli mesin",
+      "ya",
+      "saya mau bayar",
+      "Anggara, Jl. Anggrek No 5"
+    ]
+  },
+  {
+    "scenario_id": "trap_ga_jadi_as_name",
+    "category": "clarification_trap",
+    "product_refs": ["prod-ban-dalam-test"],
+    "messages": [
+      "ban dalam motor",
+      "ya",
+      "saya mau bayar",
+      "ga jadi deh, batal aja"
+    ]
+  },
+  {
+    "scenario_id": "trap_pak_gatot_gading",
+    "category": "clarification_trap",
+    "product_refs": ["prod-accu-test"],
+    "messages": [
+      "accu motor",
+      "ya",
+      "saya mau bayar",
+      "Pak gatot, jl gading"
+    ]
+  },
+  {
+    "scenario_id": "cancel_true_ga_jadi",
+    "category": "true_cancel",
+    "product_refs": ["prod-ban-dalam-test"],
+    "messages": [
+      "ban dalam motor",
+      "ya",
+      "saya mau bayar",
+      "ga jadi deh, batalkan"
+    ]
+  },
+  {
+    "scenario_id": "cancel_true_batal",
+    "category": "true_cancel",
+    "product_refs": ["prod-ban-dalam-test"],
+    "messages": [
+      "ban dalam motor",
+      "ya",
+      "batal aja, beli lain kali"
+    ]
+  },
+  {
+    "scenario_id": "variant_select_size_100_90_17",
+    "category": "variant_selection",
+    "product_refs": ["prod-ban-dalam-test"],
+    "messages": [
+      "ban dalam motor",
+      "100/90-17",
+      "ya"
+    ]
+  },
+  {
+    "scenario_id": "variant_select_size_110_90_17",
+    "category": "variant_selection",
+    "product_refs": ["prod-ban-dalam-test"],
+    "messages": [
+      "ban dalam motor",
+      "110/90-17",
+      "ya"
+    ]
+  },
+  {
+    "scenario_id": "variant_select_by_index",
+    "category": "variant_selection",
+    "product_refs": ["prod-ban-dalam-test"],
+    "messages": [
+      "ban dalam motor",
+      "yang pertama",
+      "ya"
+    ]
+  },
+  {
+    "scenario_id": "order_status_tracking",
+    "category": "order_status_inquiry",
+    "messages": [
+      "saya mau tanya status pesanan saya"
+    ]
+  },
+  {
+    "scenario_id": "order_status_shipped",
+    "category": "order_status_inquiry",
+    "messages": [
+      "apakah pesanan saya sudah dikirim?"
+    ]
+  },
+  {
+    "scenario_id": "shipping_cost_query",
+    "category": "shipping_inquiry",
+    "messages": [
+      "berapa ongkir ke Jakarta?"
+    ]
+  },
+  {
+    "scenario_id": "shipping_time_query",
+    "category": "shipping_inquiry",
+    "messages": [
+      "kapan pesanan akan sampai?"
+    ]
+  },
+  {
+    "scenario_id": "shipping_coverage_query",
+    "category": "shipping_inquiry",
+    "messages": [
+      "ada layanan kirim ke Bandung?"
+    ]
+  },
+  {
+    "scenario_id": "smalltalk_greeting_morning",
+    "category": "smalltalk",
+    "messages": [
+      "selamat pagi"
+    ]
+  },
+  {
+    "scenario_id": "smalltalk_thanks",
+    "category": "smalltalk",
+    "messages": [
+      "terima kasih banyak atas bantuangannya"
+    ]
+  },
+  {
+    "scenario_id": "smalltalk_company_origin",
+    "category": "smalltalk",
+    "messages": [
+      "toko ini dari kapan berdiri?"
+    ]
+  },
+  {
+    "scenario_id": "escalate_to_human_agent",
+    "category": "escalation_request",
+    "messages": [
+      "saya ingin bicara dengan customer service"
+    ]
+  },
+  {
+    "scenario_id": "escalate_product_complaint",
+    "category": "escalation_request",
+    "messages": [
+      "ini mengecewakan, saya mau komplain"
+    ]
+  },
+  {
+    "scenario_id": "ambiguous_short_h",
+    "category": "ambiguous_short_reply",
+    "messages": [
+      "h"
+    ]
+  },
+  {
+    "scenario_id": "ambiguous_emoji_only",
+    "category": "ambiguous_short_reply",
+    "messages": [
+      "😊"
+    ]
+  },
+  {
+    "scenario_id": "ambiguous_ga_only",
+    "category": "ambiguous_short_reply",
+    "messages": [
+      "ga"
+    ]
+  }
+]
