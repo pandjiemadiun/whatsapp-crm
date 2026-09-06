@@ -38,6 +38,7 @@ export interface OpenAICompatibleConfig {
   authType?: AuthType;      // 'bearer' (default) | 'basic' (Basic Auth)
   username?: string;        // required when authType === 'basic'
   password?: string;        // required when authType === 'basic' (encrypted at rest by prisma middleware)
+  skipParams?: string[];    // Omit these OpenAI params from the request body (e.g. ['temperature','top_p'] for backends that reject them)
 }
 
 /** HTTP-status -> ErrorCategory (mirrors groq.adapter.ts categorizeHttpError). */
@@ -96,6 +97,7 @@ export class OpenAICompatibleAdapter implements AIProvider {
   private readonly inputPricePer1M: number;
   private readonly outputPricePer1M: number;
   private readonly authHeader: string;
+  private readonly skipParams: Set<string>;
 
   constructor(config: OpenAICompatibleConfig) {
     this.baseUrl = config.baseUrl;
@@ -111,6 +113,7 @@ export class OpenAICompatibleAdapter implements AIProvider {
     } else {
       this.authHeader = `Bearer ${config.apiKey}`;
     }
+    this.skipParams = new Set(config.skipParams ?? []);
   }
 
   getName(): string {
@@ -129,11 +132,22 @@ export class OpenAICompatibleAdapter implements AIProvider {
     const requestBody: Record<string, unknown> = {
       model: this.model,
       messages: [{ role: 'user', content: prompt }],
-      temperature,
-      max_tokens: maxTokens,
-      top_p: topP,
-      ...(options?.jsonMode ? { response_format: { type: 'json_object' } } : {}),
     };
+
+    // Per-provider skipParams: omit params that the backend rejects
+    // (e.g. Internal LLM / webai-to-api rejects 'temperature' and 'top_p')
+    if (!this.skipParams.has('temperature')) {
+      requestBody['temperature'] = temperature;
+    }
+    if (!this.skipParams.has('max_tokens')) {
+      requestBody['max_tokens'] = maxTokens;
+    }
+    if (!this.skipParams.has('top_p')) {
+      requestBody['top_p'] = topP;
+    }
+    if (options?.jsonMode && !this.skipParams.has('response_format')) {
+      requestBody['response_format'] = { type: 'json_object' };
+    }
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), this.timeoutMs);

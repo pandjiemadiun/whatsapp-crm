@@ -593,6 +593,7 @@ model AIProviderConfig {
   authType       String    @default("bearer") // "bearer" (default) | "basic" (HTTP Basic Auth)
   username       String?   // Basic Auth username (plaintext, non-sensitive)
   password       String?   // Basic Auth password (AES-256-GCM ciphertext, auto-encrypted by prisma middleware)
+  skipParams     Json?     // Per-provider: omit these OpenAI params from request body (e.g. ["temperature","top_p"] for backends that reject them)
   lastTestedAt   DateTime? // populated by the test-connection feature (Unit 4)
   lastTestResult String?   // populated by Unit 4; last success/error message
   createdAt      DateTime  @default(now())

@@ -40,6 +40,7 @@ export interface ProviderRow {
   authType?: string;
   username?: string | null;
   password?: string | null;
+  skipParams?: any | null; // JSON array of param names to omit (e.g. ["temperature","top_p"])
 }
 
 type FindManyArgs = {
@@ -90,6 +91,7 @@ export class AIProviderResolverService {
           authType: (row.authType as AuthType) ?? 'bearer',
           username: row.username ?? undefined,
           password: row.password ?? undefined,
+          skipParams: Array.isArray(row.skipParams) ? row.skipParams : undefined,
         });
       case 'gemini_native':
         return new GeminiShimAdapter({
