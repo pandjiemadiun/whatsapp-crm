@@ -124,6 +124,19 @@ Schema:\n${INTERPRETER_SCHEMA}\n]` +
     } catch (err) {
       lastError = err as Error;
       const msg = lastError.message;
+      // AllProvidersCooldownError: retrying is pointless — when every provider
+      // is in 5-min cooldown, the next attempt (20ms later) will fail instantly
+      // too. The '429' in the error message ("HTTP 429 cascade") would make
+      // the isRetryable string check below return true, wasting both retry
+      // attempts. Short-circuit instead: log and return null immediately so the
+      // pipeline falls through to the Stage 5 dead_end path without spinning.
+      if (lastError.name === 'AllProvidersCooldownError') {
+        adapters.logger.warn(
+          'Interpreter: all providers in cooldown — skipping retry (cooldown won\'t expire in 20ms)',
+          { conversationId: ctx.conversationId },
+        );
+        return null;
+      }
       const isRetryable =
         msg.includes('429') ||
         msg.includes('timeout') ||
