@@ -25,6 +25,8 @@ import {
   AIProviderError,
 } from './types.js';
 
+export type AuthType = 'bearer' | 'basic';
+
 export interface OpenAICompatibleConfig {
   baseUrl: string;          // e.g. https://api.groq.com/openai/v1/chat/completions
   apiKey: string;
@@ -33,6 +35,9 @@ export interface OpenAICompatibleConfig {
   timeoutMs?: number;       // request timeout (default 10000)
   inputPricePer1M?: number; // $/1M input tokens  (default 0.05)
   outputPricePer1M?: number; // $/1M output tokens (default 0.15)
+  authType?: AuthType;      // 'bearer' (default) | 'basic' (Basic Auth)
+  username?: string;        // required when authType === 'basic'
+  password?: string;        // required when authType === 'basic' (encrypted at rest by prisma middleware)
 }
 
 /** HTTP-status -> ErrorCategory (mirrors groq.adapter.ts categorizeHttpError). */
@@ -90,6 +95,7 @@ export class OpenAICompatibleAdapter implements AIProvider {
   private readonly timeoutMs: number;
   private readonly inputPricePer1M: number;
   private readonly outputPricePer1M: number;
+  private readonly authHeader: string;
 
   constructor(config: OpenAICompatibleConfig) {
     this.baseUrl = config.baseUrl;
@@ -99,6 +105,12 @@ export class OpenAICompatibleAdapter implements AIProvider {
     this.timeoutMs = config.timeoutMs ?? 10000;
     this.inputPricePer1M = config.inputPricePer1M ?? 0.05;
     this.outputPricePer1M = config.outputPricePer1M ?? 0.15;
+    if (config.authType === 'basic') {
+      const credentials = `${config.username ?? ''}:${config.password ?? ''}`;
+      this.authHeader = `Basic ${Buffer.from(credentials, 'utf-8').toString('base64')}`;
+    } else {
+      this.authHeader = `Bearer ${config.apiKey}`;
+    }
   }
 
   getName(): string {
@@ -130,7 +142,7 @@ export class OpenAICompatibleAdapter implements AIProvider {
       const response = await fetch(this.baseUrl, {
         method: 'POST',
         headers: {
-          Authorization: `Bearer ${this.apiKey}`,
+          Authorization: this.authHeader,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(requestBody),
@@ -218,7 +230,7 @@ export class OpenAICompatibleAdapter implements AIProvider {
       try {
         response = await fetch(this.baseUrl, {
           method: 'GET',
-          headers: { Authorization: `Bearer ${this.apiKey}` },
+          headers: { Authorization: this.authHeader },
           signal: controller.signal,
         });
         return response.ok;

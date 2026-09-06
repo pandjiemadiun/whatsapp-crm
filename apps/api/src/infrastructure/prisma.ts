@@ -37,7 +37,7 @@ const SENSITIVE_FIELDS: Record<string, string[]> = {
   // store apiKey in PLAINTEXT — the middleware encrypts. Pre-encrypting before
   // a Prisma write causes DOUBLE encryption (the original seed did this;
   // fixed in Unit 3a so the resolver reads a single-decrypted key).
-  AIProviderConfig: ['apiKey'],
+  AIProviderConfig: ['apiKey', 'password'],
 };
 
 /** Periodic key refresh tiap 10 menit */

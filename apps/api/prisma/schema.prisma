@@ -587,9 +587,12 @@ model AIProviderConfig {
   baseUrl        String    // e.g. https://api.groq.com/openai/v1/chat/completions
   apiKey         String    // AES-256-GCM ciphertext ("iv:tag:ciphertext")
   model          String    // model identifier sent in the request body/URL
-  role           String    // "chat_primary" | "chat_fallback" | "chat_gatekeeper" | "wizard" | "other"
+  role           String    // "chat_primary" | "chat_fallback" | "chat_fallback_2" | "chat_gatekeeper" | "wizard" | "other"
   priority       Int       @default(0) // ordering within the same role in fallback chains
   isActive       Boolean   @default(true)
+  authType       String    @default("bearer") // "bearer" (default) | "basic" (HTTP Basic Auth)
+  username       String?   // Basic Auth username (plaintext, non-sensitive)
+  password       String?   // Basic Auth password (AES-256-GCM ciphertext, auto-encrypted by prisma middleware)
   lastTestedAt   DateTime? // populated by the test-connection feature (Unit 4)
   lastTestResult String?   // populated by Unit 4; last success/error message
   createdAt      DateTime  @default(now())

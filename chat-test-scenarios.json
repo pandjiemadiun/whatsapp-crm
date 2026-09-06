@@ -2,7 +2,7 @@
   {
     "scenario_id": "pinq_single_product_price",
     "category": "product_inquiry",
-    "product_refs": ["prod-ban-dalam-test"],
+    "product_refs": ["prod-ban-dalam-test-v2"],
     "messages": [
       "Ban dalam motor berapa harganya?"
     ]
@@ -17,7 +17,7 @@
   {
     "scenario_id": "pinq_stock_check",
     "category": "product_inquiry",
-    "product_refs": ["prod-kampas-depan-test"],
+    "product_refs": ["prod-kampas-depan-test-v2"],
     "messages": [
       "Stok kampas rem depan masih ada?"
     ]
@@ -25,7 +25,7 @@
   {
     "scenario_id": "pinq_price_comparison",
     "category": "product_inquiry",
-    "product_refs": ["prod-oli-mesin-test", "prod-accu-test"],
+    "product_refs": ["prod-oli-mesin-test-v2", "prod-accu-test-v2"],
     "messages": [
       "Berapa harga oli mesin dan accu motor?"
     ]
@@ -33,7 +33,7 @@
   {
     "scenario_id": "cart_add_single_product",
     "category": "add_to_cart_via_teks",
-    "product_refs": ["prod-busi-motor-test"],
+    "product_refs": ["prod-busi-motor-test-v2"],
     "messages": [
       "saya mau beli Busi Motor"
     ]
@@ -41,7 +41,7 @@
   {
     "scenario_id": "cart_add_with_quantity",
     "category": "add_to_cart_via_teks",
-    "product_refs": ["prod-ban-dalam-test"],
+    "product_refs": ["prod-ban-dalam-test-v2"],
     "messages": [
       "saya mau beli Ban Dalam Motor 2 buah"
     ]
@@ -49,7 +49,7 @@
   {
     "scenario_id": "cart_add_then_confirm",
     "category": "add_to_cart_via_teks",
-    "product_refs": ["prod-ban-dalam-test"],
+    "product_refs": ["prod-ban-dalam-test-v2"],
     "messages": [
       "ban dalam motor",
       "ya, masukkan ke keranjang"
@@ -58,7 +58,7 @@
   {
     "scenario_id": "cart_multi_item_two",
     "category": "multi_item_cart",
-    "product_refs": ["prod-ban-dalam-test", "prod-busi-motor-test"],
+    "product_refs": ["prod-ban-dalam-test-v2", "prod-busi-motor-test-v2"],
     "messages": [
       "saya mau beli Ban Dalam Motor dan Busi Motor"
     ]
@@ -66,7 +66,7 @@
   {
     "scenario_id": "cart_multi_item_three",
     "category": "multi_item_cart",
-    "product_refs": ["prod-oli-mesin-test", "prod-filter-udara-test", "prod-rantai-520-test"],
+    "product_refs": ["prod-oli-mesin-test-v2", "prod-filter-udara-test-v2", "prod-rantai-520-test-v2"],
     "messages": [
       "saya mau beli oli mesin, filter udara, dan rantai roller"
     ]
@@ -74,7 +74,7 @@
   {
     "scenario_id": "cart_multi_item_with_total",
     "category": "multi_item_cart",
-    "product_refs": ["prod-ban-dalam-test", "prod-busi-motor-test"],
+    "product_refs": ["prod-ban-dalam-test-v2", "prod-busi-motor-test-v2"],
     "messages": [
       "ban dalam motor",
       "ya",
@@ -86,7 +86,7 @@
   {
     "scenario_id": "checkout_single_item",
     "category": "checkout_full",
-    "product_refs": ["prod-ban-dalam-test"],
+    "product_refs": ["prod-ban-dalam-test-v2"],
     "messages": [
       "ban dalam motor",
       "ya",
@@ -96,7 +96,7 @@
   {
     "scenario_id": "checkout_with_name",
     "category": "checkout_full",
-    "product_refs": ["prod-ban-dalam-test"],
+    "product_refs": ["prod-ban-dalam-test-v2"],
     "messages": [
       "ban dalam motor",
       "ya",
@@ -107,7 +107,7 @@
   {
     "scenario_id": "checkout_full_complete",
     "category": "checkout_full",
-    "product_refs": ["prod-busi-motor-test"],
+    "product_refs": ["prod-busi-motor-test-v2"],
     "messages": [
       "busi motor",
       "ya",
@@ -120,7 +120,7 @@
   {
     "scenario_id": "trap_panji_dagangan",
     "category": "clarification_trap",
-    "product_refs": ["prod-ban-dalam-test"],
+    "product_refs": ["prod-ban-dalam-test-v2"],
     "messages": [
       "ban dalam motor",
       "ya",
@@ -131,7 +131,7 @@
   {
     "scenario_id": "trap_budi_gagal_address",
     "category": "clarification_trap",
-    "product_refs": ["prod-ban-dalam-test"],
+    "product_refs": ["prod-ban-dalam-test-v2"],
     "messages": [
       "ban dalam motor",
       "ya",
@@ -142,7 +142,7 @@
   {
     "scenario_id": "trap_rina_anggun_name",
     "category": "clarification_trap",
-    "product_refs": ["prod-busi-motor-test"],
+    "product_refs": ["prod-busi-motor-test-v2"],
     "messages": [
       "busi motor",
       "ya",
@@ -153,7 +153,7 @@
   {
     "scenario_id": "trap_anggara_name_address",
     "category": "clarification_trap",
-    "product_refs": ["prod-oli-mesin-test"],
+    "product_refs": ["prod-oli-mesin-test-v2"],
     "messages": [
       "oli mesin",
       "ya",
@@ -164,7 +164,7 @@
   {
     "scenario_id": "trap_ga_jadi_as_name",
     "category": "clarification_trap",
-    "product_refs": ["prod-ban-dalam-test"],
+    "product_refs": ["prod-ban-dalam-test-v2"],
     "messages": [
       "ban dalam motor",
       "ya",
@@ -175,7 +175,7 @@
   {
     "scenario_id": "trap_pak_gatot_gading",
     "category": "clarification_trap",
-    "product_refs": ["prod-accu-test"],
+    "product_refs": ["prod-accu-test-v2"],
     "messages": [
       "accu motor",
       "ya",
@@ -186,7 +186,7 @@
   {
     "scenario_id": "cancel_true_ga_jadi",
     "category": "true_cancel",
-    "product_refs": ["prod-ban-dalam-test"],
+    "product_refs": ["prod-ban-dalam-test-v2"],
     "messages": [
       "ban dalam motor",
       "ya",
@@ -197,7 +197,7 @@
   {
     "scenario_id": "cancel_true_batal",
     "category": "true_cancel",
-    "product_refs": ["prod-ban-dalam-test"],
+    "product_refs": ["prod-ban-dalam-test-v2"],
     "messages": [
       "ban dalam motor",
       "ya",
@@ -207,7 +207,7 @@
   {
     "scenario_id": "variant_select_size_100_90_17",
     "category": "variant_selection",
-    "product_refs": ["prod-ban-dalam-test"],
+    "product_refs": ["prod-ban-dalam-test-v2"],
     "messages": [
       "ban dalam motor",
       "100/90-17",
@@ -217,7 +217,7 @@
   {
     "scenario_id": "variant_select_size_110_90_17",
     "category": "variant_selection",
-    "product_refs": ["prod-ban-dalam-test"],
+    "product_refs": ["prod-ban-dalam-test-v2"],
     "messages": [
       "ban dalam motor",
       "110/90-17",
@@ -227,7 +227,7 @@
   {
     "scenario_id": "variant_select_by_index",
     "category": "variant_selection",
-    "product_refs": ["prod-ban-dalam-test"],
+    "product_refs": ["prod-ban-dalam-test-v2"],
     "messages": [
       "ban dalam motor",
       "yang pertama",

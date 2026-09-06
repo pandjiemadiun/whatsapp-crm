@@ -65,6 +65,7 @@ export class AllProvidersCooldownError extends AIProviderError {
 export class LLMGateway {
   private primary: AIProvider;
   private fallback: AIProvider;
+  private fallback2: AIProvider | undefined;
   private gatekeeper: AIProvider & {
     extractIntent(message: string, contextSummary?: string): Promise<ExtractedIntent>;
   };
@@ -86,6 +87,7 @@ export class LLMGateway {
   private stats = {
     primary: { success: 0, failed: 0 },
     fallback: { success: 0, failed: 0 },
+    fallback_2: { success: 0, failed: 0 },
     errors: [] as { provider: string; category: string; timestamp: number }[],
   };
 
@@ -99,9 +101,11 @@ export class LLMGateway {
     maxAttempts: number = MAX_ATTEMPTS,
     resolver: AIProviderResolverService = aiProviderResolver,
     dynamicFlagProvider: (() => Promise<boolean>) | undefined = undefined,
+    fallback2: AIProvider | undefined = undefined,
   ) {
     this.primary = primary;
     this.fallback = fallback;
+    this.fallback2 = fallback2;
     this.gatekeeper = gatekeeper;
     this.turnDeadlineMs = turnDeadlineMs;
     this.maxAttempts = maxAttempts;
@@ -145,17 +149,19 @@ export class LLMGateway {
    * Unit 5 chose Option B: gatekeeper stays pinned to the groqAdapter singleton
    * and `chat_gatekeeper` AIProviderConfig rows are cosmetic for now.
    */
-  private async resolveEffectiveProviders(): Promise<{ primaryList: AIProvider[]; fallbackList: AIProvider[] }> {
+  private async resolveEffectiveProviders(): Promise<{ primaryList: AIProvider[]; fallbackList: AIProvider[]; fallback2List: AIProvider[] }> {
     if (!(await this.isDynamicProvidersEnabled())) {
-      return { primaryList: [this.primary], fallbackList: [this.fallback] };
+      return { primaryList: [this.primary], fallbackList: [this.fallback], fallback2List: this.fallback2 ? [this.fallback2] : [] };
     }
 
     const primaryList = await this.resolver.getProvidersForRole('chat_primary');
     const fallbackList = await this.resolver.getProvidersForRole('chat_fallback');
+    const fallback2List = await this.resolver.getProvidersForRole('chat_fallback_2');
 
     return {
       primaryList: primaryList.length > 0 ? primaryList : [this.primary],
       fallbackList: fallbackList.length > 0 ? fallbackList : [this.fallback],
+      fallback2List: fallback2List.length > 0 ? fallback2List : (this.fallback2 ? [this.fallback2] : []),
     };
   }
 
@@ -201,6 +207,7 @@ export class LLMGateway {
     this.stats = {
       primary: { success: 0, failed: 0 },
       fallback: { success: 0, failed: 0 },
+      fallback_2: { success: 0, failed: 0 },
       errors: [],
     };
   }
@@ -255,7 +262,7 @@ export class LLMGateway {
     //   The gatekeeper is NOT swapped: extractIntent is GroqAdapter-specific
     //   (groq.adapter.ts:329), not on AIProvider; swapping it would silently
     //   degrade intent extraction. Gatekeeper cutover is deferred to Unit 5.
-    const { primaryList, fallbackList } = await this.resolveEffectiveProviders();
+    const { primaryList, fallbackList, fallback2List } = await this.resolveEffectiveProviders();
 
     // Circuit breaker gate
     if (this.isCircuitOpen()) {
@@ -268,10 +275,11 @@ export class LLMGateway {
 
     const roleLists: Array<{
       providers: AIProvider[];
-      roleKey: 'primary' | 'fallback';
+      roleKey: 'primary' | 'fallback' | 'fallback_2';
     }> = [
       { providers: primaryList, roleKey: 'primary' },
       { providers: fallbackList, roleKey: 'fallback' },
+      { providers: fallback2List, roleKey: 'fallback_2' },
     ];
 
     for (const { providers, roleKey } of roleLists) {
@@ -302,7 +310,7 @@ export class LLMGateway {
             logTokenUsage({
               timestamp: Date.now(),
               provider: response.provider,
-              role: roleKey === 'primary' ? 'chat_primary' : 'chat_fallback',
+              role: roleKey === 'primary' ? 'chat_primary' : roleKey === 'fallback' ? 'chat_fallback' : 'chat_fallback_2',
               model: response.model,
               intent,
               conversationId: options?.conversationId || 'unknown',
@@ -472,6 +480,7 @@ export class LLMGateway {
     return {
       primary: this.stats.primary,
       fallback: this.stats.fallback,
+      fallback_2: this.fallback2 ? this.stats.fallback_2 : undefined,
       errorLog: this.stats.errors.slice(-10),
       circuitBreaker: this.getCircuitBreakerMetrics(),
     };
@@ -481,6 +490,7 @@ export class LLMGateway {
     return {
       primary: this.primary.getName(),
       fallback: this.fallback.getName(),
+      fallback_2: this.fallback2 ? this.fallback2.getName() : undefined,
       gatekeeper: this.gatekeeper.getName(),
     };
   }

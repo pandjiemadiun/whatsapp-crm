@@ -24,6 +24,7 @@
 import { prisma } from '../infrastructure/prisma.js';
 import type { AIProvider } from '../adapters/ai/types.js';
 import { OpenAICompatibleAdapter } from '../adapters/ai/openai-compatible.adapter.js';
+import type { AuthType } from '../adapters/ai/openai-compatible.adapter.js';
 import { GeminiShimAdapter } from '../adapters/ai/gemini-shim.adapter.js';
 
 /** Minimal row shape the resolver cares about (subset of Prisma's AIProviderConfig). */
@@ -36,6 +37,9 @@ export interface ProviderRow {
   role: string;
   priority: number;
   isActive: boolean;
+  authType?: string;
+  username?: string | null;
+  password?: string | null;
 }
 
 type FindManyArgs = {
@@ -83,6 +87,9 @@ export class AIProviderResolverService {
           apiKey: row.apiKey,
           model: row.model,
           name: row.name,
+          authType: (row.authType as AuthType) ?? 'bearer',
+          username: row.username ?? undefined,
+          password: row.password ?? undefined,
         });
       case 'gemini_native':
         return new GeminiShimAdapter({
