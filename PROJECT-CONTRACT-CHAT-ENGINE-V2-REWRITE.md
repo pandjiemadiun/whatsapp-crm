@@ -137,7 +137,7 @@ sebagai permanent regression test — bukan cuma fix sekali lalu hilang lagi.
 §7.1 — Window canary: tergantung pada apakah ada merchant asli di sistem.
 
 > **UPDATE 4 Sep 2026**: TIDAK ADA toko produksi/merchant asli yang terdaftar
-> di sistem. SELURUH toko (termasuk store-4f4f67bd "Bengkel Didik") adalah data
+> di sistem. SELURUH toko (termasuk store-a3cd7205 "Bengkel Didik") adalah data
 > uji/dummy. Akibatnya, syarat Fase 1 harus langsung dieksekusi — tidak perlu
 > menunggu merchant asli. Dokumen ini mencatat dua fase:
 
@@ -161,7 +161,7 @@ andalkan test dummy. Hanya setelah **Fase 1 hijau penuh** + owner explicit
 approve + **Fase 2 hijau penuh** → baru cutover ke SEMUA toko. Ini adalah
 kebijakan tambahan, bukan pelonggaran: regression gate tetap WAJIB di setiap unit.
 
-§7.2 — Toko canary: tetap store-4f4f67bd (Bengkel Didik). Meskipun ini adalah
+§7.2 — Toko canary: tetap store-a3cd7205 (Bengkel Didik). Meskipun ini adalah
 toko **dummy/test data** (bukan merchant asli — tidak ada toko produksi di
 sistem saat ini 4 Sep 2026), tetap dipilih sebagai canary store karena:
 - Punya riwayat bug nyata (false-cancel, silent-ADD_TO_CART) yang bisa
@@ -169,7 +169,7 @@ sistem saat ini 4 Sep 2026), tetap dipilih sebagai canary store karena:
 - Data varian/produk paling lengkap di antara test store yang ada
 - Berguna sebagai regression bed — bukan test sintetis yang buta sama sekali
 
-Ganti dari store-f7140b5c (dummy lama, minim data) ke store-4f4f67bd.
+Ganti dari store-f7140b5c (dummy lama, minim data) ke store-a3cd7205.
 Fokus: gunakan riwayat bug-nya sebagai regression bed, bukan karena
 status "representatif produksi".
 
