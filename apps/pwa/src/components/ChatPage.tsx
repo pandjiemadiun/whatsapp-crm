@@ -320,12 +320,20 @@ export default function ChatPage() {
     setIsTyping(true)
 
     setMessages((m) => [...m, { role: 'user', content: text }])
+
+    // UNIT F-GAP1-A: stable per-logical-send id generated ONCE here (before input is
+    // cleared) so a retried/lost-response resend reuses the SAME id -> server claim-path
+    // dedupes. Audit note: onSend clears `input` before awaiting and there is NO
+    // pending-message/resent UI today, so this id is scoped to one send lifecycle;
+    // reuse-on-retry needs a future retry UI (not implemented here - no scope creep).
+    const clientMsgId = crypto.randomUUID()
     setInput('')
 
     try {
       const res = await api.post(`/pwa/${slug}/message`, {
         uid: webUid,
         message: text,
+        clientMsgId,
       })
       const body = res.data
 
