@@ -31,17 +31,50 @@ router.use(authMiddleware);
 router.post('/handle', async (req: AuthenticatedRequest, res: Response) => {
   try {
     const storeId = req.user!.storeId;
-    const { customerId, conversationId, message } = req.body;
+    const { customerId, conversationId, message, clientMsgId } = req.body;
 
     if (!customerId || !conversationId || !message) {
       return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    // UNIT6-B Unit 1 (option a): thread a stable messageId into processCustomerMessage so
+    // /handle joins the claimAction/idempotency path.
+    //
+    // Before this change, /handle called processCustomerMessage with 4 args => messageId
+    // undefined => executeWaCartMutation took the unlocked branch at action-registry.ts:1580
+    // (a direct cartAuthority.executeOps with NO claim/FOR UPDATE — no idempotency).
+    // With a messageId on every call, :1580 is no longer reachable from /handle: the request
+    // flows through claimAction on the claimed path => actionId is constructed at
+    // action-registry.ts:1593-1594 as `${prefix}:${conversationId}:${messageId}`, so a
+    // resent clientMsgId is deduped (already_applied) rather than double-applied.
+    //
+    // Mirrors the PWA /message clientMsgId pattern (routes/pwa.ts:386-396): a stable
+    // clientMsgId is reused verbatim (trimmed, capped 128); absent/invalid falls back to a
+    // server uuid (crypto.randomUUID) with a warning. `crypto` is already imported (L2).
+    //
+    // channel is left at its DEFAULT to preserve /handle's pre-existing behavior —
+    // changing it would alter customerPhone (conversation.service.ts:94) and the actionId
+    // prefix (action-registry.ts:1593), which is out of scope for this unit (strictly the
+    // messageId thread; no other /handle behavior change).
+    let messageId: string;
+    if (typeof clientMsgId === 'string' && clientMsgId.trim().length > 0) {
+      messageId = clientMsgId.trim().slice(0, 128);
+    } else {
+      if (clientMsgId !== undefined && clientMsgId !== '') {
+        adapters.logger.warn('POST /api/messages/handle: clientMsgId present but invalid/empty — falling back to server id', { storeId });
+      } else {
+        adapters.logger.warn('POST /api/messages/handle: clientMsgId absent — falling back to server id', { storeId });
+      }
+      messageId = crypto.randomUUID();
     }
 
     const result = await conversationService.processCustomerMessage(
       storeId,
       customerId,
       conversationId,
-      message
+      message,
+      undefined,
+      messageId
     );
 
     if (!result) {
