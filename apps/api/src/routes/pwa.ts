@@ -376,6 +376,11 @@ router.post('/:storeSlug/message', conversationLimiter, async (req: Request, res
       customerId,
       conversationId,
       message,
+      // UNIT6-PREP-2 §F: thread the existing x-request-id (requestIdMiddleware →
+      // req.requestId) as the deterministic web messageId, so the PWA /message path
+      // takes the SAME claimAction/executeClaimedAction (FOR UPDATE + re-check) path
+      // WA uses — NOT the !messageId direct executeOps branch. WA flow left untouched.
+      requestId: req.requestId,
     });
 
     if (result.kind === 'locked') {

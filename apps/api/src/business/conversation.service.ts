@@ -249,7 +249,7 @@ export class ConversationService {
             const ops = this.deriveResolvedCartOps(pending, payload, catalog);
             const { valid: dbValid } = await validateCartOpsAgainstDb(ops, storeId);
             if (dbValid.length > 0) {
-              await executeWaCartMutation(dbValid, storeId, customerId, conversationId, messageId);
+              await executeWaCartMutation(dbValid, storeId, customerId, conversationId, messageId, channel);
               // ── P0 SAFETY BOUNDARY: mutasi cart sukses, jangan pernah jalan ke v1 ──
               v2MutationExecuted = true;
             }
@@ -336,7 +336,7 @@ export class ConversationService {
                   variant: (e.metadata && typeof e.metadata === 'object' ? (e.metadata as any).variant : null) ?? null,
                 }) as const);
                 // Panggil executeWaCartMutation (idempoten via claim/FOR UPDATE) — harga dari DB (I13), bukan LLM
-                await executeWaCartMutation(ops, storeId, customerId, conversationId, messageId);
+                await executeWaCartMutation(ops, storeId, customerId, conversationId, messageId, channel);
                 // ── P0 SAFETY BOUNDARY: mutasi cart sukses, jangan pernah jalan ke v1 ──
                 v2MutationExecuted = true;
               }
@@ -516,7 +516,7 @@ export class ConversationService {
           // Produk tidak ada di DB → tidak dieksekusi (bukan reject transaksi total).
           const { valid: dbValid } = await validateCartOpsAgainstDb(resolved.ops, storeId);
           if (dbValid.length > 0) {
-            await executeWaCartMutation(dbValid, storeId, customerId, conversationId, messageId);
+            await executeWaCartMutation(dbValid, storeId, customerId, conversationId, messageId, channel);
             cartOpsExecuted.push(...dbValid);
           }
         }
@@ -674,7 +674,7 @@ export class ConversationService {
         if (llmResult.cart_ops && llmResult.cart_ops.length > 0) {
           const { valid, missing } = await validateCartOpsAgainstDb(llmResult.cart_ops, storeId);
           if (valid.length > 0) {
-            await executeWaCartMutation(valid, storeId, customerId, conversationId, messageId);
+            await executeWaCartMutation(valid, storeId, customerId, conversationId, messageId, channel);
             executedAdd = valid.some((o) => o.type === 'add');
             cartOpsExecuted.push(...valid);
           }

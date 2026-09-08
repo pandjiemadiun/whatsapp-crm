@@ -1547,8 +1547,12 @@ export async function executeWaCartMutation(
   customerId: string,
   conversationId: string,
   messageId?: string,
+  channel: 'whatsapp' | 'web' = 'whatsapp',
 ): Promise<WaCartMutationStatus> {
-  // Non-WA path: no stable messageId → no idempotency claim; direct mutation.
+  // Non-WA path (e.g. /handle): no stable messageId → no idempotency claim; direct mutation.
+  // The PWA /message (web) path always arrives with a messageId (request id) and therefore
+  // takes the claimed path below — see UNIT6-PREP-2 §F. WA callers are unchanged: 5-arg calls
+  // default channel to 'whatsapp' and keep the existing `wa:` actionId prefix.
   if (!messageId) {
     if (ops.length > 0) {
       await cartAuthority.executeOps(ops, storeId, customerId, conversationId);
@@ -1558,7 +1562,12 @@ export async function executeWaCartMutation(
     return 'applied';
   }
 
-  const actionId = `wa:${conversationId}:${messageId}`;
+  // Disjoint key prefixes per channel so web claims NEVER collide with WA claims.
+  // WA keeps the documented `wa:${conversationId}:${messageId}` scheme (owner decision, III-9);
+  // web reuses the SAME claimAction/executeClaimedAction mechanism with a `web:` prefix,
+  // keyed on the request id threaded by processWebRequest (UNIT6-PREP-2 §F).
+  const channelPrefix = channel === 'web' ? 'web' : 'wa';
+  const actionId = `${channelPrefix}:${conversationId}:${messageId}`;
   const actionType = WA_CART_MUTATION;
 
   const claim = await claimAction(storeId, customerId, actionType, actionId);

@@ -66,6 +66,10 @@ export interface WebRequestProps {
   customerId: string;
   conversationId: string;
   message: string;
+  /** UNIT6-PREP-2 §F: request id (`x-request-id` via requestIdMiddleware → req.requestId),
+   *  forwarded as the web `messageId` so free-text web mutations take the claimAction path
+   *  (same as WA) instead of the !messageId direct-executeOps branch. */
+  requestId?: string;
 }
 
 export const conversationDeliveryService = {
@@ -74,7 +78,7 @@ export const conversationDeliveryService = {
    * pwa.ts MUST NOT call acquireLock() directly.
    */
   async processWebRequest(props: WebRequestProps): Promise<DeliveryResult> {
-    const { storeId, customerId, conversationId, message } = props;
+    const { storeId, customerId, conversationId, message, requestId } = props;
 
     // --- SATU LOCK, dimiliki delivery service ---
     const release = messageQueueService.acquireLock(conversationId);
@@ -100,6 +104,9 @@ export const conversationDeliveryService = {
         conversationId,
         message,
         'web',
+        // UNIT6-PREP-2 §F: deterministic web messageId (request id) → claim path
+        // (same claimAction/executeClaimedAction WA uses), not the !messageId branch.
+        requestId,
       );
       // Read the customer message persisted by THIS request — safe karena lock masih
       // dipegang (acquireLock di atas, release() di finally di bawah).
