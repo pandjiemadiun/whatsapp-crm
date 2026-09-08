@@ -1785,7 +1785,7 @@ test('PV-P2c-LLM-B 7c: executeWaCartMutation ambiguous "size l" → return "erro
     convId,
     msgId,
   );
-  assert.equal(status, 'error', 'ambiguous variant → executeWaCartMutation kembalikan "error"');
+  assert.equal(status.status, 'error', 'ambiguous variant → executeWaCartMutation kembalikan "error"');
 
   // §6A.9: claim row harus FAILED + error code VARIANT_REQUIRED tersimpan
   // (bukan melempar error baru — error surface tunggal resolvePriceAndStock).

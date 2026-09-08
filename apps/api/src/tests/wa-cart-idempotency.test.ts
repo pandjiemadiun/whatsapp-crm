@@ -389,7 +389,7 @@ describe('PV-P2: VARIANT_REQUIRED via WA path (executeWaCartMutation)', () => {
       [{ type: 'add', product: 'Sosis', qty: 1 } as CartOp],
       WA_STORE, waCustomerId, waConvId, msgId,
     );
-    assert.equal(status, 'error', 'executeWaCartMutation must return "error" for hasVariants=true + variantId=null');
+    assert.equal(status.status, 'error', 'executeWaCartMutation must return "error" for hasVariants=true + variantId=null');
   });
 
   test('4c: WA path — hasVariants=true + variantId=null → NO OrderItem created', async () => {
@@ -424,7 +424,7 @@ describe('PV-P2: VARIANT_REQUIRED via WA path (executeWaCartMutation)', () => {
       [{ type: 'add', product: 'Sosis', qty: 2, variantId: validVariantId } as CartOp],
       WA_STORE, waCustomerId, waConvId, msgId,
     );
-    assert.equal(status, 'applied', 'executeWaCartMutation must return "applied" for hasVariants=true + valid variantId');
+    assert.equal(status.status, 'applied', 'executeWaCartMutation must return "applied" for hasVariants=true + valid variantId');
   });
 
   // ── 4d: WA path — hasVariants=false → SUCCESS ──
@@ -436,7 +436,7 @@ describe('PV-P2: VARIANT_REQUIRED via WA path (executeWaCartMutation)', () => {
       [{ type: 'add', product: 'Beras', qty: 3 } as CartOp],
       WA_STORE, waCustomerId, waConvId, msgId,
     );
-    assert.equal(status, 'applied', 'executeWaCartMutation must return "applied" for hasVariants=false');
+    assert.equal(status.status, 'applied', 'executeWaCartMutation must return "applied" for hasVariants=false');
   });
 
   test('4d: WA path — hasVariants=false → OrderItem created with correct price', async () => {

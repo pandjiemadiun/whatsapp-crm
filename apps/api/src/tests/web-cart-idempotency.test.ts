@@ -136,9 +136,9 @@ describe('P7 — PWA (web) cart idempotency via claim path (UNIT6-PREP-2 §F)', 
   test('F-t1: redeliver SAME web request id twice → 2nd already_applied, mutated exactly once', async () => {
     const requestId = 'WEB-STABLE-1';
     const s1 = await executeWaCartMutation(V1_OPS(), STORE_ID, customerId, conversationId, requestId, 'web');
-    assert.equal(s1, 'applied', 'first web message applied');
+    assert.equal(s1.status, 'applied', 'first web message applied');
     const s2 = await executeWaCartMutation(V1_OPS(), STORE_ID, customerId, conversationId, requestId, 'web');
-    assert.equal(s2, 'already_applied', 'redeliver must resolve to already_applied (idempotent)');
+    assert.equal(s2.status, 'already_applied', 'redeliver must resolve to already_applied (idempotent)');
     const items = await getOrderItems();
     const ayam = items.find((i) => i.productName === 'ayam');
     assert.ok(ayam, 'ayam must be in cart');
@@ -148,8 +148,8 @@ describe('P7 — PWA (web) cart idempotency via claim path (UNIT6-PREP-2 §F)', 
   test('F-t2: two DIFFERENT web request ids, same conversation → both applied (no over-dedup)', async () => {
     const s1 = await executeWaCartMutation(V1_OPS(), STORE_ID, customerId, conversationId, 'WEB-A', 'web');
     const s2 = await executeWaCartMutation(V1_OPS(), STORE_ID, customerId, conversationId, 'WEB-B', 'web');
-    assert.equal(s1, 'applied');
-    assert.equal(s2, 'applied');
+    assert.equal(s1.status, 'applied');
+    assert.equal(s2.status, 'applied');
     const items = await getOrderItems();
     const ayam = items.find((i) => i.productName === 'ayam');
     assert.equal(ayam.quantity, 4, 'both distinct messages apply: 2 + 2 = 4');
@@ -171,7 +171,7 @@ describe('P7 — PWA (web) cart idempotency via claim path (UNIT6-PREP-2 §F)', 
   test('F-t4 (regression): WA channel 5-arg call still uses `wa:` prefix + claim path, unchanged', async () => {
     // WA callers pass no channel → default 'whatsapp' → `wa:` prefix (must be untouched).
     const s1 = await executeWaCartMutation(V1_OPS(), STORE_ID, customerId, conversationId, 'WA-SAME-1'); // 5-arg
-    assert.equal(s1, 'applied');
+    assert.equal(s1.status, 'applied');
     const actionId = `wa:${conversationId}:WA-SAME-1`;
     assert.equal(await countWebClaims(actionId), 1, 'WA 5-arg call must leave a `wa:` claim row');
   });

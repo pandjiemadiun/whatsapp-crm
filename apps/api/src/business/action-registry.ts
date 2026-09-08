@@ -15,8 +15,8 @@ import { orderService } from './order.service.js';
 import { adapters } from '../adapters/container.js';
 import { ApiError } from '../errors/ApiError.js';
 import { ErrorCodes } from '../constants/errorCodes.js';
-import type { CartOp } from '../domain/types.js';
-import type { CartLine, CartSummary } from './cart-authority.js';
+import type { CartOp, ConfirmedItem } from '../domain/types.js';
+import type { CartLine, CartSummary, UnresolvedCartOp, ExecuteOpsResult } from './cart-authority.js';
 
 /** Lease duration for CLAIMED actions — locked to 30000ms (30s) per owner decision (III-9, §6A.10.2) */
 export const LEASE_FINAL_MS = 30000;
@@ -31,6 +31,21 @@ export const WA_CART_MUTATION = 'WA_CART_MUTATION';
 
 /** Return status for executeWaCartMutation — must be distinguishable by the caller. */
 export type WaCartMutationStatus = 'applied' | 'already_applied' | 'error';
+
+/**
+ * Structured result of executeWaCartMutation (UNIT6-B §2a).
+ * Surfaces the confirmed cart lines + per-op resolution failures that
+ * CartAuthority.executeOps already computes (ExecuteOpsResult) — they were
+ * previously discarded at the claim path (:1600→:1604) and on the direct-exec
+ * branch. Replaces the bare WaCartMutationStatus return so callers (and future
+ * reply_text wiring) can read unresolved ops. `status` is unchanged for every
+ * existing consumer; items/unresolved are ADDED surface area only.
+ */
+export interface WaCartMutationResult {
+  status: WaCartMutationStatus;
+  items: ConfirmedItem[];
+  unresolved: UnresolvedCartOp[];
+}
 
 /** Action status values */
 export const ActionStatus = {
@@ -1548,18 +1563,27 @@ export async function executeWaCartMutation(
   conversationId: string,
   messageId?: string,
   channel: 'whatsapp' | 'web' = 'whatsapp',
-): Promise<WaCartMutationStatus> {
+): Promise<WaCartMutationResult> {
   // Non-WA path (e.g. /handle): no stable messageId → no idempotency claim; direct mutation.
   // The PWA /message (web) path always arrives with a messageId (request id) and therefore
   // takes the claimed path below — see UNIT6-PREP-2 §F. WA callers are unchanged: 5-arg calls
   // default channel to 'whatsapp' and keep the existing `wa:` actionId prefix.
+  //
+  // UNIT6-B §2b: hardening THIS !messageId branch to `throw` is BLOCKED — the /handle route
+  // (routes/messages.ts:40) calls processCustomerMessage with NO messageId and reaches this
+  // branch via the Stage-4 dispatch (:677) when its LLM returns cart_ops. Throwing here would
+  // break the live /handle path. Deferred until /handle is wired with a stable messageId
+  // (see UNIT6-B §2b blocking finding). 2a still applies: the branch returns the new
+  // WaCartMutationResult shape (items/unresolved surfaced from the direct executeOps call),
+  // behavior-identical for callers that discard the return (all 4 call sites at
+  // the Stage-4 dispatch sites (:252/:339/:519/:677) discard it).
   if (!messageId) {
     if (ops.length > 0) {
-      await cartAuthority.executeOps(ops, storeId, customerId, conversationId);
-    } else {
-      await cartAuthority.getCartAsConfirmedItems(conversationId);
+      const result = await cartAuthority.executeOps(ops, storeId, customerId, conversationId);
+      return { status: 'applied', items: result.items, unresolved: result.unresolved };
     }
-    return 'applied';
+    const items = await cartAuthority.getCartAsConfirmedItems(conversationId);
+    return { status: 'applied', items, unresolved: [] };
   }
 
   // Disjoint key prefixes per channel so web claims NEVER collide with WA claims.
@@ -1574,18 +1598,18 @@ export async function executeWaCartMutation(
 
   if (!claim.claimed) {
     const existing = claim.existing;
-    if (existing?.status === ActionStatus.COMPLETED) return 'already_applied';
+    if (existing?.status === ActionStatus.COMPLETED) return { status: 'already_applied', items: [], unresolved: [] };
     if (existing?.status === ActionStatus.FAILED) {
       adapters.logger.error('[WA_CART_MUTATION] prior attempt FAILED; skipping re-mutation to avoid double-apply', {
         actionId,
         error: existing.error,
       });
-      return 'error';
+      return { status: 'error', items: [], unresolved: [] };
     }
     if (existing?.status === ActionStatus.CLAIMED) {
       // Another in-flight attempt owns this message while the lease is valid.
       const leaseUntil = new Date(existing.leaseUntil);
-      if (leaseUntil > new Date()) return 'already_applied';
+      if (leaseUntil > new Date()) return { status: 'already_applied', items: [], unresolved: [] };
       // Lease expired → fall through; executeClaimedAction re-runs under FOR UPDATE.
     }
   }
@@ -1601,7 +1625,12 @@ export async function executeWaCartMutation(
     },
   );
 
-  if (execution.status === ActionStatus.COMPLETED) return 'applied';
-  if (execution.status === ActionStatus.FAILED) return 'error';
-  return 'error';
+  if (execution.status === ActionStatus.COMPLETED) {
+    // 2a: surface items/unresolved from executeOps' existing return (execution.result),
+    // already computed inside the claim at :1600 — NOT a second executeOps call, NOT a new DB read.
+    const opsResult = (execution.result ?? null) as ExecuteOpsResult | null;
+    return { status: 'applied', items: opsResult?.items ?? [], unresolved: opsResult?.unresolved ?? [] };
+  }
+  if (execution.status === ActionStatus.FAILED) return { status: 'error', items: [], unresolved: [] };
+  return { status: 'error', items: [], unresolved: [] };
 }
