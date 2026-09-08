@@ -299,7 +299,11 @@ router.get('/:storeSlug/products/:productId', pwaProductsLimiter, async (req: Re
 router.post('/:storeSlug/message', conversationLimiter, async (req: Request, res: Response) => {
   try {
     const { storeSlug } = req.params;
-    const { uid, message } = req.body as { uid?: string; message?: string };
+    const { uid, message, clientMsgId } = req.body as {
+      uid?: string;
+      message?: string;
+      clientMsgId?: unknown;
+    };
 
     if (!storeSlug) {
       return res.status(404).json({ error: 'Store not found' });
@@ -371,16 +375,34 @@ router.post('/:storeSlug/message', conversationLimiter, async (req: Request, res
     // conversationDeliveryService.processWebRequest() adalah SATU lock owner per
     // Web request. Engine (processCustomerMessage) tetap compose+persist; delivery
     // hanya mengamati result, publish event, kemudian merilis lock.
+    // UNIT F-GAP1-A: accept a stable clientMsgId from the /message body and thread it
+    // as the web `messageId`, reusing Unit F's claim-path wiring:
+    //   conversationDeliveryService.processWebRequest -> processCustomerMessage(..., messageId)
+    //   -> executeWaCartMutation(messageId, channel='web') -> actionId `web:${conversationId}:${messageId}`.
+    // An identical clientMsgId resent after a network timeout / lost response hits the
+    // actionIdempotency unique constraint (CLAIMED/COMPLETED -> already_applied) -> NOT a
+    // new mutation. Backward-compat: absent/invalid clientMsgId falls back to the
+    // server-generated req.requestId (Unit F behaviour) with a warning (stale client).
+    let messageId: string;
+    if (typeof clientMsgId === 'string' && clientMsgId.trim().length > 0) {
+      messageId = clientMsgId.trim().slice(0, 128);
+    } else {
+      if (clientMsgId !== undefined && clientMsgId !== '') {
+        adapters.logger.warn('PWA /message: clientMsgId present but invalid/empty — falling back to server id', { storeSlug, conversationId });
+      } else {
+        adapters.logger.warn('PWA /message: clientMsgId absent — client may be stale; falling back to server id', { storeSlug, conversationId });
+      }
+      messageId = req.requestId;
+    }
+
     const result = await conversationDeliveryService.processWebRequest({
       storeId: store.id,
       customerId,
       conversationId,
       message,
-      // UNIT6-PREP-2 §F: thread the existing x-request-id (requestIdMiddleware →
-      // req.requestId) as the deterministic web messageId, so the PWA /message path
-      // takes the SAME claimAction/executeClaimedAction (FOR UPDATE + re-check) path
-      // WA uses — NOT the !messageId direct executeOps branch. WA flow left untouched.
-      requestId: req.requestId,
+      // `requestId` IS the web messageId (WebRequestProps.requestId is documented as
+      // "forwarded as the web messageId"); now fed with clientMsgId (or the fallback).
+      requestId: messageId,
     });
 
     if (result.kind === 'locked') {
