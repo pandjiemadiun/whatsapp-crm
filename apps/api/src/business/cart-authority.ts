@@ -104,6 +104,23 @@ export class ProductAmbiguousError extends CartError {
 
 // ── CartAuthority ─────────────────────────────────────────────────────────────
 
+/** A product name/op that could not be resolved during executeOps (by-name path). */
+export interface UnresolvedCartOp {
+  product: string;
+  reason: 'NOT_FOUND' | 'AMBIGUOUS';
+}
+
+/**
+ * executeOps return shape (UNIT6-PREP-2 §G): applied cart items PLUS per-op
+ * resolution failures surfaced as structured reasons — NOT a silent skip and NOT
+ * a batch-aborting throw (multi-add must keep working).
+ * modifyCart unpacks `.items` to preserve its ConfirmedItem[] contract.
+ */
+export interface ExecuteOpsResult {
+  items: ConfirmedItem[];
+  unresolved: UnresolvedCartOp[];
+}
+
 export class CartAuthority {
   // ================================================================
   // READ — no mutations, no transactions needed
@@ -593,7 +610,7 @@ export class CartAuthority {
     customerId: string,
     conversationId: string,
     tx?: unknown,
-  ): Promise<ConfirmedItem[]> {
+  ): Promise<ExecuteOpsResult> {
     const runOps = async (client: any) => {
       const tx = client;
       let order = await this.findDraftOrder(tx as any, conversationId);
@@ -605,6 +622,7 @@ export class CartAuthority {
       let items = await tx.orderItem.findMany({
         where: { orderId: order.id },
       });
+      const unresolved: UnresolvedCartOp[] = [];
 
       for (const op of ops) {
         // Resolve product → productId for both add and remove.
@@ -619,13 +637,15 @@ export class CartAuthority {
             result = await this.resolveProductByName(tx as any, storeId, op.product);
           } catch (err) {
             if (err instanceof ProductAmbiguousError) {
-              // DO NOT mutate cart on ambiguous product
-              adapters.logger.warn('CartAuthority: ambiguous product name, skipping op', {
+              // UNIT6-PREP-2 §G: surface ambiguous match as a structured per-op result
+              // (NOT a silent skip, NOT a batch-aborting throw) — preserves multi-add.
+              adapters.logger.warn('CartAuthority: ambiguous product name, recording as unresolved', {
                 product: op.product,
                 storeId,
                 conversationId,
                 candidates: err.candidates,
               });
+              unresolved.push({ product: op.product, reason: 'AMBIGUOUS' });
               continue;
             }
             throw err;
@@ -634,12 +654,15 @@ export class CartAuthority {
 
         if (op.type === 'add') {
           if (!result) {
-            // Product not found — skip (don't fail the entire transaction)
-            adapters.logger.warn('CartAuthority: product not found, skipping', {
+            // UNIT6-PREP-2 §G: product not found → structured per-op rejection
+            // (PRODUCT_NOT_FOUND-equivalent) — NOT a silent skip, NOT a batch abort.
+            // The rest of the batch still applies (multi-add preserved).
+            adapters.logger.warn('CartAuthority: product not found, recording as unresolved', {
               product: op.product,
               storeId,
               conversationId,
             });
+            unresolved.push({ product: op.product, reason: 'NOT_FOUND' });
             continue;
           }
 
@@ -723,11 +746,14 @@ export class CartAuthority {
               conversationId,
             });
           } else {
-            // No product match — nothing to remove
-            adapters.logger.debug('CartAuthority: remove product not found in cart', {
+            // No product match in catalog → structured per-op rejection (NOT_FOUND).
+            // (Distinct from "product in catalog but not in cart": that is a no-op
+            // handled by the `if (result)` branch above with an empty filter.)
+            adapters.logger.debug('CartAuthority: remove product not found, recording as unresolved', {
               product: op.product,
               conversationId,
             });
+            unresolved.push({ product: op.product, reason: 'NOT_FOUND' });
           }
         }
       }
@@ -747,10 +773,11 @@ export class CartAuthority {
       const confirmedItems = this.orderItemsToConfirmedItems(items);
       await this.syncConfirmedItemsJson(tx, conversationId, confirmedItems);
 
-      // Return confirmedItems (backward compat for PipelineContext callers).
-      // `items` now carries the correct unitPrice (variant or product) and
-      // variantId after the authPrice fix above, so confirmedItems is authoritative.
-      return confirmedItems;
+      // UNIT6-PREP-2 §G: return { items, unresolved } — per-op resolution failures are
+      // surfaced (NOT_FOUND / AMBIGUOUS) alongside applied cart items. modifyCart
+      // unpacks `.items` to preserve its ConfirmedItem[] contract; callers that
+      // consumed the bare ConfirmedItem[] array destructure `{ items }`.
+      return { items: confirmedItems, unresolved };
     };
 
     // If caller provided a tx, use it directly (transaction propagation).
@@ -857,7 +884,7 @@ export class CartAuthority {
       }
     }
 
-    return await this.executeOps(
+    return (await this.executeOps(
       [
         ...((action === 'remove' || action === 'swap') && opts.cancelledProduct
           ? [{ type: 'remove' as const, product: opts.cancelledProduct }]
@@ -875,7 +902,7 @@ export class CartAuthority {
       customerId,
       conversationId,
       tx,
-    );
+    )).items;
   }
 
   /**

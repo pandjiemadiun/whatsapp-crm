@@ -1665,7 +1665,7 @@ test('PV-P2c-LLM-B 1: resolveVariantByLabel exact "merah" → variantId Merah-L 
   await seedSepatu();
   const convId = `conv-p2cllmb-T1-${randomUUID().slice(0, 8)}`;
   await createConv(convId, 'cust-p2cllmb');
-  const items = await cartAuthority.executeOps(
+  const { items } = await cartAuthority.executeOps(
     [{ type: 'add', product: 'sepatu', qty: 1, price: 150000, variant: 'merah' } as CartOp],
     STORE_ID,
     'cust-p2cllmb',
@@ -1680,7 +1680,7 @@ test('PV-P2c-LLM-B 2: resolveVariantByLabel partial "merah size" → variantId M
   await seedSepatu();
   const convId = `conv-p2cllmb-T2-${randomUUID().slice(0, 8)}`;
   await createConv(convId, 'cust-p2cllmb');
-  const items = await cartAuthority.executeOps(
+  const { items } = await cartAuthority.executeOps(
     [{ type: 'add', product: 'sepatu', qty: 1, price: 150000, variant: 'merah size' } as CartOp],
     STORE_ID,
     'cust-p2cllmb',

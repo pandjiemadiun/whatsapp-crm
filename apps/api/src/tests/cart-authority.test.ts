@@ -550,7 +550,7 @@ test('hasCart: true after addLine', async () => {
 test('executeOps: add + remove in same batch', async () => {
   const convId = await createConversation();
   await cartAuthority.addLine(convId, storeId, customerId, storeProducts[0].id, 1);
-  const result = await cartAuthority.executeOps(
+  const { items: result } = await cartAuthority.executeOps(
     [
       { type: 'add', product: 'Wortel', qty: 2 } as CartOp,
       { type: 'remove', product: 'Ayam Goreng' } as CartOp,
@@ -566,7 +566,7 @@ test('executeOps: add + remove in same batch', async () => {
 
 test('executeOps: product not found is skipped (not fatal)', async () => {
   const convId = await createConversation();
-  const result = await cartAuthority.executeOps(
+  const { items: result } = await cartAuthority.executeOps(
     [{ type: 'add', product: 'Produk Tidak Ada', qty: 1 } as CartOp],
     storeId,
     customerId,
@@ -583,7 +583,7 @@ test('executeOps: repeated add increments qty', async () => {
     customerId,
     convId,
   );
-  const result = await cartAuthority.executeOps(
+  const { items: result } = await cartAuthority.executeOps(
     [{ type: 'add', product: 'Ayam Goreng', qty: 2 } as CartOp],
     storeId,
     customerId,
@@ -896,7 +896,7 @@ describe('G2-C Cleanup: Representation Consistency', () => {
 describe('G2-C Cleanup: Product Name Resolution', () => {
   test('exact match: "Minyak Goreng" resolves uniquely', async () => {
     const convId = await createConversation();
-    const result = await cartAuthority.executeOps(
+    const { items: result } = await cartAuthority.executeOps(
       [{ type: 'add', product: 'Minyak Goreng', qty: 1 } as CartOp],
       storeId, customerId, convId,
     );
@@ -907,7 +907,7 @@ describe('G2-C Cleanup: Product Name Resolution', () => {
 
   test('substring: "minyak" matches 3 products → ambiguous (no mutation)', async () => {
     const convId = await createConversation();
-    const result = await cartAuthority.executeOps(
+    const { items: result } = await cartAuthority.executeOps(
       [{ type: 'add', product: 'minyak', qty: 1 } as CartOp],
       storeId, customerId, convId,
     );
@@ -923,7 +923,7 @@ describe('G2-C Cleanup: Product Name Resolution', () => {
 
   test('substring: "minyak 1" matches 1 product → resolves', async () => {
     const convId = await createConversation();
-    const result = await cartAuthority.executeOps(
+    const { items: result } = await cartAuthority.executeOps(
       [{ type: 'add', product: 'minyak 1', qty: 1 } as CartOp],
       storeId, customerId, convId,
     );
@@ -934,7 +934,7 @@ describe('G2-C Cleanup: Product Name Resolution', () => {
 
   test('substring: "minyak 1 liter" matches 1 product → resolves', async () => {
     const convId = await createConversation();
-    const result = await cartAuthority.executeOps(
+    const { items: result } = await cartAuthority.executeOps(
       [{ type: 'add', product: 'minyak 1 liter', qty: 1 } as CartOp],
       storeId, customerId, convId,
     );
@@ -944,7 +944,7 @@ describe('G2-C Cleanup: Product Name Resolution', () => {
 
   test('substring: "minyak goreng 2" matches 0 products → not found (skipped)', async () => {
     const convId = await createConversation();
-    const result = await cartAuthority.executeOps(
+    const { items: result } = await cartAuthority.executeOps(
       [{ type: 'add', product: 'minyak goreng 2', qty: 1 } as CartOp],
       storeId, customerId, convId,
     );
@@ -955,7 +955,7 @@ describe('G2-C Cleanup: Product Name Resolution', () => {
     const convId = await createConversation();
     // "Minyak Goreng" exists in both test store and test-other store (no, only in test store)
     // Verify that products from other store are NOT found
-    const result = await cartAuthority.executeOps(
+    const { items: result } = await cartAuthority.executeOps(
       [{ type: 'add', product: 'Produk Toko Lain', qty: 1 } as CartOp],
       storeId, customerId, convId,
     );
@@ -1147,7 +1147,7 @@ describe('PV-P2: VARIANT_REQUIRED guard (CartAuthority single authority)', () =>
 
   test('4a: regression — hasVariants=false product adds normally via executeOps (no variantId)', async () => {
     const convId = await createConversation();
-    const items = await cartAuthority.executeOps(
+    const { items } = await cartAuthority.executeOps(
       [{ type: 'add', product: 'Beras Premium', qty: 1 } as CartOp],
       storeId, customerId, convId,
     );
@@ -1194,7 +1194,7 @@ describe('PV-P2: VARIANT_REQUIRED guard (CartAuthority single authority)', () =>
 
   test('4c: WA path — hasVariants=true product with VALID variantId succeeds', async () => {
     const convId = await createConversation();
-    const items = await cartAuthority.executeOps(
+    const { items } = await cartAuthority.executeOps(
       [{ type: 'add', product: 'Sosis', qty: 2, variantId } as CartOp],
       storeId, customerId, convId,
     );
@@ -1224,7 +1224,7 @@ describe('PV-P2: VARIANT_REQUIRED guard (CartAuthority single authority)', () =>
 
   test('4d: WA path — hasVariants=false product adds normally via executeOps', async () => {
     const convId = await createConversation();
-    const items = await cartAuthority.executeOps(
+    const { items } = await cartAuthority.executeOps(
       [{ type: 'add', product: 'Beras Premium', qty: 3 } as CartOp],
       storeId, customerId, convId,
     );
@@ -1244,6 +1244,98 @@ describe('PV-P2: VARIANT_REQUIRED guard (CartAuthority single authority)', () =>
       (err: unknown) => err instanceof CartInvariantError && err.code === 'VARIANT_REQUIRED',
     );
   });
+
+// ── G: executeOps unresolved reporting (UNIT6-PREP-2 §G) ─────────────────────
+// Replaces the previous silent-skip (`continue`) on by-name resolution failure with
+// a structured per-op entry in ExecuteOpsResult.unresolved — NOT a silent skip and
+// NOT a batch-aborting throw. Multi-add must keep working (one bad op must not abort
+// the whole batch).
+describe('G — executeOps surfaces unresolved products (NOT a silent skip, NOT a batch abort)', () => {
+  test('G1: batch [found + not-found] → items has found; unresolved lists NOT_FOUND', async () => {
+    const convId = await createConversation();
+    const { items, unresolved } = await cartAuthority.executeOps(
+      [
+        { type: 'add', product: 'Wortel', qty: 1 } as CartOp,
+        { type: 'add', product: 'Produk Tidak Ada', qty: 1 } as CartOp,
+      ],
+      storeId,
+      customerId,
+      convId,
+    );
+    assert.equal(items.length, 1, 'found product still applies (multi-add NOT aborted)');
+    assert.equal(items[0].product, 'Wortel');
+    assert.equal(unresolved.length, 1, 'not-found op must be surfaced as unresolved');
+    assert.equal(unresolved[0].product, 'Produk Tidak Ada');
+    assert.equal(unresolved[0].reason, 'NOT_FOUND');
+  });
+
+  test('G2: ambiguous by-name ("minyak" → 3 matches) → no mutation, unresolved AMBIGUOUS, no throw', async () => {
+    const convId = await createConversation();
+    const { items, unresolved } = await cartAuthority.executeOps(
+      [{ type: 'add', product: 'minyak', qty: 1 } as CartOp],
+      storeId,
+      customerId,
+      convId,
+    );
+    assert.equal(items.length, 0, 'ambiguous must not mutate cart');
+    assert.equal(unresolved.length, 1, 'ambiguous must be surfaced as unresolved');
+    assert.equal(unresolved[0].product, 'minyak');
+    assert.equal(unresolved[0].reason, 'AMBIGUOUS');
+    const order = await prisma.order.findFirst({ where: { conversationId: convId, orderStatus: 'draft', deletedAt: null } });
+    const oi = order ? await prisma.orderItem.findMany({ where: { orderId: order.id } }) : [];
+    assert.equal(oi.length, 0, 'ambiguous must not create OrderItem');
+  });
+
+  test('G3: remove by-name not found in catalog → unresolved NOT_FOUND, no throw', async () => {
+    const convId = await createConversation();
+    const { items, unresolved } = await cartAuthority.executeOps(
+      [{ type: 'remove', product: 'Produk Tidak Ada' } as CartOp],
+      storeId,
+      customerId,
+      convId,
+    );
+    assert.equal(items.length, 0);
+    assert.equal(unresolved.length, 1);
+    assert.equal(unresolved[0].reason, 'NOT_FOUND');
+  });
+
+  test('G4: not-found op does NOT abort the batch — sibling op still applies', async () => {
+    const convId = await createConversation();
+    const { items, unresolved } = await cartAuthority.executeOps(
+      [
+        // 'Ayam Goreng' has no stock ceiling (stock=null → unlimited) so this test
+        // stays green regardless of earlier stock-depleting tests in the file (e.g.
+        // "stock=5, add 5 …") — it isolates G4's "no batch abort" assertion from stock.
+        { type: 'add', product: 'Produk Tidak Ada', qty: 1 } as CartOp,
+        { type: 'add', product: 'Ayam Goreng', qty: 1 } as CartOp,
+      ],
+      storeId,
+      customerId,
+      convId,
+    );
+    assert.equal(unresolved.length, 1, 'not-found reported exactly once');
+    assert.equal(unresolved[0].reason, 'NOT_FOUND');
+    assert.equal(items.length, 1, 'Ayam Goreng still applies despite the not-found op (no batch abort)');
+    assert.equal(items[0].product, 'Ayam Goreng');
+  });
+
+  test('G5: deleted/inactive products resolve to NOT_FOUND (filtered from name search)', async () => {
+    const convId = await createConversation();
+    const { items, unresolved } = await cartAuthority.executeOps(
+      [
+        { type: 'add', product: 'Produk Dihapus', qty: 1 } as CartOp,
+        { type: 'add', product: 'Produk Non-aktif', qty: 1 } as CartOp,
+      ],
+      storeId,
+      customerId,
+      convId,
+    );
+    assert.equal(items.length, 0, 'deleted/inactive products must not be added');
+    assert.equal(unresolved.length, 2, 'both deleted + inactive reported as NOT_FOUND');
+    assert.equal(unresolved[0].reason, 'NOT_FOUND');
+    assert.equal(unresolved[1].reason, 'NOT_FOUND');
+  });
+});
 
   test('addLine direct — hasVariants=true product with valid variantId succeeds', async () => {
     const convId = await createConversation();

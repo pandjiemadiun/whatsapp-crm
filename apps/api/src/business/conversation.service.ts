@@ -937,12 +937,12 @@ export class ConversationService {
     const { conversationId, storeId, customerId } = pipelineCtx;
 
     if (ops.length > 0) {
-      return await cartAuthority.executeOps(
+      return (await cartAuthority.executeOps(
         ops,
         storeId,
         customerId,
         conversationId,
-      );
+      )).items;
     }
 
     // Empty ops — return current cart state

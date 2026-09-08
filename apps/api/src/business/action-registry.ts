@@ -740,7 +740,7 @@ export async function handleAddToCart(
     }];
 
     // Execute cart mutation — THIS IS THE ONLY CART MUTATION ENTRY POINT
-    const cartLines = await cartAuthority.executeOps(
+    const { items: cartLines } = await cartAuthority.executeOps(
       ops,
       storeId,
       customerId,

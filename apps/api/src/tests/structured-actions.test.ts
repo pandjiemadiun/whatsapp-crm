@@ -412,7 +412,7 @@ test('§8.4c: by-name CartOp still uses resolveProductByName (LLM fallback prese
     cartAuthority as any,
     'resolveProductByName',
     async () => {
-      const items = await cartAuthority.executeOps(
+      const { items } = await cartAuthority.executeOps(
         [{ type: 'add', product: 'Produk Test', qty: 1 }],
         storeId,
         customerId,
