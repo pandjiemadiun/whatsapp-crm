@@ -113,8 +113,8 @@ describe('LLMGateway — cooldown crash fix (BUGFIX A.1 / A.2)', () => {
     const fallbackName = `test-cooldown-fallback-${ts}`;
 
     // Pre-cooldown both providers (5 min — simulates both in cooldown)
-    cooldown(primaryName, 300_000);
-    cooldown(fallbackName, 300_000);
+    cooldown(primaryName, 'chat_primary', 300_000);
+    cooldown(fallbackName, 'chat_fallback', 300_000);
 
     const primary = new MockSuccessProvider(primaryName);
     const fallback = new MockSuccessProvider(fallbackName);
@@ -216,8 +216,8 @@ describe('LLMGateway — cooldown crash fix (BUGFIX A.1 / A.2)', () => {
     );
 
     // Both providers should now be in cooldown (triggerCooldown was called)
-    assert.equal(isCooldown(primaryName), true, 'Primary should be in cooldown');
-    assert.equal(isCooldown(fallbackName), true, 'Fallback should be in cooldown');
+    assert.equal(isCooldown(primaryName, 'chat_primary'), true, 'Primary should be in cooldown');
+    assert.equal(isCooldown(fallbackName, 'chat_fallback'), true, 'Fallback should be in cooldown');
   });
 
   it('case3: cooldown expires → provider becomes available → success', async () => {
@@ -226,7 +226,7 @@ describe('LLMGateway — cooldown crash fix (BUGFIX A.1 / A.2)', () => {
     const fallbackName = `test-recovery-fallback-${ts}`;
 
     // Primary: in cooldown (100ms) — will expire quickly
-    cooldown(primaryName, 100);
+    cooldown(primaryName, 'chat_primary', 100);
     const primary = new MockSuccessProvider(primaryName);
 
     // Fallback: not in cooldown — always available

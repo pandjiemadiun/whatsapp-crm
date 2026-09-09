@@ -80,8 +80,8 @@ describe('LLMGateway — cooldown cascade (3-tier fallthrough)', () => {
     const internalLLMName = `internal-llm-${ts}`;
 
     // Force Mistral (primary) and SambaNova (fallback) into cooldown
-    cooldown(mistralName, 300_000);     // 5 min
-    cooldown(sambaNovaName, 300_000);   // 5 min
+    cooldown(mistralName, 'chat_primary', 300_000);     // 5 min
+    cooldown(sambaNovaName, 'chat_fallback', 300_000);   // 5 min
 
     // Mock providers — primary and fallback MUST NOT be called
     const primary = new MockSuccessProvider(mistralName);
@@ -134,9 +134,9 @@ describe('LLMGateway — cooldown cascade (3-tier fallthrough)', () => {
     const internalLLMName = `internal-all-${ts}`;
 
     // Force ALL THREE into cooldown
-    cooldown(mistralName, 300_000);
-    cooldown(sambaNovaName, 300_000);
-    cooldown(internalLLMName, 300_000);
+    cooldown(mistralName, 'chat_primary', 300_000);
+    cooldown(sambaNovaName, 'chat_fallback', 300_000);
+    cooldown(internalLLMName, 'chat_fallback_2', 300_000);
 
     const primary = new MockSuccessProvider(mistralName);
     const fallback = new MockSuccessProvider(sambaNovaName);
@@ -177,7 +177,7 @@ describe('LLMGateway — cooldown cascade (3-tier fallthrough)', () => {
     const internalLLMName = `internal-normal-${ts}`;
 
     // Only Internal LLM is in cooldown — primary and fallback should work normally
-    cooldown(internalLLMName, 300_000);
+    cooldown(internalLLMName, 'chat_fallback_2', 300_000);
 
     const primary = new MockSuccessProvider(mistralName);
     const fallback = new MockSuccessProvider(sambaNovaName);

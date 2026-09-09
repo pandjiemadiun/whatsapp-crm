@@ -272,8 +272,8 @@ describe('LLMGateway dynamic-provider cutover (Unit 3b, flag default OFF)', () =
     });
 
     // Pre-set cooldown on BOTH primary providers so they are all skipped.
-    cooldown('gw-p1-cooldown', 60_000);
-    cooldown('gw-p2-cooldown', 60_000);
+    cooldown('gw-p1-cooldown', 'chat_primary', 60_000);
+    cooldown('gw-p2-cooldown', 'chat_primary', 60_000);
 
     const gw = new LLMGateway(
       makeMockProvider('gw-default-p', 'success'),

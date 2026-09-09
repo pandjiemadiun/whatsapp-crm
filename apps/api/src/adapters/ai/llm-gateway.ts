@@ -283,9 +283,10 @@ export class LLMGateway {
     ];
 
     for (const { providers, roleKey } of roleLists) {
+      const role = roleKey === 'primary' ? 'chat_primary' : roleKey === 'fallback' ? 'chat_fallback' : 'chat_fallback_2';
       for (const provider of providers) {
         const name = provider.getName();
-        if (shouldSkipProvider(name)) {
+        if (shouldSkipProvider(name, role)) {
           continue;
         }
 
@@ -295,7 +296,7 @@ export class LLMGateway {
           // retrying it immediately is pointless. Break to the next provider.
           // This also catches the case where a provider exits cooldown DURING
           // the backoff sleep — it will be retried on a later message cycle.
-          if (attempt > 0 && shouldSkipProvider(name)) {
+          if (attempt > 0 && shouldSkipProvider(name, role)) {
             break;
           }
 
@@ -329,6 +330,7 @@ export class LLMGateway {
             if (error.category === ErrorCategory.RATE_LIMIT || error.statusCode === 429) {
               triggerCooldown(
                 error.provider || name,
+                role,
                 error.retryAfter ? error.retryAfter * 1000 : undefined,
               );
 

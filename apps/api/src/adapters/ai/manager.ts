@@ -168,10 +168,11 @@ export class AIProviderManager {
     ];
 
     for (const { providers, roleKey } of roleLists) {
+      const role = roleKey === 'primary' ? 'chat_primary' : 'chat_fallback';
       const roleLabel = roleKey === 'primary' ? 'Primary' : 'Fallback';
       for (const provider of providers) {
         const name = provider.getName();
-        if (shouldSkipProvider(name)) {
+        if (shouldSkipProvider(name, role)) {
           console.info(`[AIManager] ${roleLabel} provider in cooldown - skipping`);
           continue;
         }
@@ -207,7 +208,7 @@ export class AIProviderManager {
           }
           this.stats[roleKey].failed++;
           if (error.category === ErrorCategory.RATE_LIMIT || error.statusCode === 429) {
-            triggerCooldown(error.provider || name, error.retryAfter ? error.retryAfter * 1000 : undefined);
+            triggerCooldown(error.provider || name, role, error.retryAfter ? error.retryAfter * 1000 : undefined);
             this.breaker.openedAt = 0;
           } else if (error.category === ErrorCategory.SERVER_ERROR ||
                      error.category === ErrorCategory.NETWORK_TIMEOUT) {

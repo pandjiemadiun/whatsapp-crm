@@ -229,8 +229,8 @@ describe('AIProviderManager dynamic cutover (Unit 5 Part 5, flag default OFF)', 
     });
 
     // Pre-set cooldown on BOTH primary providers.
-    cooldown('mgr-p1-cooldown', 60_000);
-    cooldown('mgr-p2-cooldown', 60_000);
+    cooldown('mgr-p1-cooldown', 'chat_primary', 60_000);
+    cooldown('mgr-p2-cooldown', 'chat_primary', 60_000);
 
     const mgr = new AIProviderManager(
       makeMockProvider('mgr-default-p', 'success'),
