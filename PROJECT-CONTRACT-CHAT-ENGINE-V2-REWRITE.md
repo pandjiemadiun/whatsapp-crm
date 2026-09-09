@@ -101,6 +101,19 @@ echo ke conversation_history untuk SEMUA jalur (LLM DAN structured action tap)
 > total (§0.1), penghapusan terjadi SETELAH engine baru terbukti stabil di
 > canary — bukan big-bang cutover tanpa validasi. Ini demi keamanan data
 > transaksi real, bukan menunda soal token/biaya.
+>
+> **UPDATE 9 Sep 2026 (UNIT6-B):** Jalur eksekusi controlled (bukan live traffic)
+> sudah diverifikasi end-to-end via `v2-mapper-wire-smoke.ts` (controlled/manual
+> invocation, bukan HTTP route) terhadap canary store-a3cd7205 — 5 skenario
+> approved (itu_plus_new_item, partial_cart_cancel, busi_for_two_vehicles,
+> cart_persistence, second_from_top) semuai match expected behavior, termasuk
+> highest-risk partial-cancel-no-wrong-item-removed dan NOT_FOUND-not-silently-
+> substituted. Ini membuktikan jalur eksekusi v2 mapper → CartAuthority bekerja
+> benar di bawah kontrol manual. **P3's "shadow or limited canary" condition untuk
+> actual live traffic TETAP TIDAK BERUBAH** — saat ini masih shadow-only di
+> production. Verifikasi controlled ini mendukung transisi P3→P5 di masa depan,
+> tapi BUKAN berarti semua toko sudah siap di-cutover atau flag engine sudah
+> di-flip ke 'active'.
 
 > **P4 — Golden dataset diperluas mencakup skenario nyata yang sudah ketemu
 > bug:** "ask total → false cancel", multi-produk dalam 1 pesan, klarifikasi

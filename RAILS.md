@@ -1487,3 +1487,54 @@ Siapa yang setuju: owner (Panji), AI CLI (Kilo).
 ### Lesson learned (matches §10.3 actionsRouter precedent):
 
 Passing tests ≠ real isolation. The tenant-isolation bugs were found via deliberate re-audit AFTER initial "all clear" reports. Third-party audit tools can silently drop critical files from their digest — always verify the tool's input actually contains the files you care about before trusting OR dismissing findings.
+
+### 9 Sep 2026 — UNIT6-B: Canary verification gate closed + SMTP test verified + cleanup
+
+Konteks:
+Canary store-a3cd7205 memiliki 54 skenario test terstruktur (batch1+batch2) di DB,
+tetap belum ada verifikasi eksekusi nyata jalur v2 mapper → CartMutation di bawah
+kontrol manual. Juga SMTP key diubah oleh owner dan perlu diverifikasi.
+
+Keputusan:
+1. **Canary verification gate DITUTUP** — 5 skenario approved dijalankan via
+   `v2-mapper-wire-smoke.ts` (controlled/manual invocation, bukan HTTP live route)
+   terhadap canary store-a3cd7205. Semua 5 match expected behavior:
+   - `itu_plus_new_item` — Busi Motor + Ban Dalam Motor added dalam 1 batch
+   - `partial_cart_cancel` — Ban Dalam remains, Oli Mesin removed (highest-risk:
+     no wrong-item-removed)
+   - `busi_for_two_vehicles` — Busi Motor added, Busi Mobil NOT_FOUND (tidak ada
+     silent substitution)
+   - `cart_persistence` — OPEN_CART excluded oleh mapper (zero cartOps, read-only
+     filter aktif)
+   - `second_from_top` — resolved product name "Busi Motor" correctly mapped +
+     added (position-resolution layer out of scope untuk mapper test)
+   Commit pendukung: GAP1-FIX (`5c4220a`/`1e84985`), UNIT6-B Unit 1 (`49eb77e`),
+   Unit 2 (`1429817`), Unit 2a (`ac5dca1`), Unit 3 (`fdde243`).
+
+2. **Verification membuktikan EXECUTION PATH works under controlled/manual
+   invocation. Ini BUKAN berarti flag engine toko manapun di-flip ke 'active'
+   mode — keputusan tersebut TIDAK ever dibuat dan memerlukan owner approval
+   eksplisit per contract §0.** P3 "shadow or limited canary" condition untuk
+   actual live traffic TETAP TIDAK BERUBAH.
+
+3. **Cleanup** — 5 throwaway scenario conversations + 3 throwaway test products
+   (Busi Motor, Ban Dalam Motor, Oli Mesin — confirmed Unit-4-only additions,
+   createdAt 2026-09-09T03:17:03) dihapus post-verification. Canary conversation
+   count kembali ke 284 (54 batch1/batch2 + other pre-existing test data, untouched).
+   Cleanup adalah pure DB operation, BUKAN commit.
+
+4. **SMTP test verified** — test email ke `dwiputroagung2773@gmail.com` berhasil
+   (Message-ID: `<b8b9f013-afb5-0a4c-d964-e038218a6c55@gmail.com>`) menggunakan
+   smtp.gmail.com:587 sebagai `mas.pandjie@gmail.com`.
+
+Alasan:
+- Canary verification gate adalah syarat eksplisit untuk eventual P3→P5 transition;
+  bukti eksekusi nyata (bukan cuma unit test) diperlukan sebelum canary dianggap
+  stabil untuk live traffic.
+- SMTP verification confirms backup alerting path (mailer.service.ts) siap digunakan
+  jika backup gagal di masa depan.
+- Cleanup menjaga canary store bersih untuk future test runs (same rationale as
+  GAP1-FIX Step 0).
+
+Siapa yang setuju: owner (Panji) — SMTP key rotation + test email request; canary
+verification gate disetujui via UNIT6-B task brief.
