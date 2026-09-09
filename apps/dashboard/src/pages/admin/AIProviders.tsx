@@ -277,7 +277,8 @@ export default function AIProviders() {
     return copy;
   });
 
-  // Detect roles with >1 active provider (only the highest-priority one is used).
+  // Detect roles with >1 active provider — providers tried in priority order;
+  // falls through to next on failure (N-provider rotation, see b91e81e).
   const duplicateActiveRoles = (() => {
     const roleCount: Record<string, number> = {};
     for (const p of providers) {
@@ -483,13 +484,15 @@ export default function AIProviders() {
 
       {/* ── Provider table ── */}
       {duplicateActiveRoles.length > 0 && (
-        <div className="mb-4 p-3 rounded-lg bg-amber-400/10 border border-amber-400/20 text-amber-300 text-sm">
-          <strong>Perhatian:</strong> Role berikut memiliki lebih dari 1 provider aktif:{' '}
+        <div className="mb-4 p-3 rounded-lg bg-cyan/10 border border-cyan/20 text-cyan text-sm">
+          <strong>Info:</strong> Role berikut memiliki lebih dari 1 provider aktif:{' '}
           {duplicateActiveRoles.map((r) => (
             <span key={r} className="font-mono mx-1">{r}</span>
           ))}
-          . Hanya 1 provider (prioritas tertinggi) yang benar-benar dipakai per role saat ini. Provider aktif lain di role yang sama{' '}
-          <strong>TIDAK</strong> dipanggil otomatis — nonaktifkan yang tidak dipakai atau naikkan prioritas yang diinginkan.
+          . Provider dalam role ini akan dicoba berurutan sesuai priority — jika yang
+          priorias tertinggi gagal, gateway otomatis lanjut ke provider berikutnya
+          dalam role yang sama (rotation), baru ke role fallback berikutnya jika semua
+          gagal.
         </div>
       )}
       <div className="bg-dcard rounded-lg border border-dline overflow-hidden">

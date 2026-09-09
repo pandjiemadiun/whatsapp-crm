@@ -13,3 +13,7 @@ dist/
 # Playwright / test runner output
 test-results/
 playwright-report/
+
+# Binary archives / build artifacts (not source code)
+*.tar.gz
+*.zip

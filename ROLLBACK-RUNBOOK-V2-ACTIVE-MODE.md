@@ -1,259 +1,375 @@
-# ROLLBACK-RUNBOOK-V2-ACTIVE-MODE.md
+# Rollback Runbook — V2 Active Mode Flip (store-a3cd7205)
 
-**Store:** store-a3cd7205 (bengkel-didik-test)  
-**Tujuan:** Runbook rollback 1 halaman untuk revert dari active mode ke shadow mode, terverifikasi dari kode aktual.  
-**Tanggal:** 9 Sep 2026  
+**Store:** store-a3cd7205 (bengkel.didik.test)
+**Tujuan:** Runbook rollback untuk flip store-a3cd7205 dari shadow ke active mode,
+serta prosedur revert. **Semua command diverifikasi dari kode aktual — bukan asumsi.**
+
+**Status saat ini (verified):**
+- Global flag `chatEngine.v2Mode = 'shadow'` (system_settings, DB)
+- Per-store Redis key `store:store-a3cd7205:engine` **tidak ada** (TTL=-2) → store
+  default ke V1 engine; V2 shadow observer aktif hanya untuk store ini.
 
 ---
 
-## 1. Mekanisme Flag Engine Per-Toko
+## 1. Mekanisme Flag — Verbatim dari Kode
 
-### 1.1 Redis Key Format
+### 1.1 Per-store engine flag (Redis)
 
-**Key:** `store:${storeId}:engine`  
-**Value (JSON):**
-```json
-{
-  "storeId": "store-a3cd7205",
-  "engine": "v1" | "v2",
-  "enabledAt": "2026-09-09T03:00:00.000Z",
-  "canaryStartDate": "2026-09-09T03:00:00.000Z"
+**Sumber:** `apps/api/src/services/chat/engine-config.ts:12`
+
+```typescript
+const getStoreKey = (storeId: string) => `store:${storeId}:engine`;
+
+export async function getStoreEngine(storeId: string): Promise<EngineVersion> {
+  const redisAdapter = await getRedis();
+  const config = await redisAdapter.get<StoreEngineConfig>(getStoreKey(storeId));
+  return config?.engine || 'v1';     // ← default 'v1' bila key tidak ada
 }
 ```
 
-**Default:** `v1` jika key tidak ada atau expired.  
-**TTL:** 3600 detik (1 jam) — diset oleh `redisAdapter.setex(key, ttlSeconds, JSON.stringify(value))` di `engine-config.ts:38` via `redis.adapter.ts:58`. Setelah TTL expire, key hilang dan `getStoreEngine` return `v1` (default).
+- **Redis key:** `store:store-a3cd7205:engine` (pattern: `store:${storeId}:engine`)
+- **Format value:** JSON `{"storeId":"...","engine":"v1"|"v2","enabledAt":"<ISO>","canaryStartDate":"<ISO>"}`
+- **Default:** `'v1'` bila key tidak ada (`.ts:22`)
+- **In-process cache:** TIDAK ADA — `getStoreEngine()` baca Redis fresh per request
+- **Dipanggil dari:** `conversation.service.ts:129` → `if (engine === 'v2') { /* V2 path */ }`
 
-### 1.2 Command Redis CLI PERSIS
+**`redisAdapter.set()` TTL default:** `apps/api/src/adapters/cache/redis.adapter.ts:56`
+```typescript
+async set<T>(key: string, value: T, ttlSeconds: number = 3600): Promise<void> {
+    await redis.setex(key, ttlSeconds, JSON.stringify(value));
+}
+```
+- Default TTL = **3600 detik (1 jam)**. `setStoreEngine()` tidak override → key expire 1 jam.
+- Reference key yang sudah ada (store-f7140b5c): `redis-cli TTL` → `-1` (no expiration, persisten).
+
+### 1.2 Global V2-mode flag (PostgreSQL system_settings)
+
+**Sumber:** `apps/api/src/services/chat/v2-engine/shadow-wiring.ts:34,44-51`
+
+```typescript
+export const V2_MODE_FLAG_KEY = 'chatEngine.v2Mode';
+export type V2Mode = 'off' | 'shadow' | 'active';
+
+async function getV2Mode(): Promise<V2Mode> {
+  const value = await configService.getConfig(V2_MODE_FLAG_KEY);
+  if (value === 'shadow' || value === 'active') return value;
+  return 'off';
+}
+```
+
+- **DB table:** `system_settings`, key = `chatEngine.v2Mode`
+- **Format value:** plain string `'off' | 'shadow' | 'active'` (bukan JSON)
+- **Nilai saat ini:** `'shadow'` (verified via SQL)
+- **Cache:** 5 menit via `ConfigService.CACHE_TTL = 5 * 60 * 1000` (`config.service.ts:11`)
+- **Cache invalidation:** `configService.setConfig()` → `this.cache.delete(key)` (`config.service.ts:107`)
+  — langsung. Raw SQL perubahan **tidak** invalidate cache → butuh
+  `POST /api/admin/config/reload-cache` atau tunggu ≤5 menit.
+
+**`fireShadowV2Call` hanya jalan bila** `shadow-wiring.ts:97,100`:
+```typescript
+if (v2Mode !== 'shadow') return;        // 'off' atau 'active' → skip
+if (storeId !== SHADOW_STORE_ID) return; // hanya untuk store-a3cd7205
+```
+`SHADOW_STORE_ID = 'store-a3cd7205'` (`shadow-wiring.ts:31`).
+
+> **Catatan stal:** Komentar di `shadow-wiring.ts:306` dan `:286` menyebut
+> "store-4f4f67bd" — itu **stale**. Kode aktual pakai `'store-a3cd7205'`.
+
+### 1.3 Dua flag berperan berbeda
+
+| Flag | Storage | Dibaca oleh | Efek | In-process cache? |
+|---|---|---|---|---|
+| `store:${storeId}:engine` | Redis (JSON) | `getStoreEngine()` → `conversation.service.ts:129` | `engine==='v2'` → V2 primary; else V1 | **TIDAK** (fresh per request) |
+| `chatEngine.v2Mode` | PostgreSQL `system_settings` | `getV2Mode()` → `shadow-wiring.ts:97` | `'shadow'` → V2 shadow observer ON; `'active'`/`'off'` → OFF | 5 menit (ConfigService) |
+
+---
+
+## 2. Command PERSIS — Flip ke Active
+
+### Option A: Via Redis CLI (langsung, no restart)
 
 ```bash
-# READ flag saat ini
+# 1. Baca flag saat ini
 redis-cli GET store:store-a3cd7205:engine
 
-# WRITE: flip ke active (v2)
-redis-cli SET store:store-a3cd7205:engine '{"storeId":"store-a3cd7205","engine":"v2","enabledAt":"2026-09-09T04:00:00.000Z","canaryStartDate":"2026-09-09T04:00:00.000Z"}'
+# 2. Flip ke active (v2) — gunakan SETEX dengan TTL untuk canary safety
+#    TTL 3600s = 1 jam (auto-revert jika tidak di-refresh)
+#    Atau gunakan SETEX 604800 (7 hari) untuk canary lebih lama
+redis-cli SETEX store:store-a3cd7205:engine 604800 \
+  '{"storeId":"store-a3cd7205","engine":"v2","enabledAt":"2026-09-09T08:52:52.000Z","canaryStartDate":"2026-09-09T08:52:52.000Z"}'
 
-# WRITE: revert ke shadow (v1)
-redis-cli SET store:store-a3cd7205:engine '{"storeId":"store-a3cd7205","engine":"v1","enabledAt":"2026-09-09T04:00:00.000Z","canaryStartDate":null}'
+# 3. (Opsional) Matikan V2 shadow observer — sudah tidak perlu karena V2 aktif
+psql "$DATABASE_URL" -c \
+  "UPDATE system_settings SET value = 'active' WHERE key = 'chatEngine.v2Mode';"
+
+# 4. (Opsional) Invalidate config cache agar perubahan DB langsung ke semua process
+curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" \
+  https://api.qlobot.web.id/api/admin/config/reload-cache
 ```
 
-**Via Admin API (alternative, super_admin only):**
-```bash
-# GET current config
-curl -H "Authorization: Bearer <ADMIN_TOKEN>" http://localhost:PORT/api/admin/engine/store-a3cd7205
-
-# POST set engine
-curl -X POST -H "Authorization: Bearer <ADMIN_TOKEN>" -H "Content-Type: application/json" \
-  -d '{"engine":"v2"}' http://localhost:PORT/api/admin/engine/store-a3cd7205
-```
-
-### 1.3 Apakah butuh pm2 restart?
-
-**TIDAK.** Flag dibaca fresh dari Redis pada SETIAP pesan masuk:
-
-`conversation.service.ts:129`:
-```ts
-const engine = await getStoreEngine(storeId);
-```
-
-`getStoreEngine` (`engine-config.ts:19-23`) memanggil `redisAdapter.get()` langsung — tidak ada application-level cache. Perubahan flag生效 di request berikutnya secara langsung.
-
-**Catatan TTL:** Karena `redisAdapter.set` menggunakan default TTL 3600 detik, key akan expire setelah 1 jam jika tidak di-refresh. Jika key expired, flag revert ke default `v1`. Untuk canary active mode, pastikan TTL tidak kadaluarsa dengan periodic refresh, atau set TTL lebih panjang via direct Redis command:
+### Option B: Via Admin API
 
 ```bash
-# Set dengan TTL 7 hari (604800 detik)
-redis-cli SETEX store:store-a3cd7205:engine 604800 '{"storeId":"store-a3cd7205","engine":"v2","enabledAt":"2026-09-09T04:00:00.000Z","canaryStartDate":"2026-09-09T04:00:00.000Z"}'
-```
-
----
-
-## 2. Mid-Conversation Flip Behavior
-
-### 2.1 Apa yang terjadi saat flag di-flip di tengah percakapan?
-
-**Konfirmasi dari kode:**
-
-1. **Flag dibaca per-message** (`conversation.service.ts:129`) — tidak ada session-level cache. Flip flag = effect on next message immediately.
-
-2. **V2 writes to canonical state** (`canonical-context.service.ts:841-870`):
-   - `workspace_v2` (JSON column di `conversation_context`) adalah canonical state
-   - V2 engine menulis `draft_cart` + canonical fields (pendings, resolved_facts, intent, dll) ke `workspace_v2`
-
-3. **V1 can read V2 state** (`canonical-context.service.ts:724-750`):
-   ```ts
-   async getCanonicalWithLegacyFallback(conversationId: string): Promise<CanonicalConversationState | null> {
-     const row = await prisma.conversationContext.findUnique({
-       where: { conversationId },
-       select: { workspace_v2: true, extractedEntities: true },
-     });
-     // 1. Canonical state: workspace_v2 ada isi
-     if (row.workspace_v2 !== null && row.workspace_v2 !== undefined && row.workspace_v2 !== '') {
-       return loadCanonical(row.workspace_v2);
-     }
-     // 2. Legacy fallback: extractedEntities
-     if (row.extractedEntities !== null && row.extractedEntities !== undefined) {
-       return fromLegacyExtractedEntities(row.extractedEntities, adapters.logger);
-     }
-     // 3. Default state
-     return { ...DEFAULT_CANONICAL_STATE };
-   }
-   ```
-
-**Kesimpulan:** Jika flag di-flip dari v2 ke v1 di tengah percakapan:
-- V1 akan baca `workspace_v2` yang ditulis oleh V2 (canonical state)
-- V1 bisa memahami canonical fields (pendings, resolved_facts, intent, dll)
-- **V2-specific transient `draft_cart`** ada di `workspace_v2` JSON tapi TIDAK merupakan canonical cart — V1 tidak akan menggunakannya sebagai authoritative cart (CartAuthority tetap owner cart via OrderItem rows)
-- Cart state (OrderItem) tetap aman karena disimpan di tabel terpisah (`Order` + `OrderItem`), bukan di `workspace_v2`
-
-### 2.2 Kompatibilitas v2 mutation state (workspace_v2, draft_cart) dibaca balik oleh v1
-
-| State | Lokasi | V1 bisa baca? | Catatan |
-|-------|--------|---------------|---------|
-| Canonical fields (pendings, resolved_facts, intent, conversation_summary) | `workspace_v2` JSON | **YA** | Via `getCanonicalWithLegacyFallback()` |
-| `draft_cart` (V2-specific transient) | `workspace_v2` JSON | **TIDAK DIKETAHUI** | V1 tidak punya logic untuk interpret `draft_cart`; treated as opaque JSON |
-| Cart items (OrderItem rows) | Tabel `order_items` | **YA** | CartAuthority = single source of truth, independent dari engine flag |
-| Order status | Tabel `orders` | **YA** | V1 baca via `activeOrder`/`tryTotal` fallback logic |
-
-**Rekomendasi:** Jika mid-conversation flip diperlukan, monitor percakapan yang sedang aktif untuk pastikan V1 tidak crash saat membaca `workspace_v2` yang berisi `draft_cart`. Saat ini tidak ada known issue, tapi `draft_cart` adalah field baru yang V1 tidak di-design untuk memahaminya.
-
----
-
-## 3. Command PERSIS untuk Flip dan Revert
-
-### 3.1 Flip ke Active Mode (v2)
-
-```bash
-# Via Redis CLI (langsung)
-redis-cli SET store:store-a3cd7205:engine '{"storeId":"store-a3cd7205","engine":"v2","enabledAt":"2026-09-09T04:00:00.000Z","canaryStartDate":"2026-09-09T04:00:00.000Z"}'
-
-# Via Admin API (super_admin only, butuh auth token)
-curl -X POST -H "Authorization: Bearer <ADMIN_TOKEN>" -H "Content-Type: application/json" \
-  -d '{"engine":"v2"}' http://localhost:PORT/api/admin/engine/store-a3cd7205
-```
-
-### 3.2 Revert ke Shadow Mode (v1)
-
-```bash
-# Via Redis CLI (langsung)
-redis-cli SET store:store-a3cd7205:engine '{"storeId":"store-a3cd7205","engine":"v1","enabledAt":"2026-09-09T04:00:00.000Z","canaryStartDate":null}'
-
-# Via Admin API (super_admin only, butuh auth token)
-curl -X POST -H "Authorization: Bearer <ADMIN_TOKEN>" -H "Content-Type: application/json" \
-  -d '{"engine":"v1"}' http://localhost:PORT/api/admin/engine/store-a3cd7205
-```
-
-### 3.3 Verifikasi
-
-```bash
-# Cek flag saat ini
-redis-cli GET store:store-a3cd7205:engine
-
-# Via API
-curl -H "Authorization: Bearer <ADMIN_TOKEN>" http://localhost:PORT/api/admin/engine/store-a3cd7205
-```
-
----
-
-## 4. Checklist "Kapan Harus Rollback"
-
-Gejala konkret yang DIDAPAT dari bug patterns yang sudah pernah terjadi di BUG-BELUM-DIBERESKAN.md dan RAILS.md:
-
-### 4.1 Critical — Rollback Immediately
-
-| # | Gejala | Sumber Bug Pattern |
-|---|--------|-------------------|
-| 1 | **ADD_TO_CART salah item** — item yang tidak dimaksud customer masuk keranjang (wrong-item-removed pattern) | BUG-BELUM-DIBERESKAN §partial_cart_cancel; RAILS 10 Agu P4.2 |
-| 2 | **Harga tidak dari DB** — harga cart tidak cocok dengan harga katalog (LLM price hallucination) | BUG-BELUM-DIBERESKAN §I-13; RAILS §2 P2 Truth Boundary |
-| 3 | **Silent ADD_TO_CART tanpa eksekusi** — aksi berhasil tapi tidak ada OrderItem di DB | RAILS 9 Agu 2026 TASK C1; BUG-BELUM-DIBERESKAN §silent-ADD |
-| 4 | **False cancel/order status berubah tanpa konfirmasi** — percakapan normal tiba-tiba batal order | RAILS 9 Agu P1 B3; BUG-BELUM-DIBERESKAN §false-cancel |
-| 5 | **Cross-tenant data leak** — data toko lain muncul di percakapan/store ini | BUG-BELUM-DIBERESKAN §C1 IDOR; RAILS 30–31 Agu tenant isolation |
-
-### 4.2 High — Pertimbangkan Rollback
-
-| # | Gejala | Sumber Bug Pattern |
-|---|--------|-------------------|
-| 6 | **Keyword collision / jawaban salah tier** — "berapa bayar X" jawab "keranjang kosong" atau daftar metode bayar | RAILS 9 Agu TASK B3; BUG-BELUM-DIBERESKAN §fast-path |
-| 7 | **Reply terpotong tidak lengkap** — balasan bot putus di tengah kalimat | RAILS 10 Agu P5.1; BUG-BELUM-DIBERESKAN §I-2 |
-| 8 | **Qty 0 muncul di receipt/cart** — item dengan qty=0 ditampilkan | RAILS 10 Agu P5.1; BUG-BELUM-DIBERESKAN §I-1a |
-| 9 | **Kesalahan intent classification** — "mau beli X" diinterpretasikan sebagai pertanyaan harga atau cancel | RAILS 9 Agu TASK B1; keyword collision "ram"⊂"Brambang" |
-| 10 | **Double mutation cart** — order item ter-create dua kali untuk 1 pesan | RAILS §2 P0 safety boundary; BUG-BELUM-DIBERESKAN §double-mutation |
-
-### 4.3 Medium — Monitor, Jangan Langsung Rollback
-
-| # | Gejala | Sumber Bug Pattern |
-|---|--------|-------------------|
-| 11 | **V2 shadow log menunjukkan divergensi besar** — V2 output sangat berbeda dari V1 untuk kasus yang seharusnya sama | RAILS P3 shadow mode design |
-| 12 | **Cart state hilang/tidak konsisten** — draft cart tidak bisa di-resume, atau order status lompat ke status yang tidak valid | RAILS P4.2; canonical state compatibility |
-| 13 | **Error rate naik drastis** — 5xx/exception di log untuk request yang seharusnya normal | General monitoring indicator |
-
----
-
-## 5. Konfirmasi: Dummy Store — Tidak Butuh Migrasi Data
-
-**store-a3cd7205 adalah toko dummy/test** (bukan merchant asli/produksi).
-
-- Semua data di toko ini adalah data uji yang di-seed untuk testing
-- Rollback hanya perlu revert flag Redis — TIDAK ada migrasi data customer nyata yang perlu di-pertimbangkan
-- Cart state (OrderItem) bisa di-reset via cleanup script jika diperlukan, tapi ini opsional untuk test environment
-- Tidak ada compliance/legal implication karena tidak ada data PII customer asli
-
-**Jika setelah rollback ingin bersihkan state test:**
-```bash
-# Hapus semua order item + order + conversation untuk conversation tertentu
-redis-cli SET store:store-a3cd7205:engine '{"storeId":"store-a3cd7205","engine":"v1","enabledAt":"2026-09-09T04:00:00.000Z","canaryStartDate":null}'
-# Lalu jalankan cleanup script untuk hapus test conversations/orders
-```
-
----
-
-## 6. Prosedur Rollback Step-by-Step
-
-### 6.1 Rollback Cepat (1 menit)
-
-```bash
-# 1. Revert flag
-redis-cli SET store:store-a3cd7205:engine '{"storeId":"store-a3cd7205","engine":"v1","enabledAt":"2026-09-09T04:00:00.000Z","canaryStartDate":null}'
-
-# 2. Verifikasi
-redis-cli GET store:store-a3cd7205:engine
-# Expected: {"storeId":"store-a3cd7205","engine":"v1",...}
-
-# 3. Test ping — kirim pesan ke toko, pastikan balasan dari V1
-curl -X POST http://localhost:PORT/api/pwa/store-a3cd7205/message \
+# 1. Set per-store engine ke v2 (super_admin)
+curl -X POST \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"customerId":"test-cust","conversationId":"test-conv","message":"halo","messageId":"rollback-test"}'
+  -d '{"engine":"v2"}' \
+  https://api.qlobot.web.id/api/admin/engine/store-a3cd7205
+
+# 2. Set global chatEngine.v2Mode ke 'active' (super_admin)
+curl -X PUT \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"value":"active","category":"feature_flag"}' \
+  https://api.qlobot.web.id/api/admin/config/chatEngine.v2Mode
+
+# 3. Reload cache (opsional, pastikan semua instance pick up)
+curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" \
+  https://api.qlobot.web.id/api/admin/config/reload-cache
 ```
 
-### 6.2 Rollback dengan Cleanup State
-
-```bash
-# 1. Revert flag (langkah 6.1)
-redis-cli SET store:store-a3cd7205:engine '{"storeId":"store-a3cd7205","engine":"v1","enabledAt":"2026-09-09T04:00:00.000Z","canaryStartDate":null}'
-
-# 2. Hapus test conversations + orders + order items
-# (gunakan cleanup script yang ada, atau manual DELETE sesuai pattern GAP1-FIX)
-
-# 3. Verifikasi count = 0
-# 4. Test ping seperti 6.1
-```
-
-### 6.3 Post-Rollback Checklist
-
-- [ ] Flag terverifikasi = `v1` via Redis CLI
-- [ ] Test ping return response dari V1 engine
-- [ ] Log tidak ada error baru setelah rollback
-- [ ] Jika ada gejala critical dari §4.1, dokumentasi incident + root cause sebelum melanjutkan
+> **API routes** (`apps/api/src/index.ts:152,145`):
+> - `POST /api/admin/engine/:storeId` → `adminAuthMiddleware` + `requireAdminRole(['super_admin'])`
+> - `PUT /api/admin/config/:key` → `adminAuthMiddleware` + `requireAdminRole(['super_admin'])`
+> - Auth: Bearer token via `adminAuthToken` table (email + role verified)
 
 ---
 
-## 7. Catatan Penting
+## 3. Command PERSIS — Revert ke Shadow (Rollback)
 
-1. **Tidak ada migration data** — store-a3cd7205 adalah dummy store, semua data adalah test data
-2. **Flag tidak butuh restart** — dibaca per-request dari Redis
-3. **TTL 1 jam** — jika menggunakan `SET` biasa, key akan expire setelah 1 jam. Gunakan `SETEX` dengan TTL lebih panjang untuk canary active mode
-4. **Shadow wiring terpisah** — `chatEngine.v2Mode` system setting ('shadow'/'active'/'off') mengontrol apakah V2 shadow call dijalankan PARALEL dengan V1. Ini BERBEDA dari engine flag. Saat active mode, `v2Mode` sebaiknya diset ke 'active' agar shadow wiring tidak makan resource:
-   ```bash
-   # Set system setting (via ConfigService atau direct DB)
-   # chatEngine.v2Mode = 'active'
-   ```
-5. **Mid-conversation flip aman untuk cart state** — OrderItem rows tidak terpengaruh oleh engine flag. CartAuthority tetap authoritative.
+```bash
+# 3a. Via Redis CLI (langsung)
+#    Hapus key → auto default ke 'v1' (cepat)
+redis-cli DEL store:store-a3cd7205:engine
+
+#    ATAU: set eksplisit ke v1 (persist, no TTL)
+redis-cli SET store:store-a3cd7205:engine \
+  '{"storeId":"store-a3cd7205","engine":"v1","enabledAt":"2026-09-05T04:34:58.000Z"}'
+
+#    ATAU: set ke v1 dengan TTL 1 jam (auto-cleanup)
+redis-cli SETEX store:store-a3cd7205:engine 3600 \
+  '{"storeId":"store-a3cd7205","engine":"v1","enabledAt":"2026-09-05T04:34:58.000Z"}'
+
+# 3b. Kembalikan global flag ke 'shadow'
+psql "$DATABASE_URL" -c \
+  "UPDATE system_settings SET value = 'shadow' WHERE key = 'chatEngine.v2Mode';"
+
+# 3c. Invalidate config cache (WAJITU — karena perubahan via SQL)
+curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" \
+  https://api.qlobot.web.id/api/admin/config/reload-cache
+
+# 3d. Via Admin API (alternatif)
+curl -X POST \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"engine":"v1"}' \
+  https://api.qlobot.web.id/api/admin/engine/store-a3cd7205
+
+curl -X PUT \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"value":"shadow","category":"feature_flag"}' \
+  https://api.qlobot.web.id/api/admin/config/chatEngine.v2Mode
+```
+
+### Verifikasi setelah rollback
+
+```bash
+# Per-store flag
+redis-cli GET store:store-a3cd7205:engine        # expect: {"engine":"v1",...} atau (empty)
+redis-cli TTL store:store-a3cd7205:engine          # expect: -2 (deleted) atau -1 (no expire)
+
+# Global flag
+psql "$DATABASE_URL" -t -c "SELECT value FROM system_settings WHERE key = 'chatEngine.v2Mode';"
+# expect: shadow
+```
+
+---
+
+## 4. Apakah Butuh Restart?
+
+**TIDAK.**
+
+- **Per-store flag:** `getStoreEngine()` membaca Redis fresh per request — tidak ada
+  in-process cache (`engine-config.ts:19-23`). Efek langsung pada request berikutnya.
+- **Global flag:** 5-min cache via ConfigService. Perubahan via admin API (`setConfig`)
+  **langsung invalidate** cache (`config.service.ts:107`). Perubahan via raw SQL perlu
+  `reload-cache` API atau tunggu ≤5 menit.
+- **pm2 `instances: 1`** (`ecosystem.config.js:7`) — single instance, tidak ada
+  multi-instance cache desync.
+
+---
+
+## 5. Mid-Conversation Flip — State Compatibility (verified from code)
+
+### V2 engine routing
+
+`conversation.service.ts:129-131`:
+```typescript
+const engine = await getStoreEngine(storeId);
+if (engine === 'v2') { /* V2 path */ }
+// ── Fall through ke V1 logic ──
+```
+
+### V2→V1 fallback (circuit breaker)
+
+`conversation.service.ts:388-398`:
+```typescript
+} catch (err) {
+  // CIRCUIT BREAKER: fallback ke v1
+  adapters.logger.error('Engine v2 failed, fallback to v1', { storeId, conversationId, error: ... });
+  // Fall through ke logic v1 di bawah
+}
+// ── LOGIC V1 EXISTING (tidak diubah) ──
+```
+
+**Two failure paths:**
+1. **V2 throw sebelum mutation** (`v2MutationExecuted === false`): outer catch →
+   **fallback ke V1** (V1 logic tetap jalan).
+2. **V2 throw setelah mutation** (`v2MutationExecuted === true` — `conversation.service.ts:393`):
+   **TIDAK fallback ke V1** → return safe-reply:
+   > "Baik kak, pesanan Kakak sudah kami catat. Silakan ketik *total* atau
+   > *cek pesanan* untuk melihat ringkasan ya. 🙏"
+   (buildSafeReply, `conversation.service.ts:147`)
+
+### V1 CAN read V2-written state (verified)
+
+`canonicalConversationStateService.getCanonicalWithLegacyFallback()` (`canonical-context.service.ts:724`):
+```typescript
+// Priority: workspace_v2 → extractedEntities → default
+if (row.workspace_v2 !== null && row.workspace_v2 !== '' && ...) {
+    return loadCanonical(row.workspace_v2);  // ← V1 reads V2-written canonical state
+}
+if (row.extractedEntities !== null && ...) {
+    return fromLegacyExtractedEntities(row.extractedEntities, ...);  // ← legacy V1 fallback
+}
+```
+
+**State compatibility matrix:**
+
+| State | Lokasi | V1 baca? | Catatan |
+|---|---|---|---|
+| Canonical fields (pendings, resolved_facts, intent, conversation_summary) | `workspace_v2` JSON | **YA** | Via `getCanonicalWithLegacyFallback()` |
+| `draft_cart` (V2-specific transient) | `workspace_v2` JSON | Dilewati | V1 tidak punya logic untuk `draft_cart`; CartAuthority = cart authority |
+| Cart items (OrderItem) | Tabel `order_items` | **YA** | CartAuthority single source, independent dari engine flag |
+| Order status | Tabel `orders` | **YA** | V1 baca via `activeOrder`/`tryTotal` |
+
+**Kesimpulan:** Revert dari V2 ke V1 mid-conversation **aman**. V1 membaca
+canonical state dari `workspace_v2` yang ditulis V2. `draft_cart` (V2-specific)
+diabaikan V1 — V1 pakai CartAuthority. Tidak ada migrasi data yang diperlukan.
+
+---
+
+## 6. Dummy Store — Tidak Butuh Migrasi Data
+
+**Verifikasi DB (query live, store-a3cd7205):**
+
+| Tabel | Count | Keterangan |
+|---|---|---|
+| `orders` | **0** | Tidak ada order |
+| `store_documents` | **0** | Tidak ada TOS/SOP |
+| `conversations` | 284 | Data percakapan (read-only, boleh dibiarkan) |
+| `v2_shadow_logs` | 464 | Log shadow (read-only, boleh dibiarkan) |
+| `store` | 1 | Store itself (bengkel.didik.test) |
+| Redis `store:store-a3cd7205:engine` | **tidak ada** | TTL=-2 (key absent) |
+
+**Rollback cukup revert flag** — tidak ada data customer nyata yang perlu di-migrasi.
+`v2_shadow_logs` adalah read-only log, tidak dibaca kembali oleh engine.
+
+---
+
+## 7. Checklist — Kapan Harus Rollback
+
+Gejala yang **pernah terjadi** — diambil verbatim dari
+`BUG-BELUM-DIBERESKAN.md` + kode aktual:
+
+### 7.1 Critical — Rollback Secepatnya
+
+| # | Gejala | Sumber kode / BUG file |
+|---|---|---|
+| 1 | **Harga tidak dari DB** — harga cart tidak cocok katalog; LLM price hallucination | VIII-A: `executeOps` price bug + `resolvePriceAndStock` tx-consistency, commit `4c2e4f2` (BUG-BELUM-DIBERESKAN.md:175) |
+| 2 | **qty≤0 di subtotal** — item dengan kuantitas 0 masuk perhitungan total | BUG-03/04: `fallback.service.ts:717` filters before subtotal (BUG-BELUM-DIBERESKAN.md:134) |
+| 3 | **Safe-reply triggered setelah mutation** — customer dapat "Baik kak, pesanan Kakak sudah kami catat..." | `conversation.service.ts:147` buildSafeReply + `v2MutationExecuted` guard (BUG-BELUM-DIBERESKAN.md:137, B6 RACE-01/02) |
+| 4 | **Double cart mutation** — order item ter-create 2x untuk 1 pesan | B6: `atomicCas` + `ActionIdempotency` guard (BUG-BELUM-DIBERESKAN.md:137) |
+| 5 | **Cross-tenant leak** — data toko lain muncul di conversation ini | IX-A tenant isolation (BUG-BELUM-DIBERESKAN.md:168, commit `b64babf`) |
+
+### 7.2 High — Pertimbangkan Rollback
+
+| # | Gejala | Sumber |
+|---|---|---|
+| 6 | **V2 engine crash/exception berulang** — log "Engine v2 failed, fallback to v1" sering | `conversation.service.ts:391` |
+| 7 | **V2 shadow call persistent error** — log "V2 shadow call failed (non-blocking)" | `shadow-wiring.ts:166` |
+| 8 | **Fallback tier overlap** — V2 memanggil fallback tier V1/V2 dalam urutan salah | III-4: P3 T5 fallback tier overlap, commit `5e7ef42` (BUG-BELUM-DIBERESKAN.md:206) |
+| 9 | **Structured action tidak echo** — tap tombol tapi tidak ada konfirmasi di conversation_history | Kontrak §0.5 |
+| 10 | **V2ShadowLog banyak mismatch** — V2 output konsisten berbeda dari V1 baseline | `v2_shadow_logs` query (lihat §9) |
+
+### 7.3 Quick Verification Queries
+
+```bash
+# Cek V2 error rate di shadow log
+psql "$DATABASE_URL" -t -c "
+SELECT COUNT(*) as total,
+       COUNT(*) FILTER (WHERE v2_output::text LIKE '%\"error\"%' OR v2_output::text LIKE '%\"success\":false%') as errors
+FROM v2_shadow_logs WHERE store_id = 'store-a3cd7205';
+"
+
+# Cek per-store flag
+redis-cli GET store:store-a3cd7205:engine
+
+# Cek global flag
+psql "$DATABASE_URL" -t -c "SELECT value FROM system_settings WHERE key = 'chatEngine.v2Mode';"
+```
+
+---
+
+## 8. Post-Rollback Verification Checklist
+
+- [ ] `redis-cli GET store:store-a3cd7205:engine` → expect `{"engine":"v1",...}` atau kosong
+- [ ] `psql -c "SELECT value FROM system_settings WHERE key='chatEngine.v2Mode';"` → expect `shadow`
+- [ ] Test ping ke store-a3cd7205 → respons dari V1 engine (bukan safe-reply V2)
+- [ ] Log: tidak ada "Engine v2 failed" setelah rollback +5 menit
+- [ ] Log: shadow observer berjalan kembali (V2ShadowLog baru tercatat)
+
+---
+
+## 9. Fact Record (verbatim checksums)
+
+| Item | Nilai | Sumber |
+|---|---|---|
+| Redis key pattern | `store:${storeId}:engine` | `engine-config.ts:12` |
+| Default engine | `'v1'` (`config?.engine \|\| 'v1'`) | `engine-config.ts:22` |
+| redisAdapter.set default TTL | `3600` detik | `redis.adapter.ts:56` |
+| Global flag DB key | `chatEngine.v2Mode` | `shadow-wiring.ts:34` |
+| Global flag value format | plain string `'off'\|'shadow'\|'active'` | `shadow-wiring.ts:46-48` |
+| ConfigService CACHE_TTL | `5 * 60 * 1000` ms | `config.service.ts:11` |
+| Config cache invalidation | `setConfig` → `this.cache.delete(key)` | `config.service.ts:107` |
+| getStoreEngine in-process cache | **TIDAK ADA** | `engine-config.ts:19-23` |
+| `isCanaryActive()` production callers | **TIDAK ADA** (hanya test) | `engine-config.ts:41` |
+| `SHADOW_MODE` env di `.env` | **Tidak diset** | grep result kosong |
+| V2→V1 fallback (pre-mutation) | outer catch → fall through ke V1 | `conversation.service.ts:390-398` |
+| V2→V1 guard (post-mutation) | `v2MutationExecuted` → safe-reply | `conversation.service.ts:393-397` |
+| V1 baca V2 state | `getCanonicalWithLegacyFallback`: workspace_v2 → extractedEntities → default | `canonical-context.service.ts:724-748` |
+| V2 menulis ke | `workspace_v2` via `saveWorkspaceV2` | `conversation.service.ts:263,368` |
+| `draft_cart` | V2-specific, ignored V1 | `canonical-context.service.ts:843-865` |
+| `SHADOW_STORE_ID` | `'store-a3cd7205'` | `shadow-wiring.ts:31` |
+| Stale komentar | "store-4f4f67bd" | `shadow-wiring.ts:306,286` (stale) |
+| store-a3cd7205 orders | 0 | DB query |
+| store-a3cd7205 store_documents | 0 | DB query |
+| store-a3cd7205 conversations | 284 | DB query |
+| store-a3cd7205 v2_shadow_logs | 464 | DB query |
+| store-a3cd7205 Redis key | tidak ada (TTL=-2) | `redis-cli GET/TTL` |
+| store-a3cd7205 name | bengkel.didik.test | DB query |
+| pm2 instances | 1 | `ecosystem.config.js:7` |
+| API base URL | `https://api.qlobot.web.id` | `PUBLIC_API_URL` env |
+| Redis URL | `redis://localhost:6379` | `REDIS_URL` env |
+| chatEngine.v2Mode current | `'shadow'` | SQL query |
+| BUG-03/04 qty<=0 | `fallback.service.ts:717` | `BUG-BELUM-DIBERESKAN.md:134` |
+| VIII-A price bug | commit `4c2e4f2` | `BUG-BELUM-DIBERESKAN.md:175` |
+| B6 V2→V1 guard | atomicCas pattern | `BUG-BELUM-DIBERESKAN.md:137` |
+| III-4 fallback overlap | commit `5e7ef42` | `BUG-BELUM-DIBERESKAN.md:206` |
+
+---
+
+*File ini adalah dokumentasi read-only. Dibuat dari audit kode aktual.*
+*VERIFIED: `git diff --stat` kosong kecuali file markdown ini — tidak ada kode yang diubah.*

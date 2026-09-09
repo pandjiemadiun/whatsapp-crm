@@ -1,0 +1,178 @@
+[
+  {
+    "scenario_id": "implicit_ref_ambiguous_tadi_two_options",
+    "category": "implicit_reference",
+    "product_refs": ["prod-ban-dalam-test-v2", "prod-busi-motor-test-v2"],
+    "messages": [
+      "ada ban dalam sama busi?",
+      "yang tadi aja"
+    ],
+    "notes": "AMBIGU: 'tadi' bisa ke ban dalam atau busi. Bot harus minta klarifikasi, bukan asal pilih salah satu."
+  },
+  {
+    "scenario_id": "implicit_ref_resolve_first_variant",
+    "category": "implicit_reference",
+    "product_refs": ["prod-ban-dalam-test-v2"],
+    "messages": [
+      "ban dalam ada varian apa aja?",
+      "yang pertama tadi"
+    ],
+    "notes": "Bot sebelumnya sebut 2 ukuran: 100/90-17 dan 110/90-17. 'yang pertama' harus resolve ke 100/90-17."
+  },
+  {
+    "scenario_id": "implicit_ref_relative_price_cheapest",
+    "category": "implicit_reference",
+    "product_refs": ["prod-ban-dalam-test-v2", "prod-oli-mesin-test-v2"],
+    "messages": [
+      "mau ban dalam sama oli",
+      "ok mau yang mana dulu",
+      "yang murah aja"
+    ],
+    "notes": "Referensi relatif harga, bukan urutan sebutan. Oli (75rb) < Ban Dalam (50rb) per-unit, tapi kalau dibandingkan quantity-aware bisa beda. Bot harus paham konteks harga."
+  },
+  {
+    "scenario_id": "implicit_ref_second_from_top",
+    "category": "implicit_reference",
+    "product_refs": ["prod-busi-motor-test-v2"],
+    "messages": [
+      "ada apa aja disini",
+      "yg kedua dari atas"
+    ],
+    "notes": "Bot list katalog. 'yg kedua dari atas' harus resolve ke produk di posisi #2 dalam list."
+  },
+  {
+    "scenario_id": "implicit_ref_itu_plus_new_item",
+    "category": "implicit_reference",
+    "product_refs": ["prod-busi-motor-test-v2", "prod-ban-dalam-test-v2"],
+    "messages": [
+      "busi ada?",
+      "ada",
+      "itu aja deh, sama satu lagi ban dalam"
+    ],
+    "notes": "'itu' merujuk ke produk yang baru saja dikonfirmasi (Busi), lalu tambah Ban Dalam. Bot harus paham ini 2 item."
+  },
+  {
+    "scenario_id": "cross_session_memory_cart_persistence",
+    "category": "cross_session_memory",
+    "product_refs": ["prod-ban-dalam-test-v2"],
+    "messages": [
+      "saya mau ban dalam motor",
+      "ya"
+    ],
+    "requires_delay_minutes": 30,
+    "notes": "Sesi A: masuk cart. [JEDA 30 menit]. Sesi B (uid sama): 'jadi total belanja saya berapa?' harus masih ingat cart dari sesi A."
+  },
+  {
+    "scenario_id": "cross_session_memory_checkout_resume",
+    "category": "cross_session_memory",
+    "product_refs": ["prod-busi-motor-test-v2"],
+    "messages": [
+      "busi motor",
+      "ya",
+      "saya mau bayar",
+      "Budi Santoso"
+    ],
+    "requires_delay_minutes": 30,
+    "notes": "Sesi A: checkout sampai minta alamat, jawab nama saja. [JEDA 30 menit]. Sesi B: lanjut cuma jawab alamat — harus nyambung ke nama Budi Santoso, tidak minta ulang nama."
+  },
+  {
+    "scenario_id": "typo_ad_ban_dlm_ga",
+    "category": "typo_and_slang",
+    "product_refs": ["prod-ban-dalam-test-v2"],
+    "messages": [
+      "ad ban dlm ga"
+    ],
+    "notes": "Typo 'ada ban dalam nggak'. Bot harus paham ini inquiry tentang Ban Dalam Motor."
+  },
+  {
+    "scenario_id": "typo_brp_harga_oli",
+    "category": "typo_and_slang",
+    "product_refs": ["prod-oli-mesin-test-v2"],
+    "messages": [
+      "brp harga oli"
+    ],
+    "notes": "Singkatan 'berapa harga oli'. Bot harus paham ini inquiry harga Oli Mesin 4T 1L."
+  },
+  {
+    "scenario_id": "typo_mo_beli_busi_2",
+    "category": "typo_and_slang",
+    "product_refs": ["prod-busi-motor-test-v2"],
+    "messages": [
+      "mo beli busi 2"
+    ],
+    "notes": "Singkatan 'mau beli busi 2'. Bot harus paham ini add-to-cart Busi Motor qty 2."
+  },
+  {
+    "scenario_id": "typo_gmn_cara_byrnya",
+    "category": "typo_and_slang",
+    "product_refs": [],
+    "messages": [
+      "gmn cara byrnya"
+    ],
+    "notes": "Singkatan 'bagaimana cara bayarnya'. Bot harus jelaskan metode pembayaran yang tersedia (transfer/qris/cod)."
+  },
+  {
+    "scenario_id": "typo_kasi_tau_donk_stok_accu",
+    "category": "typo_and_slang",
+    "product_refs": ["prod-accu-test-v2"],
+    "messages": [
+      "kasi tau donk stok accu"
+    ],
+    "notes": "Bahasa gaul 'kasih tahu dong stok accu'. Bot harus paham ini inquiry stok Accu Motor 12V 7Ah."
+  },
+  {
+    "scenario_id": "interrupted_flow_shipping_during_checkout",
+    "category": "interrupted_flow",
+    "product_refs": ["prod-ban-dalam-test-v2"],
+    "messages": [
+      "ban dalam motor",
+      "ya",
+      "saya mau bayar",
+      "Panji Wijaya",
+      "eh ongkir ke Bandung berapa ya?"
+    ],
+    "notes": "Di tengah isi nama+alamat -> tiba-tiba tanya ongkir. Bot harus jawab ongkir, LALU kembali minta lanjut alamat (bukan lupa checkout yang tertunda)."
+  },
+  {
+    "scenario_id": "interrupted_flow_operating_hours_during_variant_select",
+    "category": "interrupted_flow",
+    "product_refs": ["prod-ban-dalam-test-v2"],
+    "messages": [
+      "ban dalam motor",
+      "btw buka sampai jam berapa?"
+    ],
+    "notes": "Sedang pilih varian ban -> tiba-tiba tanya jam buka. Bot harus jawab jam buka, lalu lanjut tanya varian lagi."
+  },
+  {
+    "scenario_id": "interrupted_flow_partial_cart_cancel",
+    "category": "interrupted_flow",
+    "product_refs": ["prod-ban-dalam-test-v2", "prod-oli-mesin-test-v2"],
+    "messages": [
+      "ban dalam motor",
+      "ya",
+      "oli mesin",
+      "ya",
+      "berapa totalnya?",
+      "eh gajadi yang oli aja deh, ban dalamnya batal"
+    ],
+    "notes": "Di keranjang ada 2 item -> partial cancel: hapus oli, ban dalam tetap. Bot harus paham ini bukan cancel semua."
+  },
+  {
+    "scenario_id": "quantity_ambiguity_busi_for_two_vehicles",
+    "category": "quantity_ambiguity",
+    "product_refs": ["prod-busi-motor-test-v2"],
+    "messages": [
+      "busi buat motor sama mobil"
+    ],
+    "notes": "Menyiratkan 2 unit (motor + mobil) tapi tidak bilang angka. Bot harus tanya jumlah, bukan asumsi 1."
+  },
+  {
+    "scenario_id": "quantity_ambiguity_ban_dalam_sepasang",
+    "category": "quantity_ambiguity",
+    "product_refs": ["prod-ban-dalam-test-v2"],
+    "messages": [
+      "ban dalam sepasang"
+    ],
+    "notes": "'sepasang' = 2, bukan kata angka eksplisit. Bot harus paham sepasang = 2 unit."
+  }
+]
