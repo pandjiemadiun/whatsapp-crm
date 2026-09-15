@@ -7,12 +7,14 @@ import {
   Trash2,
   Edit3,
   Wifi,
+  Zap,
   CheckCircle2,
   AlertTriangle,
   RefreshCw,
   Loader2,
   ChevronDown,
   Power,
+  BarChart3,
 } from 'lucide-react';
 import adminApi from '../../services/adminApi';
 import { useAdminAuth } from '../../contexts/AdminAuthContext';
@@ -30,10 +32,50 @@ interface ProviderRow {
   role: ProviderRole;
   priority: number;
   isActive: boolean;
+  skipParams: string[] | null;
   lastTestedAt: string | null;
   lastTestResult: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+interface ProviderStats {
+  name: string;
+  role: string;
+  isActive: boolean;
+  lastTestedAt: string | null;
+  lastTestResult: string | null;
+  usageCount: number;
+  lastUsed: string | null;
+}
+
+interface ProviderCombined {
+  id: string;
+  name: string;
+  format: ProviderFormat;
+  baseUrl: string;
+  apiKey: string | null;
+  model: string;
+  role: ProviderRole;
+  priority: number;
+  isActive: boolean;
+  skipParams: string[] | null;
+  lastTestedAt: string | null;
+  lastTestResult: string | null;
+  createdAt: string;
+  updatedAt: string;
+  usageCount: number;
+  lastUsed: string | null;
+}
+
+interface ProviderStats {
+  name: string;
+  role: string;
+  isActive: boolean;
+  lastTestedAt: string | null;
+  lastTestResult: string | null;
+  usageCount: number;
+  lastUsed: string | null;
 }
 
 interface TestResult {
@@ -73,6 +115,7 @@ const blankForm = (): ProviderForm => ({
   role: 'chat_primary',
   priority: 0,
   isActive: true,
+  skipParams: [],
 });
 
 type ProviderForm = {
@@ -84,6 +127,7 @@ type ProviderForm = {
   role: ProviderRole;
   priority: number;
   isActive: boolean;
+  skipParams: string[];
 };
 
 export default function AIProviders() {
@@ -91,7 +135,7 @@ export default function AIProviders() {
   const { admin } = useAdminAuth();
   const isSuperAdmin = admin?.role === 'super_admin';
 
-  const [providers, setProviders] = useState<ProviderRow[]>([]);
+  const [providers, setProviders] = useState<ProviderCombined[]>([]);
   const [loading, setLoading] = useState(true);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
 
@@ -103,6 +147,9 @@ export default function AIProviders() {
   const [testResults, setTestResults] = useState<Record<string, TestResult>>({});
   const [formTestResult, setFormTestResult] = useState<TestResult | null>(null);
   const [testingDraft, setTestingDraft] = useState(false);
+  const [testingProd, setTestingProd] = useState(false);
+  const [togglingId, setTogglingId] = useState<string | null>(null);
+  const [statsLoading, setStatsLoading] = useState(false);
 
   const showFeedback = (type: 'success' | 'error', msg: string) => {
     setFeedback({ type, msg });
@@ -111,13 +158,36 @@ export default function AIProviders() {
 
   const refresh = async () => {
     setLoading(true);
+    setStatsLoading(true);
     try {
-      const res = await adminApi.get('/ai-providers');
-      setProviders(res.data?.data || []);
+      const [res, statsRes] = await Promise.all([
+        adminApi.get('/ai-providers'),
+        adminApi.get('/ai-providers/stats'),
+      ]);
+      const rows: ProviderRow[] = res.data?.data || [];
+      const stats: ProviderStats[] = statsRes?.data?.data || [];
+
+      // Merge stats into rows by (name, role)
+      const combined: ProviderCombined[] = rows.map((r) => {
+        const s = stats.find((st) => st.name === r.name && st.role === r.role);
+        return {
+          ...r,
+          usageCount: s?.usageCount ?? 0,
+          lastUsed: s?.lastUsed ?? null,
+        };
+      });
+      setProviders(combined);
     } catch {
-      showFeedback('error', 'Gagal memuat daftar AI provider');
+      // Fallback: try loading providers only
+      try {
+        const res = await adminApi.get('/ai-providers');
+        setProviders((res.data?.data || []).map((r: ProviderRow) => ({ ...r, usageCount: 0, lastUsed: null })));
+      } catch {
+        showFeedback('error', 'Gagal memuat daftar AI provider');
+      }
     } finally {
       setLoading(false);
+      setStatsLoading(false);
     }
   };
 
@@ -135,7 +205,7 @@ export default function AIProviders() {
     }));
   };
 
-  const startEdit = (row: ProviderRow) => {
+  const startEdit = (row: ProviderCombined) => {
     setEditingId(row.id);
     setForm({
       name: row.name,
@@ -146,6 +216,7 @@ export default function AIProviders() {
       role: row.role,
       priority: row.priority,
       isActive: row.isActive,
+      skipParams: row.skipParams ?? [],
     });
     setFormTestResult(null);
   };
@@ -178,6 +249,7 @@ export default function AIProviders() {
           role: form.role,
           priority: form.priority,
           isActive: form.isActive,
+          skipParams: form.skipParams.length > 0 ? form.skipParams : undefined,
         });
         showFeedback('success', `Provider '${form.name}' diperbarui`);
       } else {
@@ -190,6 +262,7 @@ export default function AIProviders() {
           role: form.role,
           priority: form.priority,
           isActive: form.isActive,
+          skipParams: form.skipParams.length > 0 ? form.skipParams : undefined,
         });
         showFeedback('success', `Provider '${form.name}' dibuat`);
       }
@@ -214,6 +287,19 @@ export default function AIProviders() {
     }
   };
 
+  const handleToggleActive = async (row: ProviderCombined) => {
+    setTogglingId(row.id);
+    try {
+      await adminApi.put(`/ai-providers/${row.id}`, { isActive: !row.isActive });
+      showFeedback('success', `Provider '${row.name}' ${row.isActive ? 'dinonaktifkan' : 'diaktifkan'}`);
+      await refresh();
+    } catch (err: any) {
+      showFeedback('error', err?.response?.data?.error || 'Gagal mengubah status provider');
+    } finally {
+      setTogglingId(null);
+    }
+  };
+
   // ── Test-connection ──
   const handleTestDraft = async () => {
     if (!form.baseUrl || !form.apiKey || !form.model) {
@@ -228,6 +314,7 @@ export default function AIProviders() {
         baseUrl: form.baseUrl,
         apiKey: form.apiKey,
         model: form.model,
+        jsonMode: false,
       });
       setFormTestResult(res.data?.data);
     } catch (err: any) {
@@ -237,10 +324,36 @@ export default function AIProviders() {
     }
   };
 
-  const handleTestRow = async (row: ProviderRow) => {
+  const handleTestProduction = async () => {
+    if (!form.baseUrl || !form.apiKey || !form.model) {
+      showFeedback('error', 'Isi baseUrl, apiKey, dan model untuk test koneksi');
+      return;
+    }
+    setTestingProd(true);
+    setFormTestResult(null);
+    try {
+      const res = await adminApi.post('/ai-providers/test-connection', {
+        format: form.format,
+        baseUrl: form.baseUrl,
+        apiKey: form.apiKey,
+        model: form.model,
+        jsonMode: true,
+      });
+      setFormTestResult(res.data?.data);
+    } catch (err: any) {
+      setFormTestResult(err?.response?.data?.data || { success: false, errorCategory: 'UNKNOWN', errorMessage: err?.message });
+    } finally {
+      setTestingProd(false);
+    }
+  };
+
+  const handleTestRow = async (row: ProviderCombined, useJsonMode: boolean = false) => {
     setTestResults((s) => ({ ...s, [row.id]: { success: undefined as any, latencyMs: 0 } }));
     try {
-      const res = await adminApi.post(`/ai-providers/${row.id}/test-connection`);
+      const url = useJsonMode
+        ? `/ai-providers/${row.id}/test-connection?jsonMode=true`
+        : `/ai-providers/${row.id}/test-connection`;
+      const res = await adminApi.post(url);
       const data = res.data?.data;
       setTestResults((s) => ({ ...s, [row.id]: data }));
       setProviders((prev) =>
@@ -429,15 +542,41 @@ export default function AIProviders() {
               <label className="text-xs text-slate-400">Active</label>
               <input type="checkbox" checked={form.isActive} onChange={(e: ChangeEvent<HTMLInputElement>) => setForm((s) => ({ ...s, isActive: e.target.checked }))} className="h-4 w-4 rounded bg-dcard border border-dline text-cyan focus:ring-cyan" />
             </div>
+            <div className="mt-1.5">
+              <label className="block text-xs font-medium text-slate-400 mb-1">
+                Skip Params
+              </label>
+              <input
+                type="text"
+                value={form.skipParams.join(', ')}
+                onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                  setForm((s) => ({ ...s, skipParams: e.target.value.split(',').map((s) => s.trim()).filter(Boolean) }))
+                }
+                placeholder="temperature, top_p (comma-separated)"
+                className="w-full px-3 py-1.5 bg-dcard border border-dline rounded-lg text-sm text-surface focus:outline-none focus:ring-2 focus:ring-cyan font-mono"
+              />
+              <p className="mt-1 text-xs text-slate-500">
+                Omit these OpenAI params from the request body (e.g. <code>temperature,top_p</code> for backends that reject them). Kosongkan untuk semua provider yang mendukung semua parameter.
+              </p>
+            </div>
           </div>
           <div className="flex items-end gap-2">
             <button
               onClick={handleTestDraft}
-              disabled={testingDraft || !isSuperAdmin}
+              disabled={testingDraft || testingProd || !isSuperAdmin}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-slate-300 border border-dline rounded-lg hover:bg-dline/20 disabled:opacity-50 transition font-mono"
             >
               {testingDraft ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Wifi className="w-3.5 h-3.5" />}
               Test Draft
+            </button>
+            <button
+              onClick={handleTestProduction}
+              disabled={testingDraft || testingProd || !isSuperAdmin}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-amber border border-amber/20 bg-amber/5 rounded-lg hover:bg-amber/10 disabled:opacity-50 transition font-mono"
+              title="Test dengan response_format (jsonMode) — sama seperti pemakaian produksi sebenarnya"
+            >
+              {testingProd ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
+              Test Production
             </button>
             <button
               onClick={handleSave}
@@ -458,7 +597,7 @@ export default function AIProviders() {
           </div>
         </div>
 
-        {/* Draft test-connection result (persistent until a new test) */}
+        {/* Test-connection result (persistent until a new test). Shows which mode was used. */}
         {formTestResult && (
           <div className="mt-4 p-3 rounded-lg border border-dline text-sm">
             {formTestResult.success ? (
@@ -496,7 +635,9 @@ export default function AIProviders() {
         </div>
       )}
       <div className="bg-dcard rounded-lg border border-dline overflow-hidden">
-        <table className="w-full text-sm">
+        <div className="relative overflow-x-auto -mx-6 sm:-mx-0">
+          <div className="absolute inset-y-0 right-0 w-8 bg-gradient-to-l from-dcard to-transparent pointer-events-none" />
+          <table className="w-full text-sm" style={{ minWidth: 900 }}>
           <thead>
             <tr className="border-b border-dline">
               <th className="text-left px-4 py-3 text-xs font-medium text-slate-400">Name</th>
@@ -507,11 +648,26 @@ export default function AIProviders() {
               <th className="text-right px-4 py-3 text-xs font-medium text-slate-400">Priority</th>
               <th className="text-center px-4 py-3 text-xs font-medium text-slate-400">Active</th>
               <th className="text-left px-4 py-3 text-xs font-medium text-slate-400">Last Test</th>
+              <th className="text-left px-4 py-3 text-xs font-medium text-slate-400">Last Used</th>
+              <th className="text-center px-4 py-3 text-xs font-medium text-slate-400">Usage</th>
               <th className="text-right px-4 py-3 text-xs font-medium text-slate-400">Action</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-dline">
-            {providers.map((r) => (
+            {providers.map((r) => {
+              const isNeverUsed = r.usageCount === 0;
+              const isHealthy = r.usageCount > 0 && r.lastUsed;
+              const getUsageColor = () => {
+                if (isNeverUsed) return 'text-slate-500';
+                if (!isHealthy) return 'text-red-400';
+                return 'text-cyan';
+              };
+              const getUsageBadge = () => {
+                if (isNeverUsed) return 'never';
+                if (!isHealthy) return 'inactive';
+                return `${r.usageCount}`;
+              };
+              return (
               <tr key={r.id} className="hover:bg-dline/10">
                 <td className="px-4 py-3 text-surface font-mono text-xs">{r.name}</td>
                 <td className="px-4 py-3 text-slate-300">{r.format}</td>
@@ -519,7 +675,27 @@ export default function AIProviders() {
                 <td className="px-4 py-3 text-slate-300 font-mono">{r.model}</td>
                 <td className="px-4 py-3 text-slate-300 font-mono">{r.apiKey ?? 'null'}</td>
                 <td className="px-4 py-3 text-right text-slate-300">{r.priority}</td>
-                <td className="px-4 py-3 text-center">{r.isActive ? <Power className="w-3.5 h-3.5 text-cyan mx-auto" /> : <span className="text-xs text-slate-500">off</span>}</td>
+                <td className="px-4 py-3 text-center">
+                  <button
+                    onClick={() => handleToggleActive(r)}
+                    disabled={!isSuperAdmin || togglingId === r.id}
+                    className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium border transition ${
+                      r.isActive
+                        ? 'text-cyan border-cyan/20 bg-cyan/5 hover:bg-cyan/10'
+                        : 'text-slate-400 border-dline hover:bg-dline/20'
+                    } disabled:opacity-50`}
+                    title={r.isActive ? 'Nonaktifkan' : 'Aktifkan'}
+                  >
+                    {togglingId === r.id ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : r.isActive ? (
+                      <Power className="w-3.5 h-3.5" />
+                    ) : (
+                      <span className="text-[10px]">OFF</span>
+                    )}
+                    <span className="hidden sm:inline">{r.isActive ? 'Aktif' : 'Nonaktif'}</span>
+                  </button>
+                </td>
                 <td className="px-4 py-3 text-slate-300 font-mono text-xs max-w-xs truncate">
                   {r.lastTestResult ? (
                     <span className={r.lastTestResult === 'ok' ? 'text-cyan' : 'text-red-400'}>
@@ -529,15 +705,42 @@ export default function AIProviders() {
                     <span className="text-slate-500">never</span>
                   )}
                 </td>
-                <td className="px-4 py-3 text-right hidden sm:table-cell">
-                  <div className="flex justify-end gap-1">
+                <td className="px-4 py-3 text-slate-300 font-mono text-xs">
+                  {r.lastUsed ? (
+                    new Date(r.lastUsed).toLocaleString('id-ID')
+                  ) : (
+                    <span className="text-slate-500">never</span>
+                  )}
+                </td>
+                <td className="px-4 py-3 text-center">
+                  <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium ${
+                    isNeverUsed
+                      ? 'bg-slate-500/10 text-slate-500'
+                      : isHealthy
+                        ? 'bg-cyan/10 text-cyan'
+                        : 'bg-red-500/10 text-red-400'
+                  }`}>
+                    <BarChart3 className="w-3 h-3" />
+                    <span className={getUsageColor()}>{getUsageBadge()}</span>
+                  </span>
+                </td>
+                <td className="px-4 py-3 text-right">
+                  <div className="flex justify-end gap-1 flex-wrap">
                     <button
-                      onClick={() => handleTestRow(r)}
+                      onClick={() => handleTestRow(r, false)}
                       disabled={!isSuperAdmin}
                       className="p-1.5 text-slate-400 hover:text-cyan hover:bg-cyan/10 rounded-lg disabled:opacity-50"
-                      title="Test connection"
+                      title="Test connection (plain)"
                     >
                       <Wifi className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={() => handleTestRow(r, true)}
+                      disabled={!isSuperAdmin}
+                      className="p-1.5 text-slate-400 hover:text-amber hover:bg-amber/10 rounded-lg disabled:opacity-50"
+                      title="Test with production format (jsonMode)"
+                    >
+                      <Zap className="w-4 h-4" />
                     </button>
                     <button
                       onClick={() => startEdit(r)}
@@ -558,17 +761,19 @@ export default function AIProviders() {
                   </div>
                 </td>
               </tr>
-            ))}
+              );
+            })}
             {providers.length === 0 && (
               <tr>
-                <td colSpan={9} className="px-4 py-8 text-center text-slate-400 text-sm">
+                <td colSpan={11} className="px-4 py-8 text-center text-slate-400 text-sm">
                   Belum ada provider. Buat yang pertama di atas.
                 </td>
               </tr>
             )}
           </tbody>
         </table>
-      </div>
+          </div>
+        </div>
 
       {/* Inline, persistent per-row test-connection result (not a disappearing toast) */}
       {Object.keys(testResults).map((id) => {

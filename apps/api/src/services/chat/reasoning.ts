@@ -31,6 +31,24 @@ import { planActs } from './planner.js';
 import { llmGateway } from '../../adapters/ai/llm-gateway.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
+// I-6 FIX: Sanitasi draft_cart_ops sebelum dikembalikan ke composer —
+// filter buang entry yang `product` bukan string valid non-kosong.
+// Defense-in-depth (composer juga punya guard); mencegah "undefined"
+// bocor ke reply_text. Dipanggil di semua return path 'reasoned'.
+// ─────────────────────────────────────────────────────────────────────────────
+function sanitizeDraftCartOps(result: InterpreterResultV2): InterpreterResultV2 {
+  if (!Array.isArray(result.draft_cart_ops)) {
+    return result;
+  }
+  return {
+    ...result,
+    draft_cart_ops: result.draft_cart_ops.filter(
+      (op) => typeof op.product === 'string' && op.product.trim().length > 0,
+    ),
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Constants (no magic numbers)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -323,9 +341,10 @@ export async function understand(
   if (validation1.ok) {
     const plannedActs = planActs(attempt1.result.acts ?? []);
     add(trace, 'plan', { actCount: plannedActs.length });
+    // I-6 FIX: sanitasi draft_cart_ops sebelum ke composer
     return {
       outcome: 'reasoned',
-      result: attempt1.result,
+      result: sanitizeDraftCartOps(attempt1.result),
       plannedActs,
       llmCalls: stats.calls as 1 | 2,
       trace,
@@ -338,7 +357,7 @@ export async function understand(
       add(trace, 'clarification_trigger', { reasons: validation1.reasons });
       return {
         outcome: 'reasoned',
-        result: attempt1.result,
+        result: sanitizeDraftCartOps(attempt1.result),
         plannedActs: [],
         llmCalls: stats.calls as 1 | 2,
         trace,
@@ -409,7 +428,7 @@ export async function understand(
     add(trace, 'plan', { actCount: plannedActs.length });
     return {
       outcome: 'reasoned',
-      result: attempt2.result,
+      result: sanitizeDraftCartOps(attempt2.result),
       plannedActs,
       llmCalls: stats.calls as 1 | 2,
       trace,

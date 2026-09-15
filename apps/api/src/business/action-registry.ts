@@ -222,6 +222,46 @@ export const CancelOrderResponseSchema = z.object({
 
 export type CancelOrderResponse = z.infer<typeof CancelOrderResponseSchema>;
 
+/** UPDATE_SHIPPING_ADDRESS request schema (P6-5 — order mutation, idempotent).
+ *  Identifier + free-text address are forwarded by the active path, which has
+ *  already (a) resolved the address from the LLM's natural-language payload
+ *  and (b) rejected empty/whitespace-only addresses BEFORE calling the handler
+ *  (so an empty address becomes a clear business error, never a silent no-op).
+ *
+ *  The address is a free-text String? on the draft Order row (Order.shippingAddress).
+ *  Per the design decision (option a) we do NOT parse province/city/subdistrict from
+ *  free text — the human-readable string is stored verbatim and surfaced in the bot
+ *  reply. Province/city structured fields stay null (set later via the PWA
+ *  checkout flow). Reuses the SAME claim→executeClaimedAction idempotency/lease
+ *  pattern as CANCEL_ORDER / UPDATE_CART_QUANTITY (actionId = wa:<conv>:<msg>). */
+export const UpdateShippingAddressRequestSchema = z.object({
+  actionId: z.string().uuid(),
+  type: z.literal('UPDATE_SHIPPING_ADDRESS'),
+  payload: z.object({
+    address: z.string().min(1, 'Shipping address must not be empty'),
+  }),
+});
+
+export type UpdateShippingAddressRequest = z.infer<typeof UpdateShippingAddressRequestSchema>;
+
+/** UPDATE_SHIPPING_ADDRESS response schema — follows the §5.4 mutation pattern. */
+export const UpdateShippingAddressResponseSchema = z.object({
+  success: z.boolean(),
+  actionId: z.string().uuid(),
+  type: z.literal('UPDATE_SHIPPING_ADDRESS'),
+  status: z.enum(['already_applied', 'applied', 'action_in_progress']),
+  result: z.object({
+    orderId: z.string().uuid(),
+    shippingAddress: z.string(),
+  }).optional(),
+  error: z.object({
+    code: z.string(),
+    message: z.string(),
+  }).optional(),
+});
+
+export type UpdateShippingAddressResponse = z.infer<typeof UpdateShippingAddressResponseSchema>;
+
 /** SHOW_RELATED_PRODUCTS request schema (P1 — non-mutating discovery) */
 export const ShowRelatedProductsRequestSchema = z.object({
   actionId: z.string().uuid(),
@@ -1106,6 +1146,126 @@ export async function handleCancelOrder(
 }
 
 /**
+ * UPDATE_SHIPPING_ADDRESS Handler (P6-5 — order mutation, idempotent).
+ *
+ * Stores the free-text shipping address on the conversation's draft Order row
+ * (Order.shippingAddress), reusing:
+ *  - the claim/lease idempotency pattern (claimAction → executeClaimedAction,
+ *    FOR UPDATE + status re-check + SAVEPOINT) identical to CANCEL_ORDER /
+ *    REMOVE_FROM_CART (actionId = wa:<conv>:<msgId>, supplied by the caller);
+ *  - order.service.ts:50's exact "find draft Order by conversationId +
+     orderStatus='draft', else create" pattern as the target row.
+ *
+ * Design (option a, user-approved): store the free-text {address} verbatim on
+ * Order.shippingAddress. Province/city/subdistrict structured fields are NOT
+ * parsed from free text (left null here; set later via PWA checkout). Empty
+ * addresses are rejected by the request schema (z.string().min(1)) AND by the
+ * active-path pre-check, so this handler always receives a non-empty address.
+ *
+ * The handler is invoked DIRECTLY from the active path (NOT via executeAction),
+ * so the actionId is the non-uuid `wa:<conv>:<msgId>` lease key — consistent with
+ * how executeWaCartMutation claims CART mutations (action-registry.ts:executeWaCartMutation).
+ */
+export async function handleUpdateShippingAddress(
+  request: UpdateShippingAddressRequest,
+  context: ActionContext
+): Promise<ActionResult<UpdateShippingAddressResponse>> {
+  const { actionId, payload } = request;
+  const { storeId, customerId, conversationId } = context;
+  const actionType = 'UPDATE_SHIPPING_ADDRESS';
+
+  const claim = await claimAction(storeId, customerId, actionType, actionId);
+  if (!claim.claimed) {
+    const existing = claim.existing!;
+    if (existing.status === ActionStatus.COMPLETED) {
+      return {
+        success: true,
+        data: {
+          success: true,
+          actionId,
+          type: 'UPDATE_SHIPPING_ADDRESS',
+          status: 'already_applied',
+          result: existing.result as any,
+        },
+        status: 'already_applied',
+      };
+    }
+    if (existing.status === ActionStatus.FAILED) {
+      return {
+        success: false,
+        error: existing.error as any || { code: 'ACTION_FAILED', message: 'Action previously failed' },
+        status: 'already_applied',
+      };
+    }
+    if (existing.status === ActionStatus.CLAIMED) {
+      const leaseUntil = new Date(existing.leaseUntil);
+      if (leaseUntil > new Date()) {
+        return {
+          success: false,
+          error: { code: 'ACTION_IN_PROGRESS', message: 'Action is being processed' },
+          status: 'action_in_progress',
+        };
+      }
+    }
+  }
+
+  const address = payload.address;
+
+  const executeMutation = async (tx: any) => {
+    // Target row: conversation's draft Order (the cart / order being built).
+    // Reuse order.service.ts:50 find-or-create-by-conversation pattern verbatim.
+    let order = await tx.order.findFirst({
+      where: { conversationId, orderStatus: 'draft', deletedAt: null },
+    });
+    if (!order) {
+      order = await tx.order.create({
+        data: {
+          storeId,
+          conversationId,
+          customerId,
+          items: [] as any,
+          orderStatus: 'draft',
+          totalPrice: 0,
+          currency: 'IDR',
+        },
+      });
+    }
+
+    await tx.order.update({
+      where: { id: order.id },
+      data: { shippingAddress: address },
+    });
+    return { orderId: order.id, shippingAddress: address };
+  };
+
+  const execution = await executeClaimedAction(
+    storeId, customerId, conversationId, actionType, actionId, executeMutation
+  );
+
+  if (execution.status === ActionStatus.COMPLETED) {
+    return {
+      success: true,
+      data: {
+        success: true,
+        actionId,
+        type: 'UPDATE_SHIPPING_ADDRESS',
+        status: 'applied',
+        result: execution.result as any,
+      },
+      status: 'applied',
+    };
+  }
+  if (execution.status === ActionStatus.FAILED) {
+    return {
+      success: false,
+      error: execution.error || { code: 'EXECUTION_FAILED', message: 'Action failed' },
+      status: 'already_applied',
+    };
+  }
+  throw new Error('Unexpected execution status');
+}
+
+/**
  * SHOW_RELATED_PRODUCTS Handler (P1 — non-mutating, read-only).
  *
  * Does NOT create ActionIdempotency records and does NOT use the
@@ -1373,6 +1533,21 @@ export const actionRegistry: Record<string, ActionDefinition<any, any>> = {
       // (ownership + terminal-state check). No client-supplied store/customer
       // has authority; mirror the REMOVE_FROM_CART/UPDATE_CART_QUANTITY
       // conversation-scoped trust model. CartAuthority is NOT invoked.
+      return { allowed: true };
+    },
+  },
+  /** P6-5 — UPDATE_SHIPPING_ADDRESS: free-text address on draft Order.shippingAddress. */
+  UPDATE_SHIPPING_ADDRESS: {
+    type: 'UPDATE_SHIPPING_ADDRESS',
+    requestSchema: UpdateShippingAddressRequestSchema,
+    responseSchema: UpdateShippingAddressResponseSchema,
+    handler: handleUpdateShippingAddress,
+    authorize: async (_request: UpdateShippingAddressRequest, _context: ActionContext) => {
+      // Identity (store/customer/conversation) + draft-order ownership are
+      // server-resolved/re-checked inside the handler (claim is scoped to
+      // storeId+customerId; the tx UPDATE touches only this conversation's
+      // draft order). Mirror the CANCEL_ORDER conversation-scoped trust model:
+      // no client-supplied store/conversation has authority.
       return { allowed: true };
     },
   },

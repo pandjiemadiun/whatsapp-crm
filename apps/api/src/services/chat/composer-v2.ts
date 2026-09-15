@@ -74,11 +74,23 @@ export function composeReply(params: {
   if (reasoningResult.draft_cart_ops && reasoningResult.draft_cart_ops.length > 0) {
     const cartMessages = reasoningResult.draft_cart_ops.map((op) => {
       if (op.status === 'needs_clarification') {
+        // I-6 FIX: guard product juga di sini — jika undefined, tanya secara umum
+        if (!op.product || typeof op.product !== 'string' || op.product.trim().length === 0) {
+          return 'Maaf Kak, produk yang dimaksud belum jelas. Bisa sebut nama produknya? 🙏';
+        }
         return `Boleh tolong konfirmasi produk ${op.product}?`;
       }
       // I-4 FIX: guard qty > 0 untuk mencegah "x0" di reply (draft_cart_ops
       // tidak divalidasi qty di validator-v2.ts). Konsisten sama I-1a filter.
       const displayQty = op.qty > 0 ? op.qty : 1;
+      // ── I-6 FIX: guard op.product — jangan render "undefined" bila product
+      // null/undefined/empty/non-string. Kalau katalog kosong atau referensi
+      // implisit tak bisa resolve, LLM dapat mengembalikan product: undefined;
+      // interpolasi langsung di template literal menghasilkan string "undefined".
+      // Kembalikan reply yang jujur, bukan klaim "ditambahkan". ──
+      if (!op.product || typeof op.product !== 'string' || op.product.trim().length === 0) {
+        return 'Maaf Kak, produk yang dimaksud belum jelas. Bisa sebut nama produknya? 🙏';
+      }
       return `🛒 Ditambahkan ke keranjang: ${op.product} x${displayQty}`;
     });
     messages.push(...cartMessages);

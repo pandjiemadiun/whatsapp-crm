@@ -55,6 +55,7 @@ function fakeReq(overrides: Record<string, unknown> = {}) {
     admin: { adminId: 'u4-admin', email: 'u4@test', role: 'super_admin' },
     body: {},
     params: {},
+    query: {},
     ...overrides,
   } as any;
 }
@@ -234,6 +235,52 @@ describe('ai-providers test-connection (global.fetch mocked)', () => {
     } finally { restoreFetch(); }
   });
 
+  test('POST /test-connection draft with jsonMode:true -> sends response_format in body', async () => {
+    let capturedBody: any = null;
+    setFetch(async (input: unknown, init: unknown) => {
+      capturedBody = JSON.parse((init as any)?.body || '{}');
+      return new Response(JSON.stringify({ choices: [{ message: { content: '{"action":"reply","reply":"OK","quick_replies":[]}' } }] }), { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+    try {
+      const { res, state, validated } = await callRoute(
+        testConnectionSchema,
+        testConnectionDraft,
+        { format: 'openai_compatible', baseUrl: 'https://example.com/v1/chat/completions', apiKey: RAW_KEY, model: 'gpt-4o', jsonMode: true },
+      );
+      assert.equal(validated, true);
+      assert.equal(state.status, 200);
+      const d = jsonBodyOf(state).data;
+      assert.equal(d.success, true);
+      // PRODUCTION-equivalent: response_format must be in the request body
+      assert.ok(capturedBody.response_format, 'jsonMode:true must add response_format to request body');
+      assert.equal(capturedBody.response_format.type, 'json_object');
+      assert.equal(capturedBody.model, 'gpt-4o');
+      assert.ok(Array.isArray(capturedBody.messages) && capturedBody.messages.length === 1);
+      assert.equal(capturedBody.messages[0].role, 'user');
+      // The prompt should be JSON-formatted (production-equivalent)
+      assert.ok(capturedBody.messages[0].content.includes('"action"'));
+    } finally { restoreFetch(); }
+  });
+
+  test('POST /test-connection draft without jsonMode -> no response_format in body', async () => {
+    let capturedBody: any = null;
+    setFetch(async (input: unknown, init: unknown) => {
+      capturedBody = JSON.parse((init as any)?.body || '{}');
+      return new Response(JSON.stringify({ choices: [{ message: { content: 'OK' } }] }), { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+    try {
+      const { res, state, validated } = await callRoute(
+        testConnectionSchema,
+        testConnectionDraft,
+        { format: 'openai_compatible', baseUrl: 'https://example.com/v1/chat/completions', apiKey: RAW_KEY, model: 'gpt-4o' },
+      );
+      assert.equal(validated, true);
+      assert.equal(state.status, 200);
+      // Without jsonMode, response_format must NOT be in the request body
+      assert.equal(capturedBody.response_format, undefined, 'no jsonMode => no response_format in body');
+    } finally { restoreFetch(); }
+  });
+
   test('POST /test-connection draft 401 -> AUTH_ERROR with specific message', async () => {
     setFetch(async () => new Response(JSON.stringify({ error: { message: 'invalid_api_key' } }), { status: 401, headers: { 'content-type': 'application/json', 'www-authenticate': 'Bearer realm="..."' } }));
     try {
@@ -327,6 +374,23 @@ describe('ai-providers test-connection (global.fetch mocked)', () => {
       assert.equal(state.status, 404);
     } finally { restoreFetch(); }
   });
+
+  test('POST /:id/test-connection?jsonMode=true sends response_format in body', async () => {
+    const created = await prisma.aIProviderConfig.create({
+      data: { name: `${PREFIX}tc-json`, format: 'openai_compatible', baseUrl: 'https://example.com/v1/chat/completions', apiKey: RAW_KEY, model: 'gpt-4o', role: 'chat_primary', priority: 1, isActive: true },
+    });
+    let capturedBody: any = null;
+    setFetch(async (input: unknown, init: unknown) => {
+      capturedBody = JSON.parse((init as any)?.body || '{}');
+      return new Response(JSON.stringify({ choices: [{ message: { content: '{"action":"reply","reply":"OK","quick_replies":[]}' } }] }), { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+    try {
+      const { state } = await callHandler(testConnectionById, { params: { id: created.id }, query: { jsonMode: 'true' } });
+      assert.equal(state.status, 200);
+      assert.ok(capturedBody.response_format, 'jsonMode query param must add response_format to request body');
+      assert.equal(capturedBody.response_format.type, 'json_object');
+    } finally { restoreFetch(); }
+  });
 });
 
 describe('ai-providers module surface', () => {
@@ -336,6 +400,7 @@ describe('ai-providers module surface', () => {
     const stack = (adminAiProvidersRouter as any).stack as Array<{ route?: { path?: string; methods?: Record<string, boolean> } }>;
     const routes = stack.map((l) => `${Object.keys(l.route?.methods || {}).join(',') || '-'} ${l.route?.path || '(middleware)'}`).filter((s) => s !== '- -');
     assert.ok(routes.includes('get /'), 'GET / must exist');
+    assert.ok(routes.includes('get /stats'), 'GET /stats must exist');
     assert.ok(routes.includes('post /'), 'POST / must exist');
     assert.ok(routes.includes('put /:id'), 'PUT /:id must exist');
     assert.ok(routes.includes('delete /:id'), 'DELETE /:id must exist');

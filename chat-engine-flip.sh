@@ -2,10 +2,14 @@
 #
 # chat-engine-flip.sh
 #
-# Flip engine v2 canary store-a3cd7205 antara aktif (active) dan mati (shadow).
-# Menutup 2 flag sekaligus: Redis per-store engine flag + PostgreSQL global
-# chatEngine.v2Mode. Auto-restart pm2 di akhir supaya cache langsung ke-refresh
-# (tidak perlu nunggu 5 menit atau urus bearer token API).
+# Flip engine V2 antara aktif (active) dan mati (shadow/off).
+# Menutup 3 flag sekaligus: Redis per-store engine flag + PostgreSQL global
+# chatEngine.v2Mode + PostgreSQL global chatEngine.v2RewriteMode. Auto-restart pm2
+# di akhir supaya cache langsung ke-refresh (tidak perlu nunggu 5 menit atau
+# urus bearer token API).
+#
+# Rollback (off): semua toko kembali ke jalur V2-lama (reasoning.ts) via
+# chatEngine.v2Mode='shadow' + chatEngine.v2RewriteMode='off'.
 #
 # Pemakaian:
 #   ./chat-engine-flip.sh on     -> aktifkan V2 untuk store-a3cd7205
@@ -61,6 +65,9 @@ show_status() {
   echo "Global flag (chatEngine.v2Mode):"
   psql "$DB_URL" -t -c "SELECT value FROM system_settings WHERE key = 'chatEngine.v2Mode';" 2>/dev/null | xargs || echo "  (gagal query)"
   echo ""
+  echo "Global flag (chatEngine.v2RewriteMode):"
+  psql "$DB_URL" -t -c "SELECT value FROM system_settings WHERE key = 'chatEngine.v2RewriteMode';" 2>/dev/null | xargs || echo "  (gagal query)"
+  echo ""
 }
 
 MODE="${1:-}"
@@ -100,7 +107,9 @@ if [ "$MODE" == "on" ]; then
   echo "✅ Redis flag di-set ke v2 (auto-expire 7 hari kalau lupa di-revert)."
 
   psql "$DB_URL" -c "UPDATE system_settings SET value = 'active' WHERE key = 'chatEngine.v2Mode';"
-  echo "✅ Global flag di-set ke active."
+  psql "$DB_URL" -c "INSERT INTO system_settings (id, key, value, category, \"createdAt\", \"updatedAt\") VALUES (gen_random_uuid(), 'chatEngine.v2RewriteMode', 'active', 'engine', NOW(), NOW()) ON CONFLICT (key) DO UPDATE SET value = 'active', \"updatedAt\" = NOW();"
+  echo "✅ Global flag chatEngine.v2Mode di-set ke active."
+  echo "✅ Global flag chatEngine.v2RewriteMode di-set ke 'active'."
 
 else
   echo "🟡 Mengembalikan $STORE_ID ke V1 (rollback) ..."
@@ -118,7 +127,9 @@ else
   echo "✅ Redis flag dihapus (default balik ke v1)."
 
   psql "$DB_URL" -c "UPDATE system_settings SET value = 'shadow' WHERE key = 'chatEngine.v2Mode';"
-  echo "✅ Global flag dikembalikan ke shadow."
+  psql "$DB_URL" -c "UPDATE system_settings SET value = 'off' WHERE key = 'chatEngine.v2RewriteMode';"
+  echo "✅ Global flag chatEngine.v2Mode dikembalikan ke shadow."
+  echo "✅ Global flag chatEngine.v2RewriteMode dikembalikan ke 'off'."
 fi
 
 echo ""

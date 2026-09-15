@@ -7,8 +7,10 @@
  * excluding tests returns nothing). CartAuthority.executeOps() remains the ONLY mutation
  * entry point (PROJECT-CONTRACT-STRUCTURED-ACTIONS.md §6A.1) and is NOT modified here.
  *
- * Scope (this iteration): ADD_TO_CART and REMOVE_FROM_CART ONLY. CANCEL_ORDER is
- * explicitly OUT OF SCOPE (mapped to ACTION_TYPE_NOT_SUPPORTED, never executed).
+ * Scope (this iteration): ADD_TO_CART, REMOVE_FROM_CART, and UPDATE_CART_QUANTITY
+ * (→ CartOp.type 'update_qty', reusing CartAuthority.updateQuantity).
+ * CANCEL_ORDER is explicitly OUT OF SCOPE for this mapper (order-level; handled
+ * by the active path via handleCancelOrder).
  *
  * Product resolution policy (Unit C): payload.product is FREE TEXT (a product name /
  * token like 'ayam' or 'ban dalam 2'), NOT a UUID. The mapper does NOT resolve it —
@@ -45,10 +47,14 @@ export interface MapV2ActionsResult {
   skipped: SkipReason[];
 }
 
-/** Action types this iteration maps to cart ops. CANCEL_ORDER is deliberately absent. */
+/** Action types this iteration maps to cart ops. */
 const MUTATION_ACTION_TYPES: ReadonlySet<V2ProposedAction['action_type']> = new Set([
   'ADD_TO_CART',
   'REMOVE_FROM_CART',
+  // PV-P2b: UPDATE_CART_QUANTITY now routes through CartOp.type 'update_qty'
+  // → CartAuthority.executeOps reuses updateQuantity (qty 0 = delete line).
+  // It is NO LONGER skipped; the active path executes it alongside add/remove.
+  'UPDATE_CART_QUANTITY',
 ]);
 
 /** Extract a non-empty, trimmed free-text product string. null = invalid payload. */
@@ -62,6 +68,7 @@ function extractProduct(payload: Record<string, unknown>): string | null {
 /**
  * qty: default 1; fractional -> floored; non-numeric/non-finite -> 1; clamped to >= 1.
  * Never throws (invalid input degrades to the safe default of 1).
+ * Used by ADD_TO_CART ('add') — a cart line of qty 0/ negative is meaningless.
  */
 function normalizeQty(payload: Record<string, unknown>): number {
   const v = payload.qty;
@@ -70,6 +77,23 @@ function normalizeQty(payload: Record<string, unknown>): number {
   if (!Number.isFinite(n)) return 1;
   const floored = Math.floor(n);
   return floored < 1 ? 1 : floored;
+}
+
+/**
+ * qty for UPDATE_CART_QUANTITY ('update_qty'): 0 = delete line item (reuse
+ * CartAuthority.updateQuantity qty===0 branch); positive = set exact quantity.
+ * Fractional -> floored; non-numeric/non-finite -> 1 (safe default); negative
+ * clamped to 0 (delete) so we never pass a negative into updateQuantity
+ * (which would throw INVALID_QUANTITY). The line-item existence / qty>=0
+ * invariants are enforced in cart-authority at execution.
+ */
+function normalizeUpdateQty(payload: Record<string, unknown>): number {
+  const v = payload.qty;
+  if (v === undefined || v === null) return 1;
+  const n = typeof v === 'number' ? v : Number(v);
+  if (!Number.isFinite(n)) return 1;
+  const floored = Math.floor(n);
+  return floored < 0 ? 0 : floored; // allow 0 (delete), clamp negative -> 0
 }
 
 /**
@@ -90,18 +114,52 @@ function extractVariant(payload: Record<string, unknown>): string | null {
  * - Order-preserving: surviving actions are emitted in input order (cartOps AND skipped
  *   each preserve their relative input order).
  * - Never throws: every malformed/unmapped action lands in `skipped`, not an exception.
- * - requires_validation===false actions (e.g. OPEN_CART) are skipped — the mutation path
- *   is for validated actions only. The CALLER should pre-filter these, but this guard
- *   is defensive (a requires_validation:false action must NOT reach a mutation).
- * - CANCEL_ORDER / UPDATE_CART_QUANTITY / etc. -> ACTION_TYPE_NOT_SUPPORTED (out of scope
- *   for this iteration).
+ * - MUTATION TRUST POLICY (anti-hallucination): for action_types that are in OUR internal
+ *   mutation set (ADD_TO_CART / REMOVE_FROM_CART / UPDATE_CART_QUANTITY), the mapper
+ *   FORCES requires_validation=true and IGNORES the LLM's requires_validation flag
+ *   entirely. A hallucinated or erroneous requires_validation:false on a real cart
+ *   mutation must NOT silently drop it. The LLM's requires_validation is only honored for
+ *   NON-mutation (read-only) action types (e.g. OPEN_CART).
+ * - requires_validation===false read-only actions (e.g. OPEN_CART) are skipped — the
+ *   mutation path is for mutations only. The CALLER may pre-filter these, but this guard
+ *   is defensive (a read-only action must NOT reach a mutation).
+ * - CANCEL_ORDER / SHOW_RELATED_PRODUCTS / etc. -> ACTION_TYPE_NOT_SUPPORTED (out of scope
+ *   for this iteration; order-level actions handled by the active path separately).
  */
 export function mapV2ActionsToCartOps(actions: V2ProposedAction[]): MapV2ActionsResult {
   const cartOps: CartOp[] = [];
   const skipped: SkipReason[] = [];
 
   for (const a of actions) {
-    // 1. requires_validation=false -> not a cart-mutation action (e.g. OPEN_CART).
+    // 1. MUTATION action types (our internal list) are ALWAYS executed — the mapper
+    //    FORCES requires_validation=true for them and refuses to trust the LLM's
+    //    requires_validation flag for anything that mutates cart state. A
+    //    hallucinated/erroneous requires_validation:false on ADD_TO_CART/REMOVE/
+    //    UPDATE_CART_QUANTITY must NOT silently drop a real cart mutation.
+    if (MUTATION_ACTION_TYPES.has(a.action_type)) {
+      const product = extractProduct(a.payload);
+      if (product === null) {
+        skipped.push({
+          action_type: a.action_type,
+          reason: 'INVALID_PRODUCT_PAYLOAD',
+          detail: 'payload.product is missing or not a non-empty string; cannot resolve to a product',
+        });
+        continue;
+      }
+      const isUpdateQty = a.action_type === 'UPDATE_CART_QUANTITY';
+      cartOps.push({
+        type: isUpdateQty
+          ? 'update_qty'
+          : (a.action_type === 'ADD_TO_CART' ? 'add' : 'remove'),
+        product,
+        qty: isUpdateQty ? normalizeUpdateQty(a.payload) : normalizeQty(a.payload),
+        variant: extractVariant(a.payload),
+      });
+      continue;
+    }
+
+    // 2. Non-mutation (read-only) action types: honor the LLM's requires_validation.
+    //    requires_validation===false -> not a cart-mutation (e.g. OPEN_CART); skip.
     if (a.requires_validation === false) {
       skipped.push({
         action_type: a.action_type,
@@ -111,33 +169,13 @@ export function mapV2ActionsToCartOps(actions: V2ProposedAction[]): MapV2Actions
       continue;
     }
 
-    // 2. Only ADD_TO_CART / REMOVE_FROM_CART are in scope (CANCEL_ORDER explicitly out).
-    if (!MUTATION_ACTION_TYPES.has(a.action_type)) {
-      skipped.push({
-        action_type: a.action_type,
-        reason: 'ACTION_TYPE_NOT_SUPPORTED',
-        detail: `action_type '${a.action_type}' is outside this iteration's scope (ADD_TO_CART|REMOVE_FROM_CART only)`,
-      });
-      continue;
-    }
-
-    // 3. Product must be a non-empty string (free text). Resolution is cart-authority's job.
-    const product = extractProduct(a.payload);
-    if (product === null) {
-      skipped.push({
-        action_type: a.action_type,
-        reason: 'INVALID_PRODUCT_PAYLOAD',
-        detail: 'payload.product is missing or not a non-empty string; cannot resolve to a product',
-      });
-      continue;
-    }
-
-    // 4. Build the CartOp (qty normalized; variant as free-text label or null).
-    cartOps.push({
-      type: a.action_type === 'ADD_TO_CART' ? 'add' : 'remove',
-      product,
-      qty: normalizeQty(a.payload),
-      variant: extractVariant(a.payload),
+    // 3. Remaining action types are out of scope for this mapper (read-only or
+    //    unsupported). CANCEL_ORDER / order-level actions are handled by the active
+    //    path separately; read-only types (SHOW_RELATED_PRODUCTS, etc.) are not cart-ops.
+    skipped.push({
+      action_type: a.action_type,
+      reason: 'ACTION_TYPE_NOT_SUPPORTED',
+      detail: `action_type '${a.action_type}' is outside this iteration's scope (ADD_TO_CART|REMOVE_FROM_CART|UPDATE_CART_QUANTITY)`,
     });
   }
 

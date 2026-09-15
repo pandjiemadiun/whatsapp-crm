@@ -1,68 +1,61 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
-generator client {
-  provider = "prisma-client-js"
-}
-
 model Store {
-  id                    String   @id @default(uuid())
+  id                    String                  @id @default(uuid())
   name                  String
-  slug                  String?  @unique
   phoneNumber           String
-  // Deterministic hash of phoneNumber for indexed lookup (phoneNumber is
-  // encrypted at rest via AES-256-GCM with random IV, so direct WHERE
-  // comparison is impossible). Used by the GOWA webhook to resolve the
-  // receiving store by bot phone number.
-  phoneNumberHash       String?  @unique
   profilePhotoUrl       String?
   description           String?
   businessCategory      String?
-  address                String
-  // Merchant origin location (RajaOngkir IDs) for shipping-cost origin.
-  // Wajib diisi saat registrasi toko (NOT NULL).
+  address               String
+  email                 String?                 @unique
+  timezone              String                  @default("Asia/Jakarta")
+  operatingHours        Json?
+  responseTemplate      String?
+  whatsappPhoneId       String?
+  fonnteToken           String?
+  fonnteNumber          String?
+  config                Json?
+  isActive              Boolean                 @default(true)
+  createdAt             DateTime                @default(now())
+  updatedAt             DateTime                @updatedAt
+  deletedAt             DateTime?
+  acceptsCod            Boolean                 @default(false)
+  acceptsQris           Boolean                 @default(false)
+  acceptsTransfer       Boolean                 @default(false)
+  webhookSecret         String?                 @unique
+  qrisImageUrl          String?
+  shippingMode          String                  @default("pickup")
+  shippingFlatInCity    Float?
+  shippingFlatOutCity   Float?
+  slug                  String?                 @unique
   originProvinceId      String
   originProvinceName    String
   originCityId          String
   originCityName        String
   originSubdistrictId   String
   originSubdistrictName String
-  email                 String?  @unique
-  timezone              String   @default("Asia/Jakarta")
-  operatingHours        Json?
-  responseTemplate      String?
-  whatsappPhoneId       String?
-  fonnteToken           String?
-  fonnteNumber          String?
-  acceptsTransfer       Boolean  @default(false)
-  acceptsQris           Boolean  @default(false)
-  acceptsCod            Boolean  @default(false)
-  qrisImageUrl          String?
-  shippingMode          String   @default("pickup")  // "pickup" | "flat"
-  shippingFlatInCity    Float?
-  shippingFlatOutCity   Float?
-  webhookSecret         String?  @unique
-  config                Json?
-  isActive              Boolean  @default(true)
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
-  deletedAt             DateTime?
-
+  phoneNumberHash       String?                 @unique
+  bankAccounts          BankAccount[]
   conversations         Conversation[]
+  customers             Customer[]
   faqs                  FAQ[]
   knowledge             Knowledge[]
-  storeDocuments        StoreDocument[]
+  magicPasteRuns        MagicPasteRun[]
   orders                Order[]
-  settings              StoreSetting[]
   productCategories     ProductCategory[]
   products              Product[]
-magicPasteRuns        MagicPasteRun[]
-  bankAccounts          BankAccount[]
   sops                  Sop[]
-  customers             Customer[]
+  storeDocuments        StoreDocument[]
   pushSubscriptions     StorePushSubscription[]
+  settings              StoreSetting[]
 
   @@map("stores")
 }
@@ -77,7 +70,6 @@ model BankAccount {
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
   deletedAt     DateTime?
-
   store         Store     @relation(fields: [storeId], references: [id])
 
   @@index([storeId])
@@ -87,11 +79,10 @@ model BankAccount {
 model Sop {
   id        String   @id @default(uuid())
   storeId   String
-  category  String   // fixed values: 'order' | 'komplain' | 'retur' | 'garansi' | 'stok_habis'
-  content   String   // free text, owner writes their own procedure
+  category  String
+  content   String
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-
   store     Store    @relation(fields: [storeId], references: [id])
 
   @@unique([storeId, category])
@@ -100,122 +91,102 @@ model Sop {
 }
 
 model StoreSetting {
-  id                    String   @id @default(uuid())
-  storeId               String
-  key                   String
-  value                 String
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
+  id        String   @id @default(uuid())
+  storeId   String
+  key       String
+  value     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  store     Store    @relation(fields: [storeId], references: [id])
 
-  store                 Store    @relation(fields: [storeId], references: [id])
   @@unique([storeId, key])
   @@map("store_settings")
 }
 
 model FAQ {
-  id                    String   @id @default(uuid())
-  storeId               String
-  question              String
-  answer                String
-  keywords              String[]
-  category              String?
-  priority              Int      @default(1)
-  source                String?
-  embedding             String?
-  matchCount            Int      @default(0)
-  isActive              Boolean  @default(true)
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
-  deletedAt             DateTime?
+  id         String    @id @default(uuid())
+  storeId    String
+  question   String
+  answer     String
+  keywords   String[]
+  category   String?
+  priority   Int       @default(1)
+  embedding  String?
+  matchCount Int       @default(0)
+  isActive   Boolean   @default(true)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  deletedAt  DateTime?
+  source     String?
+  store      Store     @relation(fields: [storeId], references: [id])
 
-  store                 Store    @relation(fields: [storeId], references: [id])
   @@index([storeId])
   @@map("faqs")
 }
 
 model Knowledge {
-  id                    String   @id @default(uuid())
-  storeId               String
-  title                 String
-  content               String
-  category              String?
-  tags                  String[]
-  source                String?
-  embedding             String?
-  relevanceScore        Float    @default(0)
-  isActive              Boolean  @default(true)
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
-  deletedAt             DateTime?
+  id             String    @id @default(uuid())
+  storeId        String
+  title          String
+  content        String
+  category       String?
+  tags           String[]
+  source         String?
+  embedding      String?
+  relevanceScore Float     @default(0)
+  isActive       Boolean   @default(true)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  deletedAt      DateTime?
+  store          Store     @relation(fields: [storeId], references: [id])
 
-  store                 Store    @relation(fields: [storeId], references: [id])
   @@index([storeId])
   @@map("knowledge_base")
 }
 
-// PV-P1 — Onboarding Wizard contract §3.1: StoreDocument.
-//
-// Invariant (enforced in service layer, not DB constraint): rows with
-// status='published' must never have `content` updated. Edits after publish
-// create a new row (version+1, status='draft'). Max 1 published row per
-// (storeId, type) at any time. Enforcement lands in P4 (Review/edit/publish
-// flow), NOT this task.
 model StoreDocument {
-  id                    String              @id @default(uuid())
-  storeId               String
-  type                  StoreDocumentType
-  version               Int                 @default(1)
-  content               String
-  status                StoreDocumentStatus @default(draft)
-  generatedFromAnswers  Json?
-  generatedAt           DateTime?
-  publishedAt           DateTime?
-  editedAt              DateTime            @updatedAt
-  createdAt             DateTime            @default(now())
-
-  store                 Store               @relation(fields: [storeId], references: [id])
-  orders                Order[]
+  id                   String              @id @default(uuid())
+  storeId              String
+  type                 StoreDocumentType
+  version              Int                 @default(1)
+  content              String
+  status               StoreDocumentStatus @default(draft)
+  generatedFromAnswers Json?
+  generatedAt          DateTime?
+  publishedAt          DateTime?
+  editedAt             DateTime            @updatedAt
+  createdAt            DateTime            @default(now())
+  orders               Order[]
+  store                Store               @relation(fields: [storeId], references: [id])
 
   @@unique([storeId, type, version])
   @@index([storeId, type, status])
   @@map("store_documents")
 }
 
-enum StoreDocumentType {
-  tos
-  sop
-}
-
-enum StoreDocumentStatus {
-  draft
-  published
-  superseded
-}
-
 model Conversation {
-  id                    String   @id @default(uuid())
-  storeId               String
-  customerId            String
-  customerName          String?
-  customerPhone         String?
-  status                String   @default("open")
-  channel               String   @default("whatsapp")
-  lastMessageAt         DateTime?
-  aiResponseCount       Int      @default(0)
-  faqResponseCount      Int      @default(0)
-  humanTakeoverAt       DateTime?
-  humanAgentId          String?
-  resolvedAt            DateTime?
-  notes                 String?
-  metadata              Json?
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
-  deletedAt             DateTime?
-
-  store                 Store    @relation(fields: [storeId], references: [id])
-  history               ConversationHistory[]
-  context               ConversationContext?
-  orders                Order[]
+  id               String                @id @default(uuid())
+  storeId          String
+  customerId       String
+  customerName     String?
+  customerPhone    String?
+  status           String                @default("open")
+  channel          String                @default("whatsapp")
+  lastMessageAt    DateTime?
+  aiResponseCount  Int                   @default(0)
+  faqResponseCount Int                   @default(0)
+  humanTakeoverAt  DateTime?
+  humanAgentId     String?
+  resolvedAt       DateTime?
+  notes            String?
+  metadata         Json?
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+  deletedAt        DateTime?
+  context          ConversationContext?
+  history          ConversationHistory[]
+  store            Store                 @relation(fields: [storeId], references: [id])
+  orders           Order[]
 
   @@index([storeId])
   @@index([customerId])
@@ -224,20 +195,20 @@ model Conversation {
 }
 
 model ConversationHistory {
-  id                    String   @id @default(uuid())
-  conversationId        String
-  role                  String
-  content               String
-  messageType           String?
-  source                String?
-  aiModel               String?
-  costUSD               Float    @default(0)
-  responseTime          Int?
-  metadata              Json?
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
+  id             String       @id @default(uuid())
+  conversationId String
+  role           String
+  content        String
+  messageType    String?
+  source         String?
+  aiModel        String?
+  costUSD        Float        @default(0)
+  responseTime   Int?
+  metadata       Json?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  conversation   Conversation @relation(fields: [conversationId], references: [id])
 
-  conversation          Conversation @relation(fields: [conversationId], references: [id])
   @@index([conversationId])
   @@index([role])
   @@index([createdAt])
@@ -246,73 +217,60 @@ model ConversationHistory {
 }
 
 model ConversationContext {
-  id                    String   @id @default(uuid())
-  conversationId        String   @unique
-  lastMessages          Json
-  extractedEntities     Json?
-  workspace_v2          Json?
-  userIntent            String?
-  sessionKey            String   @unique
-  sessionExpireAt       DateTime
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
+  id                String       @id @default(uuid())
+  conversationId    String       @unique
+  lastMessages      Json
+  extractedEntities Json?
+  userIntent        String?
+  sessionKey        String       @unique
+  sessionExpireAt   DateTime
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+  workspace_v2      Json?
+  conversation      Conversation @relation(fields: [conversationId], references: [id])
 
-  conversation          Conversation @relation(fields: [conversationId], references: [id])
   @@map("conversation_context")
 }
 
 model Order {
-  id                    String   @id @default(uuid())
-  storeId               String
-  conversationId        String
-  customerId            String
-  items                 Json
-  totalPrice            Float?
-  currency              String   @default("IDR")
-  orderStatus           String   @default("pending") // draft | waiting_address | waiting_payment | paid | packing | shipped | pending | cancelled | completed | refunded
-  paymentMethod         String?  // 'transfer' | 'qris' | 'cod' (null = not chosen yet / legacy order)
-  paymentStatus         String   @default("unpaid") // 'unpaid' | 'pending_verification' | 'paid' | 'rejected'
-  paymentProofUrl       String?  // upload bukti transfer/qris oleh customer
-  paymentReportedAt     DateTime? // kapan customer melaporkan/submit bukti
-  paymentVerifiedAt     DateTime? // kapan admin memverifikasi → paid
-  verifiedByAdminId     String?  // id admin/user (plain string; no relation — JANGAN buat model baru)
-  paymentRejectReason   String?  // alasan TOLAK opsional (nullable; JANGAN wajibkan) untuk histori/audit
-  shippingAddress       String?
-  // Destination address (customer shipping target) — additive, optional.
-  // Mirrors Store origin fields for naming consistency. Populated by checkout
-  // cascading dropdown; free-text `shippingAddress` above stays for street/house detail.
+  id                         String         @id @default(uuid())
+  storeId                    String
+  conversationId             String
+  customerId                 String
+  items                      Json
+  totalPrice                 Float?
+  currency                   String         @default("IDR")
+  orderStatus                String         @default("pending")
+  shippingAddress            String?
+  notes                      String?
+  extractedAt                DateTime       @default(now())
+  confirmedAt                DateTime?
+  createdAt                  DateTime       @default(now())
+  updatedAt                  DateTime       @updatedAt
+  deletedAt                  DateTime?
+  paymentMethod              String?
+  paymentProofUrl            String?
+  paymentReportedAt          DateTime?
+  paymentStatus              String         @default("unpaid")
+  paymentVerifiedAt          DateTime?
+  verifiedByAdminId          String?
+  paymentRejectReason        String?
   destinationProvinceId      String?
   destinationProvinceName    String?
   destinationCityId          String?
   destinationCityName        String?
   destinationSubdistrictId   String?
   destinationSubdistrictName String?
-  // Actual shipping cost (RajaOngkir Komerce, subdistrict-native). Additive &
-  // NULLABLE: legacy orders without a shipping selection stay valid. These are
-  // ALWAYS written by the server via CachedShippingCostService — NEVER trusted
-  // from a client request body (I13 truth boundary / owner invariant).
-  shippingCost        Float?
-  selectedCourier     String?
-  selectedService     String?
-  shippingEtd         String?
-  notes                 String?
-  extractedAt           DateTime @default(now())
-  confirmedAt           DateTime?
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
-  deletedAt             DateTime?
-  // PV-P1-08: auto-expiry stamp for stuck orders (waiting_address / waiting_payment).
-  // Set atomically at checkout (stock decrement); consumed by the 15-min
-  // AutoCancel cron. NULL = order under 7-day manual window / terminal state.
-  autoCancelAt          DateTime?
-  // PV-P1: TOS document captured at checkout (wizard-generated StoreDocument).
-  // Nullable — legacy orders have none; no backfill required.
-  tosDocumentId         String?
-  tosDocument           StoreDocument? @relation(fields: [tosDocumentId], references: [id])
-
-  store                 Store    @relation(fields: [storeId], references: [id])
-  conversation          Conversation @relation(fields: [conversationId], references: [id])
-  orderItems            OrderItem[]
+  shippingCost               Float?
+  selectedCourier            String?
+  selectedService            String?
+  shippingEtd                String?
+  autoCancelAt               DateTime?
+  tosDocumentId              String?
+  orderItems                 OrderItem[]
+  conversation               Conversation   @relation(fields: [conversationId], references: [id])
+  store                      Store          @relation(fields: [storeId], references: [id])
+  tosDocument                StoreDocument? @relation(fields: [tosDocumentId], references: [id])
 
   @@index([storeId])
   @@index([conversationId])
@@ -324,23 +282,20 @@ model Order {
 }
 
 model OrderItem {
-  id                    String   @id @default(uuid())
-  orderId               String
-  productId             String?
-  productName           String   // snapshot nama produk saat order dibuat
-  quantity              Int      @default(1)
-  unitPrice             Float
-  subtotal              Float
-  customizations        Json?
-  // PV-P0: nullable — diisi oleh CartAuthority di PV-P1 (di luar scope task ini).
-  // Row existing = null (item tanpa varian).
-  variantId             String?
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
-
-  order                 Order    @relation(fields: [orderId], references: [id])
-  product               Product? @relation(fields: [productId], references: [id])
-  variant               ProductVariant? @relation(fields: [variantId], references: [id])
+  id             String          @id @default(uuid())
+  orderId        String
+  productId      String?
+  productName    String
+  quantity       Int             @default(1)
+  unitPrice      Float
+  subtotal       Float
+  customizations Json?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  variantId      String?
+  order          Order           @relation(fields: [orderId], references: [id])
+  product        Product?        @relation(fields: [productId], references: [id])
+  variant        ProductVariant? @relation(fields: [variantId], references: [id])
 
   @@index([orderId])
   @@index([productId])
@@ -349,51 +304,46 @@ model OrderItem {
 }
 
 model ProductCategory {
-  id                    String   @id @default(uuid())
-  storeId               String
-  name                  String
-  description           String?
-  icon                  String?
-  displayOrder          Int      @default(0)
-  isActive              Boolean  @default(true)
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
-  deletedAt             DateTime?
-
-  store                 Store    @relation(fields: [storeId], references: [id])
-  products              Product[]
+  id           String    @id @default(uuid())
+  storeId      String
+  name         String
+  description  String?
+  icon         String?
+  displayOrder Int       @default(0)
+  isActive     Boolean   @default(true)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  deletedAt    DateTime?
+  store        Store     @relation(fields: [storeId], references: [id])
+  products     Product[]
 
   @@index([storeId])
   @@map("product_categories")
 }
 
 model Product {
-  id                    String   @id @default(uuid())
-  storeId               String
-  categoryId            String?
-  name                  String
-  description           String?
-  price                 Float
-  currency              String   @default("IDR")
-  sku                   String?
-  stock                 Int?
-  // Berat produk dalam gram. 0 = placeholder migration (belum diisi); wajib > 0 di API untuk produk baru.
-  weight                Int      @default(0)
-  images                Json?
-  primaryImageUrl       String?
-  isActive              Boolean  @default(true)
-  // PV-P0: flag apakah produk punya varian. Default false; di-set true oleh write
-  // path di PV-P1 (di luar scope task ini). Semua row existing = false.
-  hasVariants           Boolean  @default(false)
-  source                String   @default("api") // 'api' | 'magic_paste' | 'import'
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
-  deletedAt             DateTime?
-
-  store                 Store    @relation(fields: [storeId], references: [id])
-  category              ProductCategory? @relation(fields: [categoryId], references: [id])
-  orderItems            OrderItem[]
-  variants              ProductVariant[]
+  id              String           @id @default(uuid())
+  storeId         String
+  categoryId      String?
+  name            String
+  description     String?
+  price           Float
+  currency        String           @default("IDR")
+  sku             String?
+  stock           Int?
+  images          Json?
+  primaryImageUrl String?
+  isActive        Boolean          @default(true)
+  source          String           @default("api")
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  deletedAt       DateTime?
+  weight          Int              @default(0)
+  hasVariants     Boolean          @default(false)
+  orderItems      OrderItem[]
+  variants        ProductVariant[]
+  category        ProductCategory? @relation(fields: [categoryId], references: [id])
+  store           Store            @relation(fields: [storeId], references: [id])
 
   @@unique([storeId, sku])
   @@index([storeId])
@@ -401,48 +351,38 @@ model Product {
   @@map("products")
 }
 
-// ── PV-P0: Product Variants ────────────────────────────────────────────────────
-// Model baru untuk product variants (size/warna/dll). Schema-only (PV-P0):
-// TIDAK ADA business logic / endpoint. `storeId` di-denormalize dari Product
-// agar query per-toko tidak perlu join ke Product. `attributes` Json menyimpan
-// pasangan opsi (mis. {"size":"L","color":"red"}) — bentuk bebas, server-authoritative
-// di PV-P1. `price` disamakan tipe dengan Product.price (Float).
 model ProductVariant {
-  id                    String   @id @default(uuid())
-  productId             String
-  storeId               String
-  sku                   String?  // nullable; unik per store (konsisten dgn Product.sku)
-  attributes            Json
-  price                 Float
-  stock                 Int?
-  isActive              Boolean  @default(true)
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
-
-  product               Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
-  orderItems            OrderItem[]
+  id         String      @id @default(uuid())
+  productId  String
+  storeId    String
+  sku        String?
+  attributes Json
+  price      Float
+  stock      Int?
+  isActive   Boolean     @default(true)
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+  orderItems OrderItem[]
+  product    Product     @relation(fields: [productId], references: [id], onDelete: Cascade)
 
   @@unique([storeId, sku])
   @@index([productId])
   @@map("product_variants")
 }
 
-// Riwayat eksekusi Magic Paste — dasar analytics confidence (Phase 1.9.6).
-// Dicatat setiap kali extraction dijalankan (preview & create, sukses & gagal).
 model MagicPasteRun {
-  id                  String   @id @default(uuid())
-  storeId             String
-  productId           String?
-  textLength          Int      @default(0)
-  confidence          Float    @default(0)
-  status              String   @default("success") // 'success' | 'failed' | 'preview'
-  warnings            Json?
-  extractedEntities   Json?
-  source              String   @default("store") // 'store' | 'admin'
-  errorMessage        String?
-  createdAt           DateTime @default(now())
-
-  store               Store    @relation(fields: [storeId], references: [id])
+  id                String   @id @default(uuid())
+  storeId           String
+  productId         String?
+  textLength        Int      @default(0)
+  confidence        Float    @default(0)
+  status            String   @default("success")
+  warnings          Json?
+  extractedEntities Json?
+  source            String   @default("store")
+  errorMessage      String?
+  createdAt         DateTime @default(now())
+  store             Store    @relation(fields: [storeId], references: [id])
 
   @@index([storeId, createdAt])
   @@index([confidence])
@@ -450,15 +390,15 @@ model MagicPasteRun {
 }
 
 model AuditLog {
-  id                    String   @id @default(uuid())
-  storeId               String
-  action                String
-  entity                String
-  entityId              String
-  userId                String?
-  changes               Json?
-  ipAddress             String?
-  createdAt             DateTime @default(now())
+  id        String   @id @default(uuid())
+  storeId   String
+  action    String
+  entity    String
+  entityId  String
+  userId    String?
+  changes   Json?
+  ipAddress String?
+  createdAt DateTime @default(now())
 
   @@index([storeId])
   @@index([createdAt])
@@ -466,17 +406,17 @@ model AuditLog {
 }
 
 model Analytics {
-  id                    String   @id @default(uuid())
-  storeId               String
-  date                  DateTime
-  totalMessages         Int      @default(0)
-  faqMatches            Int      @default(0)
-  aiResponses           Int      @default(0)
-  humanTakeovers        Int      @default(0)
-  ordersCreated         Int      @default(0)
-  costUSD               Float    @default(0)
-  avgResponseTime       Float    @default(0)
-  createdAt             DateTime @default(now())
+  id              String   @id @default(uuid())
+  storeId         String
+  date            DateTime
+  totalMessages   Int      @default(0)
+  faqMatches      Int      @default(0)
+  aiResponses     Int      @default(0)
+  humanTakeovers  Int      @default(0)
+  ordersCreated   Int      @default(0)
+  costUSD         Float    @default(0)
+  avgResponseTime Float    @default(0)
+  createdAt       DateTime @default(now())
 
   @@unique([storeId, date])
   @@index([storeId])
@@ -484,17 +424,16 @@ model Analytics {
 }
 
 model AdminUser {
-  id            String        @id @default(uuid())
-  email         String        @unique
-  passwordHash  String
-  role          String        @default("support_admin")
-  isActive      Boolean       @default(true)
-  lastLoginAt   DateTime?
-  createdAt     DateTime      @default(now())
-  updatedAt     DateTime      @updatedAt
-  deletedAt     DateTime?
-
-  tokens        AdminAuthToken[]
+  id           String           @id @default(uuid())
+  email        String           @unique
+  passwordHash String
+  role         String           @default("support_admin")
+  isActive     Boolean          @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+  deletedAt    DateTime?
+  tokens       AdminAuthToken[]
 
   @@index([email])
   @@index([createdAt])
@@ -502,14 +441,13 @@ model AdminUser {
 }
 
 model AdminAuthToken {
-  id            String        @id @default(uuid())
-  adminUserId   String
-  token         String        @unique
-  expiresAt     DateTime
-  revokedAt     DateTime?
-  createdAt     DateTime      @default(now())
-
-  adminUser     AdminUser     @relation(fields: [adminUserId], references: [id])
+  id          String    @id @default(uuid())
+  adminUserId String
+  token       String    @unique
+  expiresAt   DateTime
+  revokedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  adminUser   AdminUser @relation(fields: [adminUserId], references: [id])
 
   @@index([adminUserId])
   @@index([expiresAt])
@@ -517,40 +455,35 @@ model AdminAuthToken {
 }
 
 model Customer {
-  id            String   @id @default(uuid())
-  storeId       String
-  phone         String?
-  webUid        String?  @unique
-  pushSubscription Json?  // FASE 4: persistent Web Push subscription (VAPID). server-authoritative; scoped by storeId+webUid (no cross-tenant).
-  name          String?
-  originCity    String?
-  nameSource    String?  // 'self_stated' | 'pushname'
-  visitCount    Int      @default(0)
-  firstSeenAt   DateTime @default(now())
-  lastSeenAt    DateTime @default(now())
-  notes         String?
-  deletedAt     DateTime?
-
-  store         Store    @relation(fields: [storeId], references: [id])
+  id               String    @id @default(uuid())
+  storeId          String
+  phone            String?
+  name             String?
+  originCity       String?
+  nameSource       String?
+  visitCount       Int       @default(0)
+  firstSeenAt      DateTime  @default(now())
+  lastSeenAt       DateTime  @default(now())
+  notes            String?
+  deletedAt        DateTime?
+  webUid           String?   @unique
+  pushSubscription Json?
+  store            Store     @relation(fields: [storeId], references: [id])
 
   @@unique([storeId, phone])
   @@index([storeId])
   @@map("customers")
 }
 
-// Merchant (Store) push subscriptions — one row per subscribed browser/device.
-// A store may have multiple tabs/devices subscribed simultaneously.
-// Scoped strictly by storeId (tenant isolation).
 model StorePushSubscription {
-  id          String   @id @default(uuid())
-  storeId     String
-  endpoint    String
-  auth        String
-  p256dh      String
-  userAgent   String?
-  createdAt   DateTime @default(now())
-
-  store       Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  id        String   @id @default(uuid())
+  storeId   String
+  endpoint  String
+  auth      String
+  p256dh    String
+  userAgent String?
+  createdAt DateTime @default(now())
+  store     Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@unique([storeId, endpoint])
   @@index([storeId])
@@ -558,64 +491,55 @@ model StorePushSubscription {
 }
 
 model SystemSetting {
-  id            String    @id @default(uuid())
-  key           String    @unique
-  value         String
-  description   String?
-  category      String    @default("general")
-  isSecret      Boolean   @default(false)
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  id          String   @id @default(uuid())
+  key         String   @unique
+  value       String
+  description String?
+  category    String   @default("general")
+  isSecret    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   @@index([category])
   @@map("system_settings")
 }
 
-// LLM Provider Abstraction — Unit 1 (schema-only).
-// `apiKey` holds an AES-256-GCM ciphertext ("iv:tag:ciphertext") produced by
-// apps/api/src/utils/encryption.ts#encryptField; read-side decryption is wired
-// via the field-encryption Prisma `$use` middleware whitelist in
-// apps/api/src/infrastructure/prisma.ts (SENSITIVE_FIELDS). Registering
-// `AIProviderConfig: ['apiKey']` there is deferred to Unit 3 (the gateway that
-// first reads this key) — outside this unit's schema+migration-only scope.
-// format/role are validated strings (app-layer, not DB enums) so new values can
-// be added without a migration; documented allowed values below.
 model AIProviderConfig {
   id             String    @id @default(uuid())
-  name           String    // display name, e.g. "Groq Production", "OpenAI Backup"
-  format         String    // "openai_compatible" | "gemini_native"
-  baseUrl        String    // e.g. https://api.groq.com/openai/v1/chat/completions
-  apiKey         String    // AES-256-GCM ciphertext ("iv:tag:ciphertext")
-  model          String    // model identifier sent in the request body/URL
-  role           String    // "chat_primary" | "chat_fallback" | "chat_fallback_2" | "chat_gatekeeper" | "wizard" | "other"
-  priority       Int       @default(0) // ordering within the same role in fallback chains
+  name           String
+  format         String
+  baseUrl        String
+  apiKey         String
+  model          String
+  role           String
+  priority       Int       @default(0)
   isActive       Boolean   @default(true)
-  authType       String    @default("bearer") // "bearer" (default) | "basic" (HTTP Basic Auth)
-  username       String?   // Basic Auth username (plaintext, non-sensitive)
-  password       String?   // Basic Auth password (AES-256-GCM ciphertext, auto-encrypted by prisma middleware)
-  skipParams     Json?     // Per-provider: omit these OpenAI params from request body (e.g. ["temperature","top_p"] for backends that reject them)
-  lastTestedAt   DateTime? // populated by the test-connection feature (Unit 4)
-  lastTestResult String?   // populated by Unit 4; last success/error message
+  lastTestedAt   DateTime?
+  lastTestResult String?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
+  authType       String    @default("bearer")
+  password       String?
+  username       String?
+  skipParams     Json?
 
   @@index([role, isActive, priority])
   @@map("ai_provider_configs")
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// V2 Engine Shadow Log — P2-UNIT5
-// Read-only log of V2 engine output (parallel to V1) in shadow mode.
-// Used for offline comparison only — never read back by engine or delivery.
-// ─────────────────────────────────────────────────────────────────────────────
 model V2ShadowLog {
   id              String   @id @default(uuid())
-  storeId         String   // tenant scope for isolation
-  conversationId  String   // conversation this message belongs to
-  customerMessage String   // raw customer input (verbatim)
-  v1ActualReply   String   // V1 engine's reply (what customer actually received)
-  v2Output        Json     // full V2EngineOutput (or error object if V2 failed)
+  storeId         String
+  conversationId  String
+  customerMessage String
+  v1ActualReply   String
+  v2Output        Json
   v2EnrichedReply String?  // reply_text after system-enrichment (with prices from CartAuthority)
+  /// V2-rewrite shadow columns (WIRE-V2ENGINE-ENTRYPOINT)
+  v2DerivedReason      String?  // reason from deriveV2EngineReason
+  v2MessageType        String?  // classifyStructured messageType from V2 rewrite
+  v2ProductSource      Json?    // product source + metadata from deriveV2EngineProductSource
+  v2QuickReply         Json?    // quick_reply {reason, question} from deriveV2EngineQuickReply
   createdAt       DateTime @default(now())
 
   @@index([storeId])
@@ -640,20 +564,20 @@ model TokenUsageLog {
 }
 
 model BackupManifest {
-  id            String    @id @default(uuid())
-  filename      String    @unique
-  type          String    // "daily" | "weekly" | "manual" | "file"
-  size          BigInt
-  checksum      String
-  algorithm     String    @default("sha256")
-  encrypted     Boolean   @default(true)
-  status        String    @default("completed") // "completed" | "failed" | "verifying"
-  errorMessage  String?
-  verifiedAt    DateTime?
-  restoredAt    DateTime?
-  restoredBy    String?
-  createdAt     DateTime  @default(now())
-  deletedAt     DateTime?
+  id           String    @id @default(uuid())
+  filename     String    @unique
+  type         String
+  size         BigInt
+  checksum     String
+  algorithm    String    @default("sha256")
+  encrypted    Boolean   @default(true)
+  status       String    @default("completed")
+  errorMessage String?
+  verifiedAt   DateTime?
+  restoredAt   DateTime?
+  restoredBy   String?
+  createdAt    DateTime  @default(now())
+  deletedAt    DateTime?
 
   @@index([createdAt])
   @@index([type])
@@ -661,20 +585,31 @@ model BackupManifest {
 }
 
 model ActionIdempotency {
-  idempotencyKey String   @id
+  idempotencyKey String    @id
   storeId        String
   customerId     String
   actionType     String
   actionId       String
-  status         String   @default("CLAIMED")
-  claimedAt      DateTime
-  leaseUntil     DateTime
+  status         String    @default("CLAIMED")
   result         Json?
   error          Json?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
   completedAt    DateTime?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  leaseUntil     DateTime
+  claimedAt      DateTime
 
   @@unique([storeId, customerId, actionType, actionId])
   @@map("action_idempotency")
+}
+
+enum StoreDocumentType {
+  tos
+  sop
+}
+
+enum StoreDocumentStatus {
+  draft
+  published
+  superseded
 }

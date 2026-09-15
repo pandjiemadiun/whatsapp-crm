@@ -107,7 +107,9 @@ export class ProductAmbiguousError extends CartError {
 /** A product name/op that could not be resolved during executeOps (by-name path). */
 export interface UnresolvedCartOp {
   product: string;
-  reason: 'NOT_FOUND' | 'AMBIGUOUS';
+  /** PV-P2b: 'NOT_IN_CART' = product IS in the catalog but has NO line on the
+   * draft cart (e.g. UPDATE_CART_QUANTITY for an item the customer hasn't added). */
+  reason: 'NOT_FOUND' | 'AMBIGUOUS' | 'NOT_IN_CART';
 }
 
 /**
@@ -755,6 +757,52 @@ export class CartAuthority {
             });
             unresolved.push({ product: op.product, reason: 'NOT_FOUND' });
           }
+        } else if (op.type === 'update_qty') {
+          // PV-P2b: update_quantity reuses CartAuthority.updateQuantity(lineItemId, qty)
+          // (qty 0 = delete line, qty>0 = set exact). product is already resolved
+          // into `result` above (resolveProductByName/ById) — reuse that, plus the
+          // same variant policy as 'add'/'remove'. NO new resolver invented.
+          if (!result) {
+            adapters.logger.warn('CartAuthority: update_qty product not found, recording as unresolved', {
+              product: op.product, conversationId,
+            });
+            unresolved.push({ product: op.product, reason: 'NOT_FOUND' });
+            continue;
+          }
+
+          let variantId = (op as any).variantId ?? null;
+          if (!variantId && (op as any).variant) {
+            variantId = await this.resolveVariantByLabel(tx, storeId, result.productId, (op as any).variant);
+          }
+
+          // Locate the existing line item for this product+variant.
+          const existing = items.find(
+            (i: any) => i.productId === result.productId && (i.variantId ?? null) === (variantId ?? null),
+          );
+          if (!existing) {
+            // Product is in the catalog but not in the cart → structured rejection
+            // (NOT_IN_CART), distinct from NOT_FOUND (which is a catalog miss).
+            adapters.logger.warn('CartAuthority: update_qty line not in cart, recording as unresolved', {
+              product: result.productName, conversationId,
+            });
+            unresolved.push({ product: op.product, reason: 'NOT_IN_CART' });
+            continue;
+          }
+
+          const lineItemId = existing.id;
+          const updateQty = typeof op.qty === 'number' ? op.qty : 1;
+          // REUSE: cartAuthority.updateQuantity handles qty===0 (delete) and qty>0
+          // (recompute subtotal) under the SAME tx + savepoint the caller holds.
+          await this.updateQuantity(conversationId, lineItemId, updateQty, tx);
+          // updateQuantity mutates the row; refresh the working `items` so a later
+          // op in this batch sees the updated line (delete → gone, else qty/total).
+          items = await tx.orderItem.findMany({ where: { orderId: order.id }, orderBy: { createdAt: 'asc' } });
+          adapters.logger.debug('CartAuthority: updated qty (reused updateQuantity)', {
+            product: result.productName,
+            lineItemId: existing.id,
+            qty: op.qty,
+            conversationId,
+          });
         }
       }
 

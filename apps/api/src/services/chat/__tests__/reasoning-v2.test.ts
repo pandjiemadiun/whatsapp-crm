@@ -513,4 +513,48 @@ describe('understand — TASK 8 regression A/B/C (mock LLM)', () => {
       );
     }
   });
+
+  // ── I-6 FIX: sanitasi draft_cart_ops sebelum ke composer ──────────────────────
+  it('I-6 FIX: LLM kirim draft_cart_ops dengan product undefined → disanitasi (dihapus), hanya yang valid tersisa', async () => {
+    const ws = makeWorkspace({ pendings: [] });
+    const llmResult = makeValidResult({
+      draft_cart_ops: [
+        { action: 'add', product: undefined as any, qty: 1, qty_source: 'explicit', status: 'confirmed' },
+        { action: 'add', product: 'Beras', qty: 1, qty_source: 'explicit', status: 'confirmed' },
+      ],
+    });
+    mockResponses = [JSON.stringify(llmResult)];
+
+    const result = await understand('mau beli', ws, CATALOG, [], makeStubFallback());
+
+    assert.equal(llmCalls, 1);
+    assert.equal(result.outcome, 'reasoned');
+    if (result.outcome === 'reasoned') {
+      assert.equal(
+        result.result.draft_cart_ops.length, 1,
+        'draft_cart_ops harus tersisa 1 setelah sanitasi'
+      );
+      assert.equal(result.result.draft_cart_ops[0].product, 'Beras');
+    }
+  });
+
+  it('I-6 FIX: LLM kirim draft_cart_ops semua product undefined → disanitasi jadi kosong', async () => {
+    const ws = makeWorkspace({ pendings: [] });
+    const llmResult = makeValidResult({
+      draft_cart_ops: [
+        { action: 'add', product: null as any, qty: 1, qty_source: 'explicit', status: 'confirmed' },
+      ],
+    });
+    mockResponses = [JSON.stringify(llmResult)];
+
+    const result = await understand('mau beli', ws, CATALOG, [], makeStubFallback());
+
+    assert.equal(result.outcome, 'reasoned');
+    if (result.outcome === 'reasoned') {
+      assert.equal(
+        result.result.draft_cart_ops.length, 0,
+        'draft_cart_ops harus kosong setelah semua di-filter'
+      );
+    }
+  });
 });

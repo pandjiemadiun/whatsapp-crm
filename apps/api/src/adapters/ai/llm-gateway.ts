@@ -8,7 +8,10 @@
  *   - ONE owner for: provider selection, retry, timeout, circuit-breaker, fallback
  *   - Adapters are pure transport (no internal retry)
  *   - Primary = Gemini (primary speaker), Fallback = Groq, Gatekeeper = Groq
- *   - Circuit breaker: in-memory (threshold 5, 60s reset)
+ *   - Circuit breaker: in-memory (threshold 5 per MESSAGE, 60s reset)
+ *     recordFailure() is called ONCE per generate() call at exhaustion,
+ *     NOT per provider attempt — so threshold=5 means "5 consecutive failed
+ *     messages" regardless of how many providers/retries that spans.
  *   - Provider cooldown: delegated to provider-cooldown.ts (Redis-backed)
  *   - Turn deadline: 12s ceiling (per-attempt adapter timeout is 10s)
  *   - Retry: N=3 with exponential backoff + jitter on retryable errors
@@ -245,10 +248,13 @@ export class LLMGateway {
    *
    * Flow:
    *   1. Check gateway circuit breaker → CircuitOpenError if open
-   *   2. Try primary (Gemini) with N=3 retry attempts
-   *   3. If primary fails → try fallback (Groq) with N=3 retry attempts
+   *   2. Try primary providers with N=3 retry attempts each
+   *   3. If primary fails → try fallback providers with N=3 retry attempts each
    *   4. Log token usage on success
-   *   5. Record success/failure for circuit breaker stats
+   *   5. Record ONE circuit-breaker failure for the entire call if all providers
+   *      are exhausted (per-message counting: threshold=N means N consecutive
+   *      failed messages, not N failed provider attempts)
+   *   6. Record circuit-breaker success on first successful provider
    */
   async generate(
     prompt: string,
@@ -340,9 +346,11 @@ export class LLMGateway {
               // with a single provider (OFF path / singleton) the original
               // retry-with-backoff behavior is preserved so the OFF path stays
               // completely unaffected.
+              // NOTE: recordFailure() is NOT called here — it is called ONCE
+              // per generate() call at the final exhaustion point (per-message
+              // circuit breaker counting), NOT per provider attempt.
               if (providers.length > 1) {
                 this.stats[roleKey].failed++;
-                this.recordFailure();
                 break; // rate-limited → next provider in same role
               }
             }
@@ -350,7 +358,7 @@ export class LLMGateway {
             const retryable = this.isRetryableError(error);
             if (!retryable) {
               this.stats[roleKey].failed++;
-              this.recordFailure();
+              // NOTE: recordFailure() deferred to final exhaustion point (per-message CB).
               break; // non-retryable → move to next provider in same role
             }
 
@@ -358,12 +366,19 @@ export class LLMGateway {
               await this.sleep(this.backoffDelay(attempt));
             } else {
               this.stats[roleKey].failed++;
-              this.recordFailure();
+              // NOTE: recordFailure() deferred to final exhaustion point (per-message CB).
             }
           }
         }
       }
     }
+
+    // All providers exhausted — record ONE circuit-breaker failure for this
+    // entire generate() call (per-message counting, not per-provider-attempt).
+    // This ensures threshold=N means "N consecutive failed messages" rather
+    // than "N failed provider attempts" — essential for multi-provider rotation
+    // where one failed message can attempt 6+ providers × 3 retries = 18 LLM calls.
+    this.recordFailure();
 
     // All providers exhausted
     if (lastError === null) {

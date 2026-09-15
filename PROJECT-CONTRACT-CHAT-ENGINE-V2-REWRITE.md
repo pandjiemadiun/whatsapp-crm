@@ -194,6 +194,25 @@ status "representatif produksi".
 > gate). Ini adalah ketentuan tambahan, bukan pelonggaran: regression gate
 > (test:chat + test:golden + test:structured + test:payment + test:shipping)
 > tetap WAJIB di setiap unit.
+>
+> **Amandemen kontrak (14 Sep 2026)**: P3 canary verification gate **DITUTUP**
+> (RAILS.md §6, 9 Sep 2026 — UNIT6-B: 5 approved scenarios dijalankan via
+> `v2-mapper-wire-smoke.ts` terhadap canary store-a3cd7205, semua match expected,
+> termasuk highest-risk `partial_cart_cancel` / `busi_for_two_vehicles`). Karena
+> **seluruh toko di sistem adalah data dummy/test dan TIDAK ADA merchant produksi/asli**
+> (lihat DEFERRED-WORK-TRACKER #29), **P5 (cutover SEMUA toko ke engine v2 'active')
+> telah dilakukan — lebih cepat dari rencana Fase 1→Fase 2 di atas.** Syarat Fase 2
+> (30 percakapan customer asli) tidak berlaku karena tidak ada merchant asli yang bisa
+> dilayani; full regression suite dijalankan sebagai pengganti canary Fase 2:
+> `test:chat` 73/73, `test:golden` 35/35, `test:structured` 6/6 (payment) + 5/5
+> (cancel/qty/shipping), `tsc=0`, `build=0`, DB bersih (store-golden-test /
+> test-wa-act-v2-store / test-wa-pay-v2-store = 0 rows). `chatEngine.v2RewriteMode='active'`
+> sekarang global default — semua `processCustomerMessage` ke active path
+> (`callV2Engine → normalizeV2Output → §5 execute (proposed_actions →
+> mapV2ActionsToCartOps → executeWaCartMutation) → §6 safeEnrichV2Reply → buildResult`,
+> `engine='v2-active'`). Kebijasan tambahan (regression gate WAJIB tiap unit) tetap
+> terjaga. `reasoning.ts` (v2-lama) masih ada di repo tapi **TIDAK lagi di-import**
+> oleh active path; dihapus permanen setelah observasi beberapa hari tanpa regresi.
 
 ## 8. Approval Gate
 

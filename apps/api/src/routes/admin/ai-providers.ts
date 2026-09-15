@@ -91,6 +91,7 @@ export const createProviderSchema = z.object({
   role: providerRoleSchema,
   priority: z.number().int().min(0).default(0),
   isActive: z.boolean().default(true),
+  skipParams: z.array(z.string()).optional(),
 });
 
 export const updateProviderSchema = z.object({
@@ -103,6 +104,7 @@ export const updateProviderSchema = z.object({
   role: providerRoleSchema.optional(),
   priority: z.number().int().min(0).optional(),
   isActive: z.boolean().optional(),
+  skipParams: z.array(z.string()).optional(),
 }).strict();
 
 export const testConnectionSchema = z.object({
@@ -110,6 +112,8 @@ export const testConnectionSchema = z.object({
   baseUrl: z.string().url('baseUrl must be a valid URL'),
   apiKey: z.string().min(1, 'apiKey is required'),
   model: z.string().min(1, 'model is required'),
+  /** Simulate production-equivalent call (jsonMode:true, temperature, maxTokens). */
+  jsonMode: z.boolean().optional().default(false),
 });
 
 export type CreateProviderInput = z.infer<typeof createProviderSchema>;
@@ -156,6 +160,7 @@ export function buildAdapter(config: {
   model: string;
   name?: string;
   timeoutMs?: number;
+  skipParams?: string[];
 }): AIProvider {
   const name = config.name ?? `ai-provider-${config.format}`;
   const timeoutMs = config.timeoutMs ?? 8000;
@@ -167,6 +172,7 @@ export function buildAdapter(config: {
   if (config.format === 'openai_compatible') {
     return new OpenAICompatibleAdapter({
       baseUrl: config.baseUrl, apiKey: config.apiKey, model: config.model, name, timeoutMs,
+      skipParams: config.skipParams,
     });
   }
   throw new Error(
@@ -176,6 +182,7 @@ export function buildAdapter(config: {
   );
 }
 
+const TEST_PROMPT_JSON = JSON.stringify({ action: 'reply', reply: 'OK', quick_replies: [] });
 const TEST_PROMPT = 'Reply with the single word: OK';
 const TEST_TIMEOUT_MS = 8000;
 
@@ -186,6 +193,8 @@ async function probeProvider(config: {
   apiKey: string;
   model: string;
   name?: string;
+  jsonMode?: boolean;
+  skipParams?: string[];
 }): Promise<ConnectionResult> {
   const start = Date.now();
   let adapter: AIProvider;
@@ -196,7 +205,11 @@ async function probeProvider(config: {
   }
 
   try {
-    const sample: AIResponse = await adapter.generate(TEST_PROMPT);
+    const prompt = config.jsonMode ? TEST_PROMPT_JSON : TEST_PROMPT;
+    const options = config.jsonMode
+      ? { temperature: 0.7, maxTokens: 512, topP: 0.95, jsonMode: true, intent: 'v2-engine:chat_primary', conversationId: 'admin-test' }
+      : undefined;
+    const sample: AIResponse = await adapter.generate(prompt, options);
     // Response contains NO credential: only model + content + timing.
     return {
       success: true,
@@ -230,6 +243,7 @@ function maskProviderRow(row: any) {
     role: row.role,
     priority: row.priority,
     isActive: row.isActive,
+    skipParams: Array.isArray(row.skipParams) ? row.skipParams : null,
     lastTestedAt: row.lastTestedAt,
     lastTestResult: row.lastTestResult,
     createdAt: row.createdAt,
@@ -306,12 +320,15 @@ export const deleteProvider = async (req: AuthenticatedAdminRequest, res: Respon
 
 export const testConnectionById = async (req: AuthenticatedAdminRequest, res: Response) => {
   const { id } = req.params;
+  const jsonMode = req.query?.jsonMode === 'true';
   // findUnique → Prisma middleware decrypts apiKey into row.apiKey (in-memory only).
   const row = await prisma.aIProviderConfig.findUnique({ where: { id } });
   if (!row) return res.status(404).json({ error: 'Provider not found' });
 
   const result = await probeProvider({
-    format: row.format, baseUrl: row.baseUrl, apiKey: row.apiKey, model: row.model, name: row.name,
+    format: row.format, baseUrl: row.baseUrl, apiKey: row.apiKey, model: row.model,
+    name: row.name, jsonMode,
+    skipParams: Array.isArray(row.skipParams) ? row.skipParams as string[] : undefined,
   });
 
   await prisma.aIProviderConfig.update({
@@ -330,13 +347,77 @@ export const testConnectionDraft = async (req: AuthenticatedAdminRequest, res: R
   const input = getValidated<TestConnectionInput>(req);
   const result = await probeProvider({
     format: input.format, baseUrl: input.baseUrl, apiKey: input.apiKey, model: input.model,
+    jsonMode: input.jsonMode,
   });
   res.json({ success: true, data: result });
+};
+
+// ─── Provider usage stats endpoint ──────────────────────────────────
+
+/**
+ * GET /ai-providers/stats
+ *
+ * Returns per-provider usage stats aggregated from token_usage_logs +
+ * lastTestedAt/lastTestResult already stored on each AIProviderConfig row.
+ * Reuses existing data — no new tracking infrastructure.
+ */
+export const getProviderStats = async (req: AuthenticatedAdminRequest, res: Response) => {
+  const stats = await prisma.$queryRaw<
+    Array<{
+      provider: string;
+      role: string;
+      totalCalls: number;
+      lastUsed: string | null;
+    }>
+  >`
+    SELECT provider, role,
+           COUNT(*)::int AS "totalCalls",
+           MAX("createdAt")::text AS "lastUsed"
+    FROM token_usage_logs
+    GROUP BY provider, role
+    ORDER BY "lastUsed" DESC NULLS LAST
+  `;
+
+  // Merge with config rows to include providers that have 0 usage
+  const configs = await prisma.aIProviderConfig.findMany({
+    select: { name: true, role: true, isActive: true, lastTestedAt: true, lastTestResult: true },
+  });
+
+  const merged = configs.map((c) => {
+    const usage = stats.find((s) => s.provider === c.name && s.role === c.role);
+    return {
+      name: c.name,
+      role: c.role,
+      isActive: c.isActive,
+      lastTestedAt: c.lastTestedAt,
+      lastTestResult: c.lastTestResult,
+      usageCount: usage?.totalCalls ?? 0,
+      lastUsed: usage?.lastUsed ?? null,
+    };
+  });
+
+  // Also include any usage logs for providers not in config (shouldn't happen, but safety)
+  for (const s of stats) {
+    if (!merged.find((m) => m.name === s.provider && m.role === s.role)) {
+      merged.push({
+        name: s.provider,
+        role: s.role,
+        isActive: false,
+        lastTestedAt: null,
+        lastTestResult: null,
+        usageCount: s.totalCalls,
+        lastUsed: s.lastUsed,
+      });
+    }
+  }
+
+  res.json({ success: true, data: merged });
 };
 
 // ─── Router composition (order matters: /test-connection before /:id/test-connection) ──
 
 router.get('/', asyncHandler(listProviders));
+router.get('/stats', asyncHandler(getProviderStats));
 router.post('/', validateRequest(createProviderSchema, 'body'), asyncHandler(createProvider));
 router.put('/:id', validateRequest(updateProviderSchema, 'body'), asyncHandler(updateProvider));
 router.delete('/:id', asyncHandler(deleteProvider));

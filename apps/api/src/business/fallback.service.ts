@@ -418,22 +418,28 @@ async getResponse(
     }
   }
 
-  private async tryPayment(context: ConversationContext, query: string): Promise<ResponseOption | null> {
-    const lower = query.trim().toLowerCase();
-
-    // TASK B3 (P1 lanjutan): tryPayment boleh jawab HANYA bila pertanyaan
-    // secara EKSPLISIT soal cara/metode bayar. Kata "bayar" saja (atau
-    // "berapa bayar <produk>") TANPA kata metode eksplisit (transfer/qris/
-    // cod/...) berarti tanya HARGA — harus MISS ke tryProduct, bukan balas
-    // daftar metode pembayaran. Lihat tier-match.ts.
+  /**
+   * REUSE (WIRE-PAYMENT-V2): Proven V1 payment-info builder, extracted from
+   * tryPayment so the v2-rewrite active path can call the EXACT same store +
+   * bank-account + QRIS/COD disclosure logic (do NOT rebuild from scratch).
+   *
+   * Reads the store's activated payment methods (acceptsTransfer / acceptsQris
+   * / acceptsCod) and its active bank accounts + QRIS image, then composes the
+   * same "Berikut metode pembayaran yang tersedia:" text V1 has shipped to WA.
+   *
+   * Returns null when NO payment method is activated on the store (caller should
+   * fall through to AI/Human) — mirrors V1's "None configured → let AI/Human
+   * handle it" guard.
+   *
+   * qrisImageUrl is returned separately so the caller (v2-rewrite active path →
+   * conversation.service.ts) can attach it as metadata.qrisImageUrl, which is
+   * the trigger that makes message-processor.service.ts:321 fire sendQrisFollowUp
+   * (the QRIS image / text-link WA send that was proven to work on WA).
+   */
+  public async getPaymentInfo(storeId: string): Promise<{ content: string; qrisImageUrl: string | null } | null> {
     try {
-      const catalogNames = (await productService.listActiveProducts(context.storeId)).map((p) =>
-        p.name.toLowerCase()
-      );
-      if (!isPaymentIntent(lower, catalogNames)) return null;
-
       const store = await prisma.store.findUnique({
-        where: { id: context.storeId },
+        where: { id: storeId },
         select: {
           acceptsTransfer: true,
           acceptsQris: true,
@@ -443,14 +449,15 @@ async getResponse(
       });
       if (!store) return null;
 
-      // None configured → let AI/Human handle it
+      // None configured → let AI/Human handle it (per DECISION-COD-SETTLEMENT-DEFERRED.md,
+      // COD only jalan bila toko mengaktifkan acceptsCod)
       if (!store.acceptsTransfer && !store.acceptsQris && !store.acceptsCod) {
         return null;
       }
 
       // Fetch active bank accounts (auto-decrypted by Prisma middleware)
       const bankAccounts = await prisma.bankAccount.findMany({
-        where: { storeId: context.storeId, isActive: true, deletedAt: null },
+        where: { storeId, isActive: true, deletedAt: null },
         select: { bankName: true, accountNumber: true, accountName: true },
       });
 
@@ -480,16 +487,40 @@ async getResponse(
       }
 
       return {
-        source: ResponseSource.PAYMENT,
         content: lines.join('\n').trim(),
-        confidence: 0.7,
-        cost: 0,
-        ...(store.acceptsQris && store.qrisImageUrl ? { metadata: { qrisImageUrl: store.qrisImageUrl } } : {}),
+        qrisImageUrl: store.qrisImageUrl || null,
       };
     } catch {
       adapters.logger.warn('Payment info lookup failed, skipping to next fallback tier');
       return null;
     }
+  }
+
+  private async tryPayment(context: ConversationContext, query: string): Promise<ResponseOption | null> {
+    const lower = query.trim().toLowerCase();
+
+    // TASK B3 (P1 lanjutan): tryPayment boleh jawab HANYA bila pertanyaan
+    // secara EKSPLISIT soal cara/metode bayar. Kata "bayar" saja (atau
+    // "berapa bayar <produk>") TANPA kata metode eksplisit (transfer/qris/
+    // cod/...) berarti tanya HARGA — harus MISS ke tryProduct, bukan balas
+    // daftar metode pembayaran. Lihat tier-match.ts.
+    const catalogNames = (await productService.listActiveProducts(context.storeId)).map((p) =>
+      p.name.toLowerCase()
+    );
+    if (!isPaymentIntent(lower, catalogNames)) return null;
+
+    // REUSE (WIRE-PAYMENT-V2): same proven builder that the v2-rewrite active
+    // path invokes directly. keep V1 behaviour identical.
+    const info = await this.getPaymentInfo(context.storeId);
+    if (!info) return null;
+
+    return {
+      source: ResponseSource.PAYMENT,
+      content: info.content,
+      confidence: 0.7,
+      cost: 0,
+      ...(info.qrisImageUrl ? { metadata: { qrisImageUrl: info.qrisImageUrl } } : {}),
+    };
   }
 
   private async tryShipping(context: ConversationContext, query: string, customerCity: string | null = null, askIdentity: boolean = true): Promise<ResponseOption | null> {

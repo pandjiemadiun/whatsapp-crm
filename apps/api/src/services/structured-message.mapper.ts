@@ -120,6 +120,15 @@ export function classifyStructured(
       basePayload: { reason, cartOpsExecuted: Number(meta.cartOpsExecuted ?? 0) },
     };
   }
+  // view_cart: read-only cart view (OPEN_CART) — messageType is 'cart' so
+  // the delivery layer calls fetchCart() and returns structured items+total,
+  // but basePayload does NOT include cartOpsExecuted (no mutation happened).
+  if (reason === 'view_cart') {
+    return {
+      messageType: 'cart',
+      basePayload: { reason },
+    };
+  }
 
   if (result.source === ResponseSource.PRODUCT && meta.matchedNames) {
     const names = toArray<string>(meta.matchedNames);

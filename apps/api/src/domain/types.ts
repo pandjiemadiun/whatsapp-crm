@@ -292,9 +292,16 @@ pendingClarification?: PendingClarification | null;
 /**
  * Item keranjang yang dimanipulasi oleh cart_ops (dari LLM atau resolver).
  * Harga TIDAK dipercaya dari LLM — selalu diambil dari DB saat eksekusi.
+ *
+ * PV-P2b: 'update_qty' (UPDATE_CART_QUANTITY) reuses the SAME product-name
+ * resolution + variant policy as 'add'/'remove', but instead of insert/delete
+ * it calls CartAuthority.updateQuantity(lineItemId, qty) (reuse P6-2).
+ * qty semantics: 0 = delete line item (reuse updateQuantity qty===0 branch),
+ * positive = set exact quantity. Negative is rejected at execution
+ * (CartInvariantError INVALID_QUANTITY) — the mapper clamps to >= 0.
  */
 export interface CartOp {
-  type: 'add' | 'remove';
+  type: 'add' | 'remove' | 'update_qty';
   product: string;
   qty?: number;
   price?: number;       // hint saja — akan diganti dengan harga DB

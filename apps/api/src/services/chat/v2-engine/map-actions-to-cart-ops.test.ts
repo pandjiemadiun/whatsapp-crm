@@ -88,18 +88,41 @@ describe('mapV2ActionsToCartOps', () => {
     );
   });
 
-  it('skips out-of-scope action types (CANCEL_ORDER, UPDATE_CART_QUANTITY) as ACTION_TYPE_NOT_SUPPORTED', () => {
+  it('maps in-scope UPDATE_CART_QUANTITY to an update_qty CartOp (PV-P2b: no longer skipped); keeps CANCEL_ORDER as ACTION_TYPE_NOT_SUPPORTED', () => {
     const { cartOps, skipped } = mapV2ActionsToCartOps([
       action({ action_type: 'CANCEL_ORDER', payload: { order_id: 'o1' } }),
       action({ action_type: 'UPDATE_CART_QUANTITY', payload: { product: 'ayam', qty: 3 } }),
     ]);
-    assert.equal(cartOps.length, 0, 'CANCEL_ORDER / UPDATE_CART_QUANTITY are NOT mapped to cart ops');
-    assert.equal(skipped.length, 2);
-    assert.equal(skipped.every((s) => s.reason === 'ACTION_TYPE_NOT_SUPPORTED'), true);
+    assert.equal(cartOps.length, 1, 'UPDATE_CART_QUANTITY is in-scope and MUST execute (PV-P2b)');
+    assert.deepEqual(cartOps[0], { type: 'update_qty', product: 'ayam', qty: 3, variant: null });
+    assert.equal(skipped.length, 1, 'only CANCEL_ORDER is out-of-scope for the cart-op mapper');
+    assert.equal(skipped[0].action_type, 'CANCEL_ORDER');
+    assert.equal(skipped[0].reason, 'ACTION_TYPE_NOT_SUPPORTED');
+  });
+
+  it('FORCES execution for mutation action types even when the LLM erroneously sets requires_validation=false (anti-hallucination)', () => {
+    // Regression for the defense-in-depth fix: the LLM is simulated returning
+    // requires_validation:false on MUTATION types. The mapper MUST ignore that flag for
+    // its internal mutation set — a real cart add/remove/update must never be silently
+    // dropped because of a hallucinated or erroneous LLM field.
+    const { cartOps, skipped } = mapV2ActionsToCartOps([
+      action({ action_type: 'ADD_TO_CART', requires_validation: false, payload: { product: 'beras', qty: 1 } }),
+      action({ action_type: 'REMOVE_FROM_CART', requires_validation: false, payload: { product: 'telur', qty: 2 } }),
+      action({ action_type: 'UPDATE_CART_QUANTITY', requires_validation: false, payload: { product: 'ayam', qty: 5 } }),
+      action({ action_type: 'OPEN_CART', requires_validation: false, payload: {} }), // read-only -> still skipped
+    ]);
+    assert.equal(cartOps.length, 3, 'all three mutations MUST execute despite LLM requires_validation:false');
     assert.deepEqual(
-      skipped.map((s) => s.action_type),
-      ['CANCEL_ORDER', 'UPDATE_CART_QUANTITY'],
+      cartOps.map((o) => ({ type: o.type, product: o.product, qty: o.qty })),
+      [
+        { type: 'add', product: 'beras', qty: 1 },
+        { type: 'remove', product: 'telur', qty: 2 },
+        { type: 'update_qty', product: 'ayam', qty: 5 },
+      ],
     );
+    assert.equal(skipped.length, 1, 'only the read-only OPEN_CART is skipped');
+    assert.equal(skipped[0].action_type, 'OPEN_CART');
+    assert.equal(skipped[0].reason, 'REQUIRES_VALIDATION_FALSE', 'read-only actions still honor the LLM flag');
   });
 
   it('skips actions with invalid product payloads as INVALID_PRODUCT_PAYLOAD', () => {

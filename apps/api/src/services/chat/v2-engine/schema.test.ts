@@ -154,4 +154,23 @@ describe('V2EngineOutputSchema', () => {
     const result = V2EngineOutputSchema.safeParse(payload);
     assert.ok(result.success, `expected success for NONE action, got: ${result.error?.message}`);
   });
+
+  it('proposed_actions with SHOW_PAYMENT_METHODS (requires_validation=false) is accepted', () => {
+    const payload = validBase();
+    payload.intent = V2_INTENTS.PAYMENT_INQUIRY;
+    payload.proposed_actions = [
+      {
+        action_type: 'SHOW_PAYMENT_METHODS',
+        payload: {},
+        confidence: 0.85,
+        requires_validation: false,
+      },
+    ];
+    const result = V2EngineOutputSchema.safeParse(payload);
+    assert.ok(result.success, `expected success for SHOW_PAYMENT_METHODS, got: ${result.error?.message}`);
+    if (result.success) {
+      assert.equal(result.data.intent, V2_INTENTS.PAYMENT_INQUIRY);
+      assert.equal(result.data.proposed_actions[0].action_type, 'SHOW_PAYMENT_METHODS');
+    }
+  });
 });

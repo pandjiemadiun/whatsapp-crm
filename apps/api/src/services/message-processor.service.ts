@@ -265,7 +265,9 @@ result = await this.llmCircuitBreaker.wrap(() =>
         )
       );
     } catch (err) {
-      this.llmCircuitBreaker.recordFailure();
+      // recordFailure() is already handled inside CircuitBreakerService.wrap()
+      // — do NOT call it again here (double-count bug: circuit would trip
+      // after 1 failure instead of failureThreshold=2).
       adapters.logger.error('LLM pipeline failed', err as Error, { chatId });
 
       const fallbackMsg = this.llmCircuitBreaker.getFallbackMessage();

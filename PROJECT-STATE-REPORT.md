@@ -83,9 +83,17 @@ Coalescing → Priority → Mutex → Circuit-breaker → Rolling ctx → LLM fa
 → Send+retry → Health metrics.
 
 ### 2.3 Conversation Engine
-`business/conversation.service.ts` `processCustomerMessage()` (`:62`). v2 (`reasoning.ts`
-`understand()`) / v1 (`interpreter.ts` `runOneCall()`, 1 Groq call). Keduanya konvergen di
-**CartAuthority** (harga SELALU dari DB via `validateCartOpsAgainstDb`, P2/I13).
+`business/conversation.service.ts` `processCustomerMessage()` (`:62`). Sekarang **hanya ada
+satu jalur engine: v2-rewrite ACTIVE** — `callV2Engine` (LLM structured-output) →
+`normalizeV2Output` → §5 execute (`proposed_actions → mapV2ActionsToCartOps →
+executeWaCartMutation`) → §6 `safeEnrichV2Reply` → `buildResult` (`engine='v2-active'`).
+`chatEngine.v2RewriteMode='active'` adalah global default (14 Sep 2026). v1
+(`interpreter.ts` + 11-tier keyword tier chain di `fallback.service.ts`) **retired** —
+tidak lagi dipanggil. `reasoning.ts` (v2-lama, `InterpreterResultV2`/`understand()`)
+**masih ada di repo tapi TIDAK di-import** oleh active path, menunggu observasi sebelum
+dihapus permanen (lihat DEFERRED-WORK-TRACKER #40). Kedua engine (dulu) konvergen ke
+**CartAuthority** — harga SELALU dari DB via `validateCartOpsAgainstDb`/
+`resolveVariantByLabel` (P2/I13).
 
 ### 2.4 Structured Actions (jalur TERPISAH, bukan lewat LLM)
 `routes/actions.ts` → `getOrCreateWebSession()` (shared resolver) → `executeAction(type,
@@ -99,7 +107,7 @@ Registry typed: `ADD_TO_CART`, `REMOVE_FROM_CART`, `UPDATE_CART_QUANTITY`, `CANC
 ```
 WA/Fonnte  ─► webhooks.ts ─► messageProcessorService.processMessage()
 PWA /message ─► pwa.ts ─► conversationDeliveryService.processWebRequest()
-        └────► conversationService.processCustomerMessage() ─► v1/v2 reasoner ─► validateCartOpsAgainstDb ─► CartAuthority (SINGLE SOURCE OF TRUTH)
+        └────► conversationService.processCustomerMessage() ─► v2-rewrite ACTIVE (callV2Engine → normalizeV2Output → §5 execute → §6 safeEnrich) ─► CartAuthority (SINGLE SOURCE OF TRUTH)
 PWA /action ─► actions.ts ─► getOrCreateWebSession() ─► executeAction() ─► claimAction() ─► executeClaimedAction() [FOR UPDATE + SAVEPOINT] ─► CartAuthority / orderService
 ```
 Verifikasi file:line: `webhooks.ts:103/262`, `conversation.service.ts:62`, `action-registry.ts`
@@ -150,7 +158,19 @@ Verifikasi file:line: `webhooks.ts:103/262`, `conversation.service.ts:62`, `acti
 | **P3** | Context boundary (workspace_v2) | kolom `workspace_v2` + migrasi | **SELESAI (verified)** |
 | **P4** | Remove second brain | `extractAndSaveOrder` dihapus (`0db56bf`) | **SELESAI (verified)** |
 | **P5** | Response naturalness | composer fixes | **SELESAI (verified)** |
-| **P6** | Golden dataset sebagai architecture gate | `test:golden` + CI (P6.3) + coverage P3/P4/P5 (P6.4/5) | **SELESAI (verified)** — test:golden 37/37 |
+| **P6** | Golden dataset sebagai architecture gate | `test:golden` + CI (P6.3) + coverage P3/P4/P5 (P6.4/5) | **SELESAI (verified)** — test:golden 35/35 |
+
+> **Status update (14 Sep 2026 — POST-rewrite-cutover):** Engine v2-rewrite sekarang
+> **ACTIVE untuk semua toko** (`chatEngine.v2RewriteMode='active'`, lihat RAILS.md §6
+> 14 Sep). P5 (cutover semua toko) selesai lebih cepat dari rencana karena seluruh toko
+> dummy/test — syarat canary Fase 2 (30 percakapan customer asli) tidak berlaku, diganti
+> full regression suite. `reasoning.ts` (v2-lama) tidak lagi di-import oleh active path,
+> menunggu observasi beberapa hari sebelum dihapus permanen (DEFERRED-WORK-TRACKER #40).
+> regression gate terkini: `test:chat` **73/73**, `test:golden` **35/35**,
+> `test:structured` **6/6** (payment) + **5/5** (cancel/qty/shipping), `tsc=0`,
+> `build=0`, DB bersih (store-golden-test / test-wa-act-v2-store / test-wa-pay-v2-store
+> = 0 rows). `mapV2ActionsToCartOps` tidak lagi mempercayai `requires_validation` LLM
+> untuk aksi mutasi (anti-hallucination fix, lihat RAILS.md §6 14 Sep).
 
 ### 4.2 Roadmap Structured Actions — P0–P8 (PROJEK-CONTRACT §10)
 

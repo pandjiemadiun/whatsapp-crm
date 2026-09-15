@@ -120,6 +120,69 @@ describe('composer-v2', () => {
     assert.strictEqual(reply, '🛒 Ditambahkan ke keranjang: Ayam x1');
   });
 
+  // ── I-6 FIX: guard op.product undefined/null/empty ──────────────────────
+  it('I-6 FIX: draft_cart_ops product=undefined → tidak render "undefined", balas jujur', () => {
+    const result: InterpreterResultV2 = {
+      acts: [{ act_id: '1', intent: 'add_cart', entities: [], qty_source: 'explicit', confidence: 1, supersedes: null }],
+      unmatched_mentions: [],
+      topic_switch: false,
+      // LLM tak bisa resolve produk (katalog kosong) → product undefined
+      draft_cart_ops: [{ action: 'add', product: undefined as any, qty: 1, qty_source: 'explicit', status: 'confirmed' }],
+      confidence: { entities: 1, intent: 1, selection: 1, topic: 1 },
+    };
+    const reply = composeReply({
+      plannedActs: [{ act_id: '1', intent: 'add_cart', entities: [], qty_source: 'explicit', confidence: 1, supersedes: null }],
+      reasoningResult: result,
+      workspace: mockWorkspace,
+      catalog: [],
+      clarificationAttempt: 0
+    });
+    // JANGAN boleh mengandung "undefined" atau klaim "Ditambahkan ke keranjang"
+    assert.ok(!reply.includes('undefined'), 'tidak boleh ada kata "undefined" di reply');
+    assert.ok(!reply.includes('Ditambahkan ke keranjang'), 'tidak boleh klaim ditambahkan bila product undefined');
+    assert.ok(reply.includes('belum jelas'), 'harus balas dengan jujur bahwa produk belum jelas');
+  });
+
+  it('I-6 FIX: draft_cart_ops product=null → tidak render "undefined", balas jujur', () => {
+    const result: InterpreterResultV2 = {
+      acts: [{ act_id: '1', intent: 'add_cart', entities: [], qty_source: 'explicit', confidence: 1, supersedes: null }],
+      unmatched_mentions: [],
+      topic_switch: false,
+      draft_cart_ops: [{ action: 'add', product: null as any, qty: 1, qty_source: 'explicit', status: 'confirmed' }],
+      confidence: { entities: 1, intent: 1, selection: 1, topic: 1 },
+    };
+    const reply = composeReply({
+      plannedActs: [{ act_id: '1', intent: 'add_cart', entities: [], qty_source: 'explicit', confidence: 1, supersedes: null }],
+      reasoningResult: result,
+      workspace: mockWorkspace,
+      catalog: [],
+      clarificationAttempt: 0
+    });
+    assert.ok(!reply.includes('undefined'), 'tidak boleh ada "undefined" di reply');
+    assert.ok(!reply.includes('Ditambahkan ke keranjang'), 'tidak boleh klaim ditambahkan');
+    assert.ok(reply.includes('belum jelas'), 'harus balas jujur');
+  });
+
+  it('I-6 FIX: draft_cart_ops product kosong string → tidak render "Ditambahkan", balas jujur', () => {
+    const result: InterpreterResultV2 = {
+      acts: [{ act_id: '1', intent: 'add_cart', entities: [], qty_source: 'explicit', confidence: 1, supersedes: null }],
+      unmatched_mentions: [],
+      topic_switch: false,
+      draft_cart_ops: [{ action: 'add', product: '  ', qty: 1, qty_source: 'explicit', status: 'confirmed' }],
+      confidence: { entities: 1, intent: 1, selection: 1, topic: 1 },
+    };
+    const reply = composeReply({
+      plannedActs: [{ act_id: '1', intent: 'add_cart', entities: [], qty_source: 'explicit', confidence: 1, supersedes: null }],
+      reasoningResult: result,
+      workspace: mockWorkspace,
+      catalog: [],
+      clarificationAttempt: 0
+    });
+    assert.ok(!reply.includes('undefined'), 'tidak boleh ada "undefined"');
+    assert.ok(!reply.includes('Ditambahkan ke keranjang'), 'tidak boleh klaim ditambahkan');
+    assert.ok(reply.includes('belum jelas'), 'harus balas jujur');
+  });
+
   it('topic_switch=true → ada reminder pending', () => {
     const result: InterpreterResultV2 = {
       acts: [{ act_id: '1', intent: 'switch_topic', entities: [], qty_source: 'default', confidence: 1, supersedes: null }],

@@ -18,8 +18,8 @@
  */
 import { LLMGateway, CircuitOpenError, llmGateway } from '../../../adapters/ai/llm-gateway.js';
 import { AIProviderError, type AIResponse, type AIGenerateOptions } from '../../../adapters/ai/types.js';
-import { V2EngineOutputSchema, type V2EngineOutput } from './schema.js';
-import { buildV2Prompt } from './prompt-builder.js';
+import { V2EngineOutputSchema, type V2EngineOutput, normalizeV2Output } from './schema.js';
+import { buildV2Prompt, type BuildV2PromptOptions } from './prompt-builder.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -168,13 +168,17 @@ function normalizeNulls(obj: unknown): unknown {
  * @param _gateway   Injected gateway (defaults to the singleton llmGateway).
  *                   Tests inject a custom gateway or one configured with
  *                   mock providers + dynamic resolution.
+ * @param promptOpts Optional prompt options (businessCategory, catalogItems)
+ *                   for dynamic few-shot + business context injection.
+ *                   Defaults to empty (no injection — backward compatible).
  */
 export async function callV2Engine(
   context: string,
   providerRole: V2ProviderRole,
   _gateway: LLMGateway = llmGateway,
+  promptOpts?: BuildV2PromptOptions,
 ): Promise<V2EngineResult> {
-  const prompt = buildV2Prompt(context);
+  const prompt = buildV2Prompt(context, promptOpts);
   const intent = `v2-engine:${providerRole}`;
 
   // ── 1. Delegate to the existing gateway (rotation + cooldown + retry) ──
@@ -233,6 +237,11 @@ export async function callV2Engine(
 
   // ── 2b. Normalize null → undefined (LLMs emit null for absent optional fields) ──
   parsed = normalizeNulls(parsed);
+
+  // ── 2c. Normalize LLM alias types → canonical schema enums (anti-drift) ──
+  // Maps variants like 'name'→'customer_name', 'GET_PRODUCT_INFO'→'SHOW_RELATED_PRODUCTS',
+  // 'ESCALATE_TO_HUMAN'→'CONTACT_ADMIN'. See schema.ts normalizeV2Output for full mapping.
+  parsed = normalizeV2Output(parsed);
 
   // ── 3. Validate against the V2 schema ──
   const result = V2EngineOutputSchema.safeParse(parsed);

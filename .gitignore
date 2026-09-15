@@ -17,3 +17,16 @@ playwright-report/
 # Binary archives / build artifacts (not source code)
 *.tar.gz
 *.zip
+
+# Local build artifacts + generated test outputs (never commit)
+*.tsbuildinfo
+*_tmp_*
+*results.json
+*comparison*.json
+*export*.json
+chat-test-scenarios-actions.json
+# Generated test-runner scripts + stdout logs + result exports (never commit)
+run-tests*.js
+run-all-tests*.js
+run-tests*.json
+*.log

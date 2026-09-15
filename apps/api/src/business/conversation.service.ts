@@ -3,7 +3,7 @@ import { adapters } from '../adapters/container.js';
 import { fallbackService } from './fallback.service.js';
 import { orderService } from './order.service.js';
 import { cartAuthority } from './cart-authority.js';
-import { executeWaCartMutation } from './action-registry.js';
+import { executeWaCartMutation, handleCancelOrder, handleUpdateShippingAddress, type ActionContext } from './action-registry.js';
 import { conversationContextService } from './conversation-context.service.js';
 import { prisma } from '../infrastructure/prisma.js';
 import { productService } from './product.service.js';
@@ -14,6 +14,7 @@ import { normalize } from '../services/chat/normalizer.js';
 import { runOneCall, validateCartOpsAgainstDb, truncateTo2Sentences } from '../services/chat/interpreter.js';
 import { getStoreEngine } from '../services/chat/engine-config.js';
 import { understand } from '../services/chat/reasoning.js';
+import { buildCatalogContextForPrompt } from '../services/catalog-context.service.js';
 import { planActs } from '../services/chat/planner.js';
 import { validate } from '../services/chat/validator-v2.js';
 import { loadWorkspace, saveWorkspace, incrementDeferredTurns, shouldAutoDrop, dropPending } from '../services/chat/workspace.js';
@@ -21,6 +22,17 @@ import { composeReply, composeEscalateReply, escalateStatusUpdate } from '../ser
 import { resolvePending } from '../services/chat/pendingClarification.js';
 import { shouldRunShadow } from '../services/chat/shadow-config.js';
 import { buildShadowEntry, logShadowEntry } from '../services/chat/shadow-logger.js';
+import { fireV2RewriteShadowCall } from '../services/chat/v2-engine/shadow-wiring.js';
+import { getV2RewriteMode, type V2RewriteMode } from '../services/chat/v2-engine/rewrite-config.js';
+import { loadFullHistory } from '../services/chat/v2-engine/shadow-wiring.js';
+import { buildLLMContext } from '../services/chat/v2-engine/context-builder.js';
+import { callV2Engine, type V2EngineResult } from '../services/chat/v2-engine/engine-call.js';
+import { llmGateway } from '../adapters/ai/llm-gateway.js';
+import { safeEnrichV2Reply } from '../services/chat/v2-engine/enrichment.js';
+import { classifyStructured } from '../services/structured-message.mapper.js';
+import { eventBus } from '../services/event-bus.service.js';
+import { mapV2ActionsToCartOps } from '../services/chat/v2-engine/map-actions-to-cart-ops.js';
+import type { V2EngineOutput } from '../services/chat/v2-engine/schema.js';
 import type { ResolvedPayload } from '../services/chat/fast-path.js';
 import type { WorkspaceV2, PendingV2 } from '../services/chat/types-v2.js';
 
@@ -38,6 +50,7 @@ import {
   PipelineContext,
   CartOp,
   PendingClarification,
+  ClarificationOption,
 } from '../domain/types.js';
 
 interface ConversationListItem {
@@ -125,6 +138,527 @@ export class ConversationService {
 
     const context = await this.getOrCreateContext(storeId, customerId, conversationId, customerMessage);
 
+    // ── V2 REWRITE ACTIVE MODE ──
+    // When v2RewriteMode == 'active' (global), the V2 engine
+    // (callV2Engine) becomes the SOLE source of the customer-facing reply
+    // for ALL stores. reasoning.ts is NOT called at all — saves 1 LLM call
+    // per message (single call vs the V2-lama dual-call path). All replies
+    // (success or static fallback) go through the same saveMessage() path
+    // as everything else, ensuring consistency in chat history + outbound
+    // channel delivery.
+    const rewriteMode: V2RewriteMode = await getV2RewriteMode();
+    if (rewriteMode === 'active') {
+      const buildActiveSafeReply = (error: unknown) => {
+        adapters.logger.error('V2 rewrite active mode failed, using static fallback', {
+          storeId,
+          conversationId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return this.buildResult(conversationId, {
+          source: ResponseSource.AI,
+          content: 'Maaf Kak, sistem sedang sibuk banget, bisa diulang sebentar?',
+          confidence: 0.3,
+          cost: 0,
+          metadata: {
+            engine: 'v2-active',
+            rewriteMode: 'active',
+            outcome: 'provider_exhausted',
+            error: error instanceof Error ? error.message : String(error),
+          },
+        });
+      };
+
+      try {
+        // ── 1. Load workspace (read-only via canonical boundary) ──
+        let workspace: any;
+        try {
+          workspace = await canonicalConversationStateService.getV2Workspace(conversationId);
+        } catch {
+          workspace = null;
+        }
+        if (!workspace) {
+          workspace = loadWorkspace('{}');
+        }
+
+        // ── 2. Load full history + catalog context ──
+        const fullHistory = await loadFullHistory(conversationId);
+        const storeRow = await prisma.store.findUnique({
+          where: { id: storeId },
+          select: { businessCategory: true },
+        });
+        const storeBusinessCategory = storeRow?.businessCategory ?? null;
+
+        let catalogItems: any[] = [];
+        try {
+          const catalogResult = await buildCatalogContextForPrompt(
+            storeId,
+            customerMessage,
+            {
+              draft_cart: workspace.draft_cart,
+              resolved_facts: workspace.resolved_facts,
+              options_presented: workspace.options_presented,
+            },
+            30,
+            20,
+          );
+          catalogItems = catalogResult.items;
+        } catch {
+          catalogItems = [];
+        }
+
+        // ── 3. Build context + call V2 engine (SOLE LLM call) ──
+        const v2Context = buildLLMContext({
+          recentHistory: fullHistory,
+          workspace,
+          customerMessage,
+          businessCategory: storeBusinessCategory,
+          catalogItems,
+          catalogMode: 'full',
+        });
+
+        let v2Result: V2EngineResult;
+        try {
+          v2Result = await callV2Engine(v2Context, 'chat_primary', llmGateway, {
+            businessCategory: storeBusinessCategory,
+            catalogItems,
+          });
+        } catch {
+          v2Result = {
+            success: false,
+            error: {
+              type: 'provider_exhausted',
+              message: 'V2 active engine threw an unexpected exception',
+              failedProviders: [],
+            },
+          };
+        }
+
+        // ── 4. Handle failure → static honest fallback ──
+        if (!v2Result.success) {
+          const err = (v2Result as any).error;
+          const safeReply = buildActiveSafeReply(err);
+          await this.saveMessage({ id: crypto.randomUUID(), conversationId, sender: 'customer', content: customerMessage, createdAt: new Date() } as ConversationMessage);
+          await this.saveMessage(safeReply.message);
+          adapters.logger.info('V2 active mode: provider exhausted, sent static fallback', {
+            storeId,
+            conversationId,
+            errorType: err?.type,
+          });
+          return safeReply;
+        }
+
+        // ── 5. Execute proposed_actions (structured mutations) ──
+        // WIRE: runV2MapperWirePath is NOT wired into production. Instead, we
+        // call mapV2ActionsToCartOps (pure, Unit 2) + executeWaCartMutation
+        // (real, idempotent) directly here — the SAME entry point as the V1
+        // resolved path (conversation.service.ts:482) and the V2-lama path
+        // (line 575). This ensures ADD_TO_CART etc. ACTUALLY write to the DB
+        // (draft order + OrderItem rows), so that:
+        //   - enrichment (safeEnrichV2Reply) can read real cart totals
+        //   - the customer-facing reply is honest ("sudah ditambahkan" only
+        //     when execution succeeded)
+        const v2Output: V2EngineOutput = v2Result.data;
+        const proposedActions = Array.isArray((v2Output as any).proposed_actions)
+          ? (v2Output as any).proposed_actions
+          : [];
+
+        // ── 5a. PAYMENT INTENT → reuse proven V1 payment info (WIRE-PAYMENT-V2) ──
+        // When the LLM classifies intent 'payment_inquiry' OR emits a
+        // SHOW_PAYMENT_METHODS proposed_action, that is the bridge from the
+        // v2-rewrite active path back to the PROVEN V1 payment trigger:
+        //   message-processor.service.ts:321 → result.source==='payment' &&
+        //   result.metadata.qrisImageUrl  →  sendQrisFollowUp (...)
+        //
+        // We REUSE fallbackService.getPaymentInfo() — the EXACT store +
+        // bank-account + QRIS/COD disclosure logic that already shipped to WA
+        // (fallback.service.ts tryPayment). JANGAN build from scratch.
+        //
+        // Per DECISION-COD-SETTLEMENT-DEFERRED.md: COD is only disclosed when the
+        // store activates acceptsCod. getPaymentInfo() returns null if NO method
+        // is activated → we do NOT override the LLM reply; fall through to the
+        // generic path (AI/Human handles it).
+        const isPaymentRequest =
+          v2Output.intent === 'payment_inquiry' ||
+          proposedActions.some(
+            (a: any) => a && a.action_type === 'SHOW_PAYMENT_METHODS',
+          );
+        if (isPaymentRequest) {
+          const paymentInfo = await fallbackService.getPaymentInfo(storeId);
+          if (paymentInfo) {
+            // reply_text from the LLM is intentionally NOT used: bank accounts /
+            // QRIS image / COD availability are store-specific and MUST come from the
+            // proven getPaymentInfo() builder (anti-hallucination). The
+            // message-processor.service.ts QRIS follow-up (:321) fires automatically
+            // because we set source=PAYMENT + metadata.qrisImageUrl.
+            const paymentResult = this.buildResult(conversationId, {
+              source: ResponseSource.PAYMENT,
+              content: paymentInfo.content,
+              confidence: v2Output.confidence || 0.9,
+              cost: 0,
+              metadata: {
+                engine: 'v2-active',
+                rewriteMode: 'active',
+                outcome: 'payment',
+                intent: v2Output.intent,
+                ...(paymentInfo.qrisImageUrl ? { qrisImageUrl: paymentInfo.qrisImageUrl } : {}),
+              },
+            });
+
+            await this.saveMessage({ id: crypto.randomUUID(), conversationId, sender: 'customer', content: customerMessage, createdAt: new Date() } as ConversationMessage);
+            await this.saveMessage(paymentResult.message);
+
+            adapters.logger.info('V2 active mode: payment methods disclosed', {
+              storeId,
+              conversationId,
+              intent: v2Output.intent,
+              hasQrisImage: !!paymentInfo.qrisImageUrl,
+            });
+
+            return paymentResult;
+          }
+          // getPaymentInfo() returned null (store has no payment method activated) →
+          // fall through so the generic AI path runs. Do NOT fabricate payment data.
+        }
+
+        // ── 5b. Order-level mutations: CANCEL_ORDER + UPDATE_SHIPPING_ADDRESS ──
+        // These mutate the Order row directly (NOT cart line items), so they bypass
+        // mapV2ActionsToCartOps(CartOp[]) and reuse the existing order handlers with
+        // the claim/lease idempotency pattern (actionId = wa:<conv>:<msgId>) — the
+        // SAME lease key the CART path uses (executeWaCartMutation) for this message.
+        //   PV-P2a: CANCEL_ORDER reuses handleCancelOrder → orderService.cancelOrder
+        //     (P6-3). The LLM proposes CANCEL_ORDER with an EMPTY payload; we resolve
+        //     the target order (customer's latest non-draft, non-terminal Order) here.
+        //   PV-P2b: UPDATE_CART_QUANTITY is a CartOp — handled below via
+        //     executeWaCartMutation → CartAuthority.updateQuantity (reuse).
+        //   PV-P2c: UPDATE_SHIPPING_ADDRESS reuses the new handleUpdateShippingAddress
+        //     (claim → executeClaimedAction → draft-Order.shippingAddress), option (a).
+        // Honest reply: on every outcome we OVERRIDE the LLM's reply_text with a
+        //   message grounded in the DB result — never an empty "sudah dibatalkan" claim.
+        const shortId = (id: string) => (id ? id.slice(-6).toUpperCase() : '------');
+        const orderIdem = messageId
+          ? `wa:${conversationId}:${messageId}`
+          : `wa:${conversationId}:${crypto.randomUUID()}`;
+        const actionCtx: ActionContext = {
+          storeId, customerId, conversationId, channel, requestId: orderIdem,
+        };
+
+        let orderActionResult: { text: string; success: boolean } | null = null;
+        let orderOutcome: string | undefined;
+
+        // Order-level actions only (cart mutations are handled below as CartOps).
+        const orderActions = (proposedActions ?? []).filter(
+          (a: any) => a && a.requires_validation !== false &&
+            (a.action_type === 'CANCEL_ORDER' || a.action_type === 'UPDATE_SHIPPING_ADDRESS'),
+        );
+        for (const a of orderActions) {
+          if (a.action_type === 'CANCEL_ORDER') {
+            const target = await this.resolveCancellableOrderId(storeId, customerId, conversationId);
+            if (!target) {
+              orderActionResult = { text: 'Kakak belum punya pesanan yang bisa dibatalkan sekarang ya. Kalau ada pesanan, hubungi kami.', success: false };
+              orderOutcome = 'cancel_no_eligible_order';
+            } else {
+              let cancelRes: any;
+              try {
+                cancelRes = await handleCancelOrder(
+                  { actionId: orderIdem, type: 'CANCEL_ORDER', payload: { orderId: target.id } },
+                  actionCtx,
+                );
+              } catch (e: any) {
+                cancelRes = { success: false, status: 'already_applied', error: { code: 'CANCEL_ERROR', message: e?.message ?? 'gagal membatalkan' } };
+              }
+              if (cancelRes.success && cancelRes.status === 'applied') {
+                orderActionResult = { text: `Pesanan Kakak sudah dibatalkan. Stok barang dikembalikan ke gudang. 🧾${shortId(target.id)}`, success: true };
+                orderOutcome = 'cancelled';
+              } else if (cancelRes.status === 'already_applied') {
+                orderActionResult = { text: 'Pesanan Kakak memang sudah dibatalkan tadi.', success: true };
+                orderOutcome = 'cancel_already';
+              } else if (cancelRes.status === 'action_in_progress') {
+                orderActionResult = { text: 'Mohon tunggu sebentar Kak, pembatalan sedang diproses.', success: false };
+                orderOutcome = 'cancel_in_progress';
+              } else {
+                orderActionResult = { text: `Maaf, tidak bisa membatalkan pesanan: ${cancelRes.error?.message ?? 'status pesanan tidak dapat dibatalkan'}.`, success: false };
+                orderOutcome = 'cancel_failed';
+              }
+            }
+          } else if (a.action_type === 'UPDATE_SHIPPING_ADDRESS') {
+            // Free-text address; empty/whitespace rejected (never stored).
+            const addr = String(a.payload?.address ?? a.payload?.shippingAddress ?? '').trim();
+            if (!addr) {
+              orderActionResult = { text: 'Alamatnya kosong ya Kak, bisa isi dulu alamat tujuan?', success: false };
+              orderOutcome = 'shipping_address_empty';
+            } else {
+              let addrRes: any;
+              try {
+                addrRes = await handleUpdateShippingAddress(
+                  { actionId: orderIdem, type: 'UPDATE_SHIPPING_ADDRESS', payload: { address: addr } },
+                  actionCtx,
+                );
+              } catch (e: any) {
+                addrRes = { success: false, status: 'already_applied', error: { code: 'SHIPPING_ERROR', message: e?.message ?? 'gagal menyimpan alamat' } };
+              }
+              if (addrRes.success && (addrRes.status === 'applied' || addrRes.status === 'already_applied')) {
+                orderActionResult = { text: `Alamat kirim Kakak diperbarui: ${addr} 📍.`, success: true };
+                orderOutcome = 'shipping_address_updated';
+              } else if (addrRes.status === 'action_in_progress') {
+                orderActionResult = { text: 'Mohon tunggu sebentar Kak, alamat sedang disimpan.', success: false };
+                orderOutcome = 'shipping_address_in_progress';
+              } else {
+                orderActionResult = { text: `Maaf, alamat tidak bisa disimpan: ${addrRes.error?.message ?? 'error'}.`, success: false };
+                orderOutcome = 'shipping_address_failed';
+              }
+            }
+          }
+        }
+
+        const { cartOps, skipped } = mapV2ActionsToCartOps(
+          // Filter out order-level actions already handled above — they are NOT
+          // CartOps and must not land in `skipped` (which would trigger the
+          // "fitur belum tersedia" lie) nor in cartOps.
+          (proposedActions ?? []).filter(
+            (a: any) => a.action_type !== 'CANCEL_ORDER' && a.action_type !== 'UPDATE_SHIPPING_ADDRESS',
+          ),
+        );
+
+        // DETECT unsupported mutation actions: if the LLM's proposed_actions
+        // contain CART mutation action_types (ADD_TO_CART / REMOVE_FROM_CART /
+        // UPDATE_CART_QUANTITY) but were ALL skipped (as ACTION_TYPE_NOT_SUPPORTED
+        // or INVALID_PRODUCT_PAYLOAD), then cartOps is empty but the LLM may have
+        // claimed "sudah ditambahkan" / "sudah diupdate" — which is a LIE.
+        // (CANCEL_ORDER / UPDATE_SHIPPING_ADDRESS are NOT in this set: they are
+        // executed above in §5b, so a skipped order-level action no longer lies.)
+        // This is a separate failure mode from "product not found" (surfaces via
+        // mutation.unresolved). We must override the reply with an honest message.
+        const UNSUPPORTED_MUTATION_TYPES = new Set([
+          'ADD_TO_CART', 'REMOVE_FROM_CART', 'UPDATE_CART_QUANTITY',
+        ]);
+        const hasSkippedMutation = proposedActions.some(
+          (a: any) => UNSUPPORTED_MUTATION_TYPES.has(a.action_type) &&
+          a.requires_validation !== false &&
+          skipped.some((s) => s.action_type === a.action_type && s.reason === 'ACTION_TYPE_NOT_SUPPORTED')
+        );
+
+        let mutationResult: { success: boolean; failedProducts: string[] } | null = null;
+        if (cartOps.length > 0) {
+          try {
+            const mutation = await executeWaCartMutation(
+              cartOps, storeId, customerId, conversationId, messageId, channel,
+            );
+            // Check if any ops failed (product not found, stock insufficient, etc.)
+            if (mutation.unresolved && mutation.unresolved.length > 0) {
+              mutationResult = {
+                success: false,
+                failedProducts: mutation.unresolved.map((u: any) => u.product || u.reason || 'unknown'),
+              };
+            } else {
+              mutationResult = { success: true, failedProducts: [] };
+            }
+          } catch (execErr) {
+            mutationResult = {
+              success: false,
+              failedProducts: [execErr instanceof Error ? execErr.message : String(execErr)],
+            };
+            adapters.logger.warn('V2 active: proposed_actions execution failed', {
+              storeId, conversationId, error: (execErr as Error)?.message,
+            });
+          }
+        }
+
+        // ── 6. Enrich reply (price injection from CartAuthority) ──
+        const v2EnrichedReply = await safeEnrichV2Reply(v2Result, storeId, conversationId);
+
+        // ── 6b. Post-execution reply honesty ──
+        // If LLM said "sudah ditambahkan" / "sudah dibatalkan" but:
+        //   (a) execution failed (product not found) → honest: "produk tidak bisa ditambahkan"
+        //   (b) ALL proposed actions were unsupported (e.g. CANCEL_ORDER) → honest:
+        //       "maaf fitur X belum tersedia lewat chat, hubungi admin"
+        let finalReplyText = v2EnrichedReply || v2Output.reply_text || 'Maaf kak, saya kurang paham.';
+
+        // Case (a): some cartOps were attempted but failed
+        if (cartOps.length > 0 && mutationResult && !mutationResult.success) {
+          finalReplyText = mutationResult.failedProducts.length > 0
+            ? `Maaf Kak, produk berikut tidak bisa ditambahkan ke keranjang: ${mutationResult.failedProducts.join(', ')}. Bisakah Kakak pilih produk lain?`
+            : 'Maaf Kak, terjadi kesalahan saat menambahkan ke keranjang. Bisakah Kakak coba lagi?';
+        }
+
+        // Case (b): ALL proposed mutation actions were unsupported (skipped)
+        // The LLM likely claimed "sudah dibatalkan" / "sudah diupdate" — override
+        // with an honest message so we don't lie to the customer.
+        if (hasSkippedMutation && cartOps.length === 0) {
+          const skippedTypes = skipped
+            .filter((s) => s.reason === 'ACTION_TYPE_NOT_SUPPORTED')
+            .map((s) => s.action_type)
+            .join(', ');
+          finalReplyText = `Maaf Kak, fitur ${skippedTypes} belum tersedia lewat chat. Bisakah Kakak hubungi admin toko untuk bantuan lebih lanjut?`;
+        }
+
+        // Case (c): an order-level mutation (CANCEL_ORDER / UPDATE_SHIPPING_ADDRESS)
+        // was executed above in §5b — override the reply with the DB-grounded
+        // outcome (success or honest failure), so the bot never claims an action
+        // it did not in fact perform.
+        if (orderActionResult) {
+          finalReplyText = orderActionResult.text;
+        }
+
+        // ── 6. Success → run 3 translation layers (same as shadow wiring) ──
+        const _proto = ConversationService.prototype as any;
+        const derivedReason = _proto.deriveV2EngineReason(v2Output);
+        const derivedProduct = await _proto.deriveV2EngineProductSource(v2Output, storeId);
+        const derivedQuickReply = await _proto.deriveV2EngineQuickReply(v2Output, storeId, conversationId);
+
+        const classified = classifyStructured({
+          message: { content: finalReplyText },
+          source: (derivedProduct?.source as ResponseSource) || ResponseSource.AI,
+          confidence: v2Output.confidence || 0.8,
+          metadata: {
+            ...(derivedReason ? { reason: derivedReason } : {}),
+            ...(derivedProduct?.metadata || {}),
+            ...(derivedQuickReply ? { reason: derivedQuickReply.reason, clarification_question: derivedQuickReply.question } : {}),
+          },
+        } as any);
+
+        // ── 6c. Escalation handling: intent='escalation' or CONTACT_ADMIN action ──
+        // WIRE-V2ENGINE-ESCALATION: the V2 active path must trigger the SAME
+        // escalation convention as V2-lama (markHumanTakeover + eventBus.publish),
+        // so that merchant-push.service.ts receives the 'message.created' +
+        // 'conversation.handoff' + 'conversation.updated' events and can fire
+        // the push notification. Without this, the LLM's escalation reply_text
+        // is sent to the customer but the conversation is never marked for
+        // human takeover and the merchant is never notified.
+        const isEscalation =
+          v2Output.intent === 'escalation' ||
+          (Array.isArray((v2Output as any).proposed_actions) &&
+            (v2Output as any).proposed_actions.some(
+              (a: any) => a.action_type === 'CONTACT_ADMIN',
+            ));
+
+        if (isEscalation) {
+          const escalateReply = composeEscalateReply();
+          await this.markHumanTakeover(conversationId, storeId);
+
+          // Build result with human escalation reply (override LLM reply_text)
+          const result = this.buildResult(conversationId, {
+            source: ResponseSource.HUMAN,
+            content: escalateReply,
+            confidence: 0.9,
+            cost: 0,
+            metadata: {
+              engine: 'v2-active',
+              rewriteMode: 'active',
+              outcome: 'escalation',
+              intent: v2Output.intent,
+              v2MessageType: classified.messageType,
+              reason: 'escalation_clarification_retry_exceeded',
+              v2OutputIntent: v2Output.intent,
+            },
+          });
+
+          await this.saveMessage({ id: crypto.randomUUID(), conversationId, sender: 'customer', content: customerMessage, createdAt: new Date() } as ConversationMessage);
+          await this.saveMessage(result.message);
+
+          // Publish events (SAME as V2-lama escalation path + handoff.service.ts)
+          // so merchant-push.service.ts triggers push notification
+          eventBus.publish({
+            event: 'message.created',
+            storeId,
+            data: {
+              id: result.message.id,
+              conversationId,
+              sender: 'assistant',
+              type: 'handoff',
+              payload: { reason: 'escalation_clarification_retry_exceeded', content: escalateReply },
+              content: escalateReply,
+              source: ResponseSource.HUMAN,
+              confidence: 0.9,
+              createdAt: result.message.createdAt,
+            },
+            ts: Date.now(),
+          });
+          eventBus.publish({
+            event: 'conversation.handoff',
+            storeId,
+            data: { conversationId, status: 'human_takeover' },
+            ts: Date.now(),
+          });
+          eventBus.publish({
+            event: 'conversation.updated',
+            storeId,
+            data: { conversationId, status: 'human_takeover', lastMessageAt: result.message.createdAt },
+            ts: Date.now(),
+          });
+
+          adapters.logger.info('V2 active escalation: conversation marked for human takeover + events published', {
+            storeId, conversationId, intent: v2Output.intent,
+            hasContactAdmin: Array.isArray((v2Output as any).proposed_actions) &&
+              (v2Output as any).proposed_actions.some((a: any) => a.action_type === 'CONTACT_ADMIN'),
+          });
+
+          return result;
+        }
+
+        const result = this.buildResult(conversationId, {
+          source: (derivedProduct?.source ?? ResponseSource.AI),
+          content: finalReplyText,
+          confidence: v2Output.confidence || 0.9,
+          cost: 0,
+          metadata: {
+            engine: 'v2-active',
+            rewriteMode: 'active',
+            outcome: orderOutcome ?? 'structured',
+            intent: v2Output.intent,
+            confidence: v2Output.confidence,
+            v2MessageType: classified.messageType,
+            ...(derivedReason ? { reason: derivedReason } : {}),
+            ...(derivedProduct?.metadata || {}),
+            ...(derivedQuickReply ? { reason: derivedQuickReply.reason, clarification_question: derivedQuickReply.question } : {}),
+          },
+        });
+
+        await this.saveMessage({ id: crypto.randomUUID(), conversationId, sender: 'customer', content: customerMessage, createdAt: new Date() } as ConversationMessage);
+        await this.saveMessage(result.message);
+
+        adapters.logger.info('V2 active mode: full pipeline success', {
+          storeId,
+          conversationId,
+          intent: v2Output.intent,
+          messageType: classified.messageType,
+          derivedReason,
+        });
+
+        // WIRE-V2ENGINE-ENTRYPOINT: also save to v2_shadow_logs for observability
+        // (same as shadow mode, but this is the primary path, not fire-and-forget)
+        try {
+          await prisma.v2ShadowLog.create({
+            data: {
+              storeId,
+              conversationId,
+              customerMessage,
+              v1ActualReply: '',
+              v2Output: v2Result as unknown as object,
+              v2EnrichedReply,
+              v2DerivedReason: derivedReason || undefined,
+              v2MessageType: classified.messageType || undefined,
+              v2ProductSource: (derivedProduct as any) || undefined,
+              v2QuickReply: (derivedQuickReply as any) || undefined,
+            },
+          });
+        } catch (shadowErr) {
+          // Non-critical: don't fail the customer response for logging errors
+          adapters.logger.warn('V2 active: shadow log save failed (non-blocking)', {
+            storeId,
+            error: shadowErr instanceof Error ? shadowErr.message : String(shadowErr),
+          });
+        }
+
+        return result;
+      } catch (activeErr) {
+        // Catch-all: any unexpected error in the active path → static fallback
+        const safeReply = buildActiveSafeReply(activeErr);
+        await this.saveMessage({ id: crypto.randomUUID(), conversationId, sender: 'customer', content: customerMessage, createdAt: new Date() } as ConversationMessage);
+        await this.saveMessage(safeReply.message);
+        return safeReply;
+      }
+    }
+
     // ── ENGINE BRANCHING (v1|v2) ──
     const engine = await getStoreEngine(storeId);
     
@@ -181,13 +715,15 @@ export class ConversationService {
         }
         
         // 3. Jalankan reasoning engine v2
-        const rawCatalog = await this.getStoreProducts(storeId);
-        const catalog = rawCatalog.map(p => ({
-            id: p.name,
-            name: p.name,
-            price: p.price,
-            category: null // Assuming category is not available in getStoreProducts output
-        }));
+        // REUSE: shared helper — adaptive retrieval (>30 → searchProducts, fallback → categories)
+        const catalogResult = await buildCatalogContextForPrompt(
+          storeId,
+          customerMessage,
+          { draft_cart: workspace.draft_cart, resolved_facts: workspace.resolved_facts, options_presented: workspace.options_presented },
+          30,
+          20,
+        );
+        const catalog = catalogResult.items;
         const history = context.messages.map(m => ({
             id: m.id,
             conversationId: m.conversationId,
@@ -213,8 +749,18 @@ export class ConversationService {
           const payload = reasoningOutcome.payload as any;
           const replyText = payload?.message?.content || payload?.reply || payload?.content || 'Maaf kak, saya kurang paham.';
 
+          // WIRE-V2ENGINE-PRODUCT-LOOKUP: cek apakah tier result ada V2EngineOutput
+          // (duck-typed). Pada tier path result biasanya undefined → inert.
+          const v2Result = (reasoningOutcome as any).result;
+          const derivedReason = this.deriveV2EngineReason(v2Result);
+          const derivedProduct = v2Result ? await this.deriveV2EngineProductSource(v2Result, storeId) : undefined;
+          // WIRE-V2ENGINE-QUICK-REPLY: cek needs_clarification + DB state options
+          const derivedQuickReply = v2Result
+            ? await this.deriveV2EngineQuickReply(v2Result, storeId, conversationId)
+            : undefined;
+
           const result = this.buildResult(conversationId, {
-            source: payload?.source || ResponseSource.AI,
+            source: (derivedProduct?.source ?? payload?.source) || ResponseSource.AI,
             content: replyText,
             confidence: payload?.confidence ?? 0.9,
             cost: payload?.cost ?? 0,
@@ -222,6 +768,12 @@ export class ConversationService {
               engine: 'v2',
               outcome: reasoningOutcome.outcome,
               llmCalls: reasoningOutcome.llmCalls,
+              // WIRE-V2ENGINE-SIMPLE-REASONS: cek proposed_actions/intent di result
+              ...(derivedReason ? { reason: derivedReason } : {}),
+              // WIRE-V2ENGINE-PRODUCT-LOOKUP: merge product metadata
+              ...(derivedProduct?.metadata || {}),
+              // WIRE-V2ENGINE-QUICK-REPLY: reason + question + options untuk quick_reply
+              ...(derivedQuickReply ? { reason: derivedQuickReply.reason, clarification_question: derivedQuickReply.question } : {}),
               ...(payload?.metadata || {}),
             },
           });
@@ -230,6 +782,13 @@ export class ConversationService {
           await this.saveMessage(result.message);
 
           adapters.logger.info('Engine v2 active', { storeId, conversationId, outcome: reasoningOutcome.outcome, llmCalls: reasoningOutcome.llmCalls });
+
+          // WIRE-V2ENGINE-ENTRYPOINT: fire-and-forget V2-rewrite shadow call
+          // AFTER v2-lama reply is persisted. Customer reply is NOT modified.
+          fireV2RewriteShadowCall({
+            storeId, conversationId, customerMessage, v1Reply: result.message.content,
+          }).catch((err) => adapters.logger.error('V2 rewrite shadow unhandled', err as Error));
+
           return result;
         }
 
@@ -295,6 +854,12 @@ export class ConversationService {
             await this.saveMessage(resolvedResult.message);
 
             adapters.logger.info('Engine v2 active', { storeId, conversationId, outcome: 'resolved', action: payload.action, llmCalls: reasoningOutcome.llmCalls });
+
+            // WIRE-V2ENGINE-ENTRYPOINT: fire-and-forget V2-rewrite shadow call
+            fireV2RewriteShadowCall({
+              storeId, conversationId, customerMessage, v1Reply: resolvedResult.message.content,
+            }).catch((err) => adapters.logger.error('V2 rewrite shadow unhandled', err as Error));
+
             return resolvedResult;
           } catch (postMutationErr) {
             // ── P0 SAFETY BOUNDARY: mutasi SUDAH terjadi → return safe reply ke customer ──
@@ -346,15 +911,40 @@ export class ConversationService {
 
       // G2-D.8: persist LLM clarification to canonical workspace_v2.pendings[]
       // so the next customer turn can resolve it via tryFastPath.
+      // InterpreterResultV2 path: has clarification.question + clarification.options
       const clarification = (reasoningOutcome as any).result?.clarification as
         | { question: string; options: string[] }
         | undefined;
+      // V2EngineOutput path (duck-typed): needs_clarification + clarification_question,
+      // TAPI TIDAK ada options — anti-hallucination, jangan bikin options dari LLM.
+      const isV2NeedsClarification =
+        (reasoningOutcome as any).result &&
+        'proposed_actions' in (reasoningOutcome as any).result &&
+        (reasoningOutcome as any).result.needs_clarification === true;
+      const v2Question = (reasoningOutcome as any).result?.clarification_question || (reasoningOutcome as any).result?.reply_text;
+
       if (clarification) {
         const pendingId = crypto.randomUUID();
         const pending: PendingV2 = {
           id: pendingId,
           question: clarification.question,
           options: clarification.options,
+          status: 'active',
+          attempts: 0,
+          deferred_turns: 0,
+          asked_at: new Date().toISOString(),
+        };
+        workspace.pendings.push(pending);
+      } else if (isV2NeedsClarification && v2Question) {
+        // V2EngineOutput clarification: store question for state tracking,
+        // options kosong — anti-hallucination (options must come from DB state,
+        // bukan LLM entities). Next turn, getV1PendingClarification dapatkan
+        // options dari pending sebelumnya yang punya options (InterpreterResultV2 path).
+        const pendingId = crypto.randomUUID();
+        const pending: PendingV2 = {
+          id: pendingId,
+          question: v2Question as string,
+          options: [],
           status: 'active',
           attempts: 0,
           deferred_turns: 0,
@@ -380,19 +970,49 @@ export class ConversationService {
           // sebelum dikirim ke customer.
           const reply = truncateTo2Sentences(composed);
 
+          // WIRE-V2ENGINE-PRODUCT-LOOKUP: derivel source + metadata produk dari
+          // hasil V2EngineOutput entities/proposed_actions — hanya untuk V2 path.
+          // InterpreterResultV2 → return undefined (inert).
+          const v2Result = (reasoningOutcome as any).result;
+          const derivedReason = this.deriveV2EngineReason(v2Result);
+          const derivedProduct = await this.deriveV2EngineProductSource(v2Result, storeId);
+          // WIRE-V2ENGINE-QUICK-REPLY: cek needs_clarification + DB state options
+          const derivedQuickReply = await this.deriveV2EngineQuickReply(v2Result, storeId, conversationId);
+
           // 7. Return result (same format as v1)
           const result = this.buildResult(conversationId, {
-            source: ResponseSource.AI,
+            source: derivedProduct?.source ?? ResponseSource.AI,
             content: reply,
             confidence: (reasoningOutcome as any).result?.confidence?.selection || 0.8,
             cost: 0,
-            metadata: { engine: 'v2', outcome: reasoningOutcome.outcome, llmCalls: reasoningOutcome.llmCalls },
+            metadata: {
+              engine: 'v2',
+              outcome: reasoningOutcome.outcome,
+              llmCalls: reasoningOutcome.llmCalls,
+              // WIRE-V2ENGINE-SIMPLE-REASONS: derivel reason dari V2EngineOutput agar
+              // structured-message.mapper.ts bisa assign messageType cart/handoff.
+              ...(derivedReason ? { reason: derivedReason } : {}),
+              // WIRE-V2ENGINE-PRODUCT-LOOKUP: merge product metadata agar
+              // structured-message.mapper.ts bisa assign messageType product/product_list.
+              ...(derivedProduct?.metadata || {}),
+              // WIRE-V2ENGINE-QUICK-REPLY: reason + question untuk quick_reply
+              // Options TIDAK di-set di sini — di-fetch oleh mapStructured via
+              // fetchClarificationOptions (DB state). Hanya set reason + question.
+              ...(derivedQuickReply ? { reason: derivedQuickReply.reason, clarification_question: derivedQuickReply.question } : {}),
+            },
           });
 
           await this.saveMessage({ id: crypto.randomUUID(), conversationId, sender: 'customer', content: customerMessage, createdAt: new Date() } as ConversationMessage);
           await this.saveMessage(result.message);
 
           adapters.logger.info('Engine v2 active', { storeId, conversationId, outcome: reasoningOutcome.outcome, error: (reasoningOutcome as any).error, llmCalls: reasoningOutcome.llmCalls });
+
+          // WIRE-V2ENGINE-ENTRYPOINT: fire-and-forget V2-rewrite shadow call
+          // AFTER v2-lama reply is persisted. Customer reply is NOT modified.
+          fireV2RewriteShadowCall({
+            storeId, conversationId, customerMessage, v1Reply: result.message.content,
+          }).catch((err) => adapters.logger.error('V2 rewrite shadow unhandled', err as Error));
+
           return result;
         } catch (postMutationErr) {
           // ── P0 SAFETY BOUNDARY: mutasi SUDAH terjadi → return safe reply ke customer ──
@@ -739,15 +1359,15 @@ export class ConversationService {
       setImmediate(async () => {
         try {
           // Jalankan reasoning engine v3.2
+          const shadowCatalogResult = await buildCatalogContextForPrompt(
+            storeId,
+            customerMessage,
+            { draft_cart: [], resolved_facts: {} },
+          );
           const reasoningOutcome = await understand(
             customerMessage,
             context as any,
-            (await this.getStoreProducts(storeId)).map((p) => ({
-              id: 'unknown',
-              name: p.name,
-              price: p.price,
-              category: null,
-            })),
+            shadowCatalogResult.items,
             context.messages.map((m) => ({
               role: m.sender === 'customer' ? 'user' : 'assistant',
               content: m.content,
@@ -832,6 +1452,30 @@ export class ConversationService {
     
     return result;
 
+  }
+
+  /**
+   * PV-P2a: resolve the Order a CANCEL_ORDER proposed_action should target.
+   * Returns the customer's LATEST Order that is neither a draft (the cart —
+   * "batalkan" for a basket is a different concept) nor a terminal state
+   * (cancelled / completed / refunded). Reuses orderService.getOrdersByConversation
+   * (sorted createdAt DESC) — no new resolver invented. Tenant-scoped defensively
+   * (orderService.cancelOrder re-checks ownership server-side as well).
+   */
+  private async resolveCancellableOrderId(
+    storeId: string,
+    customerId: string,
+    conversationId: string,
+  ): Promise<{ id: string; orderStatus: string } | null> {
+    const TERMINAL_STATUSES = new Set(['cancelled', 'completed', 'refunded']);
+    const orders = await orderService.getOrdersByConversation(conversationId);
+    const target = orders.find(
+      (o) => o.orderStatus !== 'draft' && !TERMINAL_STATUSES.has(o.orderStatus),
+    );
+    if (!target) return null;
+    // Defensive tenant scoping (cancelOrder re-validates ownership too).
+    if (target.storeId !== storeId || target.customerId !== customerId) return null;
+    return { id: target.id, orderStatus: target.orderStatus };
   }
 
   /**
@@ -1052,6 +1696,217 @@ export class ConversationService {
       cost: 0,
       requiresHumanReview: false,
       metadata: { reason: 'modify_cart' },
+    };
+  }
+
+  /**
+   * WIRE-V2ENGINE-SIMPLE-REASONS (P1-FIX-4):
+   * Derive `metadata.reason` for messageType mapping (structured-message.mapper.ts)
+   * dari V2 engine output — hanya di jalur V2 path (HANYA di buildResult calls
+   * yang ada di dalam `if (engine === 'v2')` block). JANGAN disentuh jalur V1.
+   *
+   * Duck-typed: cek field V2EngineOutput (proposed_actions / intent).
+   * Jika result adalah InterpreterResultV2 (draft_cart_ops / acts), fungsi ini
+   * return undefined (tidak override) — reasoning.ts path tetap apa adanya.
+   *
+   * Mapping:
+   *   proposed_actions ada ADD/REMOVE/UPDATE_CART_QUANTITY/UPDATE_SHIPPING_ADDRESS → reason='modify_cart'
+   *   proposed_actions ada OPEN_CART (read-only)                          → reason='view_cart'
+   *   intent='escalation'                                      → reason='escalation_clarification_retry_exceeded'
+   */
+  private deriveV2EngineReason(llmResult: unknown): string | undefined {
+    if (!llmResult || typeof llmResult !== 'object') return undefined;
+    const r = llmResult as Record<string, unknown>;
+
+    // ── V2EngineOutput path (v2-engine/schema.ts) ──
+    if ('proposed_actions' in r && Array.isArray(r.proposed_actions)) {
+      const actions = r.proposed_actions as Array<{ action_type: string; requires_validation?: boolean }>;
+      const hasMutation = actions.some((a) =>
+        ['ADD_TO_CART', 'REMOVE_FROM_CART', 'UPDATE_CART_QUANTITY', 'UPDATE_SHIPPING_ADDRESS'].includes(a.action_type)
+      );
+      const hasOpenCart = actions.some((a) => a.action_type === 'OPEN_CART');
+
+      // escalation + mutation: escalation takes precedence (handoff, bukan cart)
+      if (r.intent === 'escalation') {
+        if (hasMutation) {
+          return 'escalation_clarification_retry_exceeded';
+        }
+      }
+      if (hasMutation) {
+        return 'modify_cart';
+      }
+      // OPEN_CART is read-only — use separate 'view_cart' reason so the
+      // delivery layer shows a cart summary WITHOUT the misleading
+      // cartOpsExecuted=0 metadata. This is a different semantic from
+      // modify_cart (mutation happened) — customer is just viewing.
+      if (hasOpenCart && !hasMutation) {
+        return 'view_cart';
+      }
+      if (r.intent === 'escalation' && !hasMutation) {
+        return 'escalation_clarification_retry_exceeded';
+      }
+    }
+
+    return undefined;
+  }
+
+  /**
+   * WIRE-V2ENGINE-PRODUCT-LOOKUP:
+   * Derive `source` + product metadata from V2EngineOutput entities/proposed_actions
+   * agar structured-message.mapper.ts bisa assign messageType product / product_list.
+   *
+   * Duck-typed sama seperti deriveV2EngineReason: cek `'proposed_actions' in r` dulu.
+   * Jika result adalah InterpreterResultV2 (tidak punya proposed_actions) → return undefined
+   * (inert untuk jalur lama reasoning.ts).
+   *
+   * REUSE: productService.searchProducts (sama yang dipakai tryProduct di fallback.service.ts:275)
+   * dan productService.listActiveProducts (sama yang dipakai tryCatalog di fallback.service.ts:239).
+   * JANGAN tulis SQL/query baru.
+   *
+   * Returns:
+   *   - { source: ResponseSource.PRODUCT, metadata: {matchedNames, productIds, matchedPrices} }
+   *     ketika entity type='product' berhasil resolve ke 1+ produk di DB.
+   *   - { source: ResponseSource.CATALOG, metadata: {items, productCount} }
+   *     ketika proposed_actions ada SHOW_RELATED_PRODUCTS/OPEN_CATALOG & tidak ada product entity spesifik.
+   *   - undefined ketika 0 entity product resolve (nama tidak ketemu di DB) — JANGAN hallucinate.
+   */
+  private async deriveV2EngineProductSource(
+    llmResult: unknown,
+    storeId: string,
+  ): Promise<{ source: ResponseSource; metadata: Record<string, unknown> } | undefined> {
+    if (!llmResult || typeof llmResult !== 'object') return undefined;
+    const r = llmResult as Record<string, unknown>;
+
+    // Duck-type: hanya V2EngineOutput punya proposed_actions. InterpreterResultV2 → inert.
+    if (!('proposed_actions' in r && Array.isArray(r.proposed_actions))) return undefined;
+
+    const entities = Array.isArray(r.entities) ? (r.entities as Array<Record<string, unknown>>) : [];
+
+    // ── PRODUCT source: resolve entities type='product' via productService.searchProducts ──
+    const productEntities = entities.filter(
+      (e) => e && typeof e === 'object' && e.type === 'product' && typeof e.value === 'string' && e.value.trim().length > 0,
+    );
+
+    if (productEntities.length > 0) {
+      const matchedNames: string[] = [];
+      const productIds: string[] = [];
+      const matchedPrices: number[] = [];
+
+      for (const entity of productEntities) {
+        const name = entity.value as string;
+        try {
+          // REUSE: productService.searchProducts — sama fungsi yang dipakai tryProduct (fallback.service.ts:275)
+          const results = await productService.searchProducts(storeId, name);
+          if (results.length > 0) {
+            // Take top match — konsisten dengan tryProduct high-confidence single match pattern
+            const p = results[0];
+            matchedNames.push(p.name);
+            productIds.push(p.id);
+            matchedPrices.push(p.price);
+          }
+        } catch {
+          // JANGAN crash — skip entity ini, lanjut ke entity berikutnya
+        }
+      }
+
+      // 0 produk resolved → JANGAN hallucinate, biarkan jatuh ke text biasa
+      if (matchedNames.length === 0) return undefined;
+
+      // 1 produk → PRODUCT (single); 2+ → PRODUCT (product_list)
+      // classifyStructured membaca matchedNames.length untuk membedakan.
+      return {
+        source: ResponseSource.PRODUCT,
+        metadata: { matchedNames, productIds, matchedPrices },
+      };
+    }
+
+    // ── CATALOG source: SHOW_RELATED_PRODUCTS / OPEN_CATALOG tanpa product entity spesifik ──
+    const actions = r.proposed_actions as Array<Record<string, unknown>>;
+    const hasCatalogAction = actions.some(
+      (a) => a.action_type === 'SHOW_RELATED_PRODUCTS' || a.action_type === 'OPEN_CATALOG',
+    );
+
+    if (hasCatalogAction) {
+      try {
+        // REUSE: productService.listActiveProducts — sama fungsi yang dipakai tryCatalog (fallback.service.ts:239)
+        const products = await productService.listActiveProducts(storeId);
+        if (products.length === 0) return undefined;
+
+        const items = products.map((p) => ({
+          id: p.id,
+          name: p.name,
+          price: p.price,
+        }));
+
+        return {
+          source: ResponseSource.CATALOG,
+          metadata: { items, productCount: products.length },
+        };
+      } catch {
+        return undefined;
+      }
+    }
+
+    return undefined;
+  }
+
+  /**
+   * WIRE-V2ENGINE-QUICK-REPLY:
+   * Derive `metadata.reason = 'clarification_asked'` untuk quick_reply messageType.
+   *
+   * Duck-typed sama seperti deriveV2EngineReason / deriveV2EngineProductSource:
+   * cek `'proposed_actions' in r` dulu — InterpreterResultV2 → undefined (inert).
+   *
+   * SAFE OPTIONS SOURCE: hanya dari canonicalConversationStateService.getV1PendingClarification
+   * (DB state / canonical boundary) — SAMA FUNGSI yang dipakai fetchClarificationOptions
+   * di structured-message.mapper.ts. JANGAN dari LLM entities (anti-hallucination).
+   *
+   * Rules:
+   * - needs_clarification=true & ADA active pending dengan options → return {reason, question, options}
+   * - needs_clarification=true & TIDAK ADA pending/options di DB → return undefined (text fallback)
+   * - InterpreterResultV2 (tidak punya proposed_actions) → return undefined (inert)
+   */
+  private async deriveV2EngineQuickReply(
+    llmResult: unknown,
+    storeId: string,
+    conversationId: string,
+  ): Promise<{ reason: string; question: string; options: ClarificationOption[] } | undefined> {
+    if (!llmResult || typeof llmResult !== 'object') return undefined;
+    const r = llmResult as Record<string, unknown>;
+
+    // Duck-type: hanya V2EngineOutput punya proposed_actions
+    if (!('proposed_actions' in r && Array.isArray(r.proposed_actions))) return undefined;
+
+    // Cek needs_clarification flag (V2EngineOutput field)
+    if (r.needs_clarification !== true) return undefined;
+
+    // REUSE: canonicalConversationStateService.getV1PendingClarification — SAMA FUNGSI yang
+    // dipakai fetchClarificationOptions di structured-message.mapper.ts:225
+    // Source: canonical workspace_v2.pendings (DB state, BUKAN LLM entities).
+    let pending: PendingClarification | null = null;
+    try {
+      pending = await canonicalConversationStateService.getV1PendingClarification(conversationId);
+    } catch {
+      return undefined; // JANGAN crash — biarkan jatuh ke text
+    }
+
+    // Hanya produce quick_reply JIKA ada options autorisatif dari DB state
+    if (!pending || !pending.options || pending.options.length === 0) {
+      return undefined; // tidak ada sumber options aman → text (LEBIH AMAN)
+    }
+
+    // question: pakai clarification_question jika ada, fallback ke reply_text
+    const question =
+      (typeof r.clarification_question === 'string' && r.clarification_question.length > 0)
+        ? r.clarification_question
+        : (typeof r.reply_text === 'string' && r.reply_text.length > 0)
+          ? r.reply_text
+          : '';
+
+    return {
+      reason: 'clarification_asked',
+      question,
+      options: pending.options,
     };
   }
 

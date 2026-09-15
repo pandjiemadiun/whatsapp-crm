@@ -1538,3 +1538,52 @@ Alasan:
 
 Siapa yang setuju: owner (Panji) — SMTP key rotation + test email request; canary
 verification gate disetujui via UNIT6-B task brief.
+
+### 14 Sep 2026 — v2-rewrite ACTIVE untuk semua toko; reasoning.ts deprecated (tidak dipanggil)
+
+Konteks:
+UNIT6-B (9 Sep) menutup canary verification gate — bukti eksekusi nyata jalur
+v2 mapper → CartMutation. Seluruh toko di sistem adalah data dummy/test (lihat
+DEFERRED-WORK-TRACKER #29), tidak ada merchant produksi/asli. Karena seluruh data
+dummy, **P5 (cutover semua toko ke engine v2 'active') dilakukan lebih cepat dari
+rencana Fase 1→Fase 2** di contract §7 — syarat Fase 2 (30 percakapan customer asli)
+tidak berlaku karena tidak ada merchant asli yang bisa dilayani.
+
+Keputusan:
+1. **v2-rewrite ACTIVE untuk semua toko**, mulai 14 Sep 2026:
+   `chatEngine.v2RewriteMode='active'` diterapkan global. Setiap
+   `processCustomerMessage` → active path:
+   `callV2Engine → normalizeV2Output → §5 execute (proposed_actions →
+   mapV2ActionsToCartOps → executeWaCartMutation) → §6 safeEnrichV2Reply →
+   buildResult` (`engine='v2-active'`). L1 cache tier-chain (11-tier keyword) untuk
+   simple message **TIDAK** lagi dipakai di mode active — trade-off: 1 LLM call/message
+   termasuk greeting sederhana, demi konsistensi single-source. v1
+   (`interpreter.ts`) retire.
+2. **reasoning.ts (v2-lama) MASIH ADA di repo tapi TIDAK DIPANGGIL** oleh active path.
+   `src/services/chat/reasoning.ts` (legacy `InterpreterResultV2` / acts-based tier
+   chain) tidak lagi di-import oleh `conversation.service.ts`. Dihapus permanen setelah
+   observasi beberapa hari tanpa insiden (lihat DEFERRED-WORK-TRACKER #40).
+3. **mapV2ActionsToCartOps anti-hallucination fix (VERIFY-MAPPER)**: untuk
+   action_types dalam *internal* mutation set (ADD_TO_CART / REMOVE_FROM_CART /
+   UPDATE_CART_QUANTITY), mapper **FORCES** requires_validation=true dan
+   **MENGABAIKAN** flag yang dikirim LLM — `requires_validation` dari LLM hanya relevan
+   untuk read-only action types (OPEN_CART, dst). Regression:
+   `map-actions-to-cart-ops.test.ts` **9/9**; golden `Case P6-5/P6` (ADD_TO_CART dengan
+   requires_validation:false yang disimulasikan "LLM" — STILL executes → OrderItem
+   persisted, DB price 12.000, tidak di-skip).
+4. **regression gate**: `test:chat` 73/73, `test:golden` 35/35, `test:structured` 6/6
+   (payment) + 5/5 (cancel/qty/shipping), `test:payment` 6/6 (isolated), `tsc=0`,
+   `build=0`, DB bersih (store-golden-test / test-wa-act-v2-store / test-wa-pay-v2-store
+   = 0 rows).
+
+Alasan:
+- Seluruh toko dummy → tidak ada merchant riil yang terpengaruh langsung oleh cutover;
+  full regression suite berfungsi sebagai pengganti canary Fase 2.
+- reasoning.ts dipertahankan (bukan langsung dihapus) demi rollback cepat bila
+  observasi menemukan regresi. mapV2ActionsToCartOps dipaksakan *tidak percaya
+  buta* ke LLM karena aksi mutasi (keranjang) adalah keputusan kritis yang tidak
+  boleh tergantung pada field boolean yang bisa salah/hallucinated oleh LLM.
+
+Siapa yang setuju: owner (Panji) — cutover ke active untuk semua toko disetujui
+berdasarkan UNIT6-B canary verification gate (9 Sep 2026) + fakta seluruh toko dummy
+(lihat PROJECT-CONTRACT §7 amandemen 14 Sep 2026).
