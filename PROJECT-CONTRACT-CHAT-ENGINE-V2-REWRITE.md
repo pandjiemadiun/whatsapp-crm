@@ -1,6 +1,6 @@
  PROJECT-CONTRACT-CHAT-ENGINE-V2-REWRITE.md
 
-**Status:** DRAFT — wajib approval eksplisit sebelum implementasi apa pun.
+**Status:** P0-P5 SELESAI DIEKSEKUSI (14 Sep 2026, lihat amandemen §7). P6 (optimasi RAG/cache) belum mulai.
 **Scope:** Penggantian TOTAL conversation engine (v1 interpreter.ts + v2 reasoning.ts
 dual-path + fallback.service.ts 13-tier keyword chain) dengan SATU engine LLM-first.
 **Basis:** Mandat owner 4 Sep 2026 — token bebas, tidak ada batasan hemat sampai
@@ -204,8 +204,8 @@ status "representatif produksi".
 > telah dilakukan — lebih cepat dari rencana Fase 1→Fase 2 di atas.** Syarat Fase 2
 > (30 percakapan customer asli) tidak berlaku karena tidak ada merchant asli yang bisa
 > dilayani; full regression suite dijalankan sebagai pengganti canary Fase 2:
-> `test:chat` 73/73, `test:golden` 35/35, `test:structured` 6/6 (payment) + 5/5
-> (cancel/qty/shipping), `tsc=0`, `build=0`, DB bersih (store-golden-test /
+> `test:chat` 73/73, `test:golden` 35/35, `wa-payment-v2-rewrite-e2e.test.ts` (6/6) + `wa-cancel-qty-shipping-v2-active-e2e.test.ts` (5/5),
+> `tsc=0`, `build=0`, DB bersih (store-golden-test /
 > test-wa-act-v2-store / test-wa-pay-v2-store = 0 rows). `chatEngine.v2RewriteMode='active'`
 > sekarang global default — semua `processCustomerMessage` ke active path
 > (`callV2Engine → normalizeV2Output → §5 execute (proposed_actions →

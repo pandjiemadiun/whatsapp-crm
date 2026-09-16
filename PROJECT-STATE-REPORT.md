@@ -31,7 +31,7 @@ QloBot adalah **AI WhatsApp commerce engine** yang berevolusi dari "bot WhatsApp
 milik merchant, Conversation Engine sebagai otak, commerce domain sebagai sumber kebenaran.
 Dua kelas pengguna:
 
-- **Merchant / toko** (canary: `store-f7140b5c` — Depot Kinasih) — mengelola katalog, order, dashboard, takeover chat ke human.
+- **Merchant / toko** (canary chat-engine: `store-a3cd7205` — Bengkel Didik, diganti dari `store-f7140b5c` sejak `PROJECT-CONTRACT-CHAT-ENGINE-V2-REWRITE.md` §7.2, 4 Sep 2026) — mengelola katalog, order, dashboard, takeover chat ke human.
 - **Customer** — chat via WhatsApp (Fonnte/GOWA) atau Web Chatbox (PWA di `qlobot.web.id`).
 
 ### 1.2 Stack teknologi (versi NYATA dari package.json)
@@ -167,7 +167,7 @@ Verifikasi file:line: `webhooks.ts:103/262`, `conversation.service.ts:62`, `acti
 > full regression suite. `reasoning.ts` (v2-lama) tidak lagi di-import oleh active path,
 > menunggu observasi beberapa hari sebelum dihapus permanen (DEFERRED-WORK-TRACKER #40).
 > regression gate terkini: `test:chat` **73/73**, `test:golden` **35/35**,
-> `test:structured` **6/6** (payment) + **5/5** (cancel/qty/shipping), `tsc=0`,
+> `wa-payment-v2-rewrite-e2e.test.ts` (6/6) + `wa-cancel-qty-shipping-v2-active-e2e.test.ts` (5/5), `tsc=0`,
 > `build=0`, DB bersih (store-golden-test / test-wa-act-v2-store / test-wa-pay-v2-store
 > = 0 rows). `mapV2ActionsToCartOps` tidak lagi mempercayai `requires_validation` LLM
 > untuk aksi mutasi (anti-hallucination fix, lihat RAILS.md §6 14 Sep).
