@@ -1539,7 +1539,7 @@ Alasan:
 Siapa yang setuju: owner (Panji) — SMTP key rotation + test email request; canary
 verification gate disetujui via UNIT6-B task brief.
 
-### [RETROAKTIF] 15 Sep 2026 — v2-rewrite rekonstraksi 10–14 Sep: 14 kejadian, 0 commit intermediate (bundled di `eac743d`)
+### [RETROAKTIF] 10–14 Sep 2026 — v2-rewrite rekonstraksi: 14 kejadian, 0 commit intermediate (bundled di `eac743d`)
 
 **[LOG RETROAKTIF — commit asli tidak dilaporkan real-time dengan bukti RAILS §1.2, ditutup post-hoc di `eac743d` (2026-09-15T06:41:31Z). Dua deviasi dari pola 19 Agu wajib dicatat: (1) TIDAK ADA commit intermediate di jendela 10–14 Sep — seluruh kejadian adalah *uncommitted working-tree edits* yang akhirnya dibundel menjadi SATU commit `eac743d` (bukan satu commit per event seperti P6/P8 19 Agu); (2) perbedaan tanggal 14→15 Sep murni karena sesi kerja berlangsung lintas tengah malam UTC (metadata sesi owner dibaca 14 Sep 2026 11:56Z, sedangkan `git commit` `eac743d` terjadi ketika sesi sudah melintasi midnite UTC) — bukan bug jam.]**
 
