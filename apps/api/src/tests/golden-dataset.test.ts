@@ -1155,10 +1155,29 @@ test('Case G2-D.8: clarification delivered via reply_text + history; turn-2 EXEC
     // NOT from the LLM payload (ADD_TO_CART here omits price). Beras/woltel
     // prices confirmed straight from BASE_PRODUCTS (golden-dataset.test.ts:92-96):
     // beras=12000, woltel=10000.
-    // NOTE: this pins DB-wiring only — it does NOT prove a real LLM maps "iya"
-    // -> ADD_TO_CART (mockGenerate is a fixed stub). See G2-D.8-INVARIANT
-    // (Part 2) for the real buildLLMContext prompt-invariant guard, and the
-    // Part 3 real-LLM one-off for end-to-end (no mock) verification.
+    // ── P3b SAFETY (16 Sep 2026) ─────────────────────────────────────────
+    // REAL-LLM VERIFICATION (unmocked processCustomerMessage, seeded with the
+    // EXACT G2-D.8 T1 "Mau pesan beras atau woltel Kak?" + T2 "iya", 5 verified
+    // iterations): the live model NEVER emits ADD_TO_CART beras + ADD_TO_CART
+    // woltel for an ambiguous "iya". Observed T2 outputs:
+    //   - GroqNew (chat_primary, openai/gpt-oss-20b @ api.groq.com): HTTP 200
+    //     {intent:clarification, proposed_actions:[{action_type:NONE}]} (content
+    //     sha256 eb5c8b2a…) OR HTTP 400 json_validate_failed (sha256 ab3f4794…);
+    //   - on 400, dynamic fallback LLM7.io (codestral-latest @ api.llm7.io,
+    //     config model "default") → HTTP 200 {intent:product_inquiry,
+    //     proposed_actions:[{action_type:SHOW_RELATED_PRODUCTS, payload:{product:"beras"}}]}
+    //     (content sha256 df8fe943…, envelope sha256 4ffb03e3…).
+    //   DB OrderItem was EMPTY in every iteration (no cart mutation). The
+    //   model's own reasoning (GroqNew-200 path, verbatim): "...Customer replied
+    //   'iya'… We can't assume a variant… ambiguous… We should ask clarification."
+    // This canned T2 stub (ADD_TO_CART beras + woltel) is therefore a HYPOTHETICAL
+    // valid-LLM output used ONLY to exercise the CartAuthority pipeline (price
+    // snapshot from DB via Product.price at add-time, confirmedItems sync) — it
+    // does NOT represent observed real-model behavior for this scenario. Production
+    // behavior is the SAFE one (clarify / re-list products, never guess into a
+    // cart). Safety guard: see Case P3b-INVARIANT below. Full evidence: RAILS §6
+    // "16 Sep 2026 — P3b real-LLM safety: ambiguous 'iya' never mutates cart".
+    // ─────────────────────────────────────────────────────────────────────────
     const berasLine = cart.find((i: any) => i.productName === 'beras');
     const woltelLine = cart.find((i: any) => i.productName === 'woltel');
     assert.equal(berasLine?.unitPrice, 12000, 'beras unitPrice must equal DB fixture price');
@@ -1249,6 +1268,102 @@ test('Case G2-D.8-INVARIANT: real buildLLMContext T2 prompt retains T1 clarifica
     assert.equal(llmCalls - llmCallsBefore, 0, 'T2 buildLLMContext must make NO LLM call (pure sync)');
   } finally {
     await setStoreEngine(STORE_ID, 'v2');
+    await prisma.orderItem.deleteMany({ where: { order: { conversationId: convId } } }).catch(() => {});
+    await prisma.order.deleteMany({ where: { conversationId: convId } }).catch(() => {});
+    await prisma.conversation.delete({ where: { id: convId } }).catch(() => {});
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// P3b-INVARIANT — Regression guard: an ambiguous confirmation ("iya") with NO
+// variant named must NEVER silently mutate the cart, even though T1 just
+// offered beras + woltel as two options.
+//
+// P3b REAL-LLM finding (16 Sep 2026, 5 verified iterations, unmocked
+// processCustomerMessage): seeded with the EXACT G2-D.8 T1 ("Mau pesan beras
+// atau woltel Kak?") and T2 "iya", the live model does NOT emit ADD_TO_CART.
+// Observed T2 outputs: clarification/{NONE} (GroqNew 200, content sha256
+// eb5c8b2a…) or product_inquiry/SHOW_RELATED_PRODUCTS{beras} (LLM7.io 200 on
+// GroqNew 400, content sha256 df8fe943…, envelope 4ffb03e3…). DB OrderItem was
+// EMPTY in every iteration (no cart mutation). The model's own reasoning
+// (verbatim): "...Customer replied 'iya'… We can't assume a variant… ambiguous…
+// We should ask clarification."
+//
+// This guard makes that SAFE behavior PERMANENT: the canned T2 stub here is the
+// real-observed ambiguous-iya pattern (NOT add_to_cart). If the mapper/prompt is
+// ever loosened so this response starts landing a cart line, this test FAILS —
+// exactly the risk owner wants blocked long-term. (Owner decision 16 Sep 2026:
+// do NOT build single-variant auto-resolve; the model's conservative refusal to
+// guess is intentional, not a TODO — see RAILS §6 P3b.)
+//
+// Contrast with Case G2-D.8: there T2 IS canned ADD_TO_CART(beras+woltel) and the
+// cart MUST be non-empty. Here T2 is the real ambiguous-iya pattern and the cart
+// MUST stay empty.
+// ─────────────────────────────────────────────────────────────────────────────
+test('Case P3b-INVARIANT: ambiguous "iya" (no variant named) → real-LLM pattern (product_inquiry/SHOW_RELATED) leaves cart empty (no silent mutation)', async () => {
+  const convId = 'conv-p3b-invariant';
+  await createConv(convId, 'cust-p3b-inv');
+  await setStoreEngine(STORE_ID, 'v2');
+  try {
+    // Turn 1 — identical canned clarification as G2-D.8: seeds persisted history
+    // offering beras + woltel. Seeds ONLY; real LLM is NOT called (mockGenerate).
+    cannedContent = cannedV2Output({
+      intent: 'clarification',
+      confidence: 0.85,
+      needs_clarification: true,
+      reply_text: 'Mau pesan beras atau woltel Kak?',
+      uncertainty_signals: [{ type: 'ambiguous_entity', description: 'pelanggan belum spesifik' }],
+    });
+    const { llmCalls: t1Calls } = await processMsg(convId, 'cust-p3b-inv', 'rekomendasi apa ya?');
+    assert.equal(t1Calls, 1, 'T1 = 1 canned LLM call (clarification setup, active mode)');
+
+    // Turn 2 — "iya". Canned stub = the REAL-observed ambiguous-iya response
+    // (LLM7.io fallback path, content sha256 df8fe943…): product_inquiry +
+    // SHOW_RELATED_PRODUCTS{beras} — a DISPLAY action, NOT an add. The model
+    // parsed "iya" as an `other` entity (confidence 0.8) and surfaced a product
+    // list instead of committing a variant.
+    cannedContent = cannedV2Output({
+      intent: 'product_inquiry',
+      confidence: 0.75,
+      entities: [{ type: 'other', value: 'iya', confidence: 0.8 }],
+      proposed_actions: [
+        {
+          action_type: 'SHOW_RELATED_PRODUCTS',
+          payload: { product: 'beras' },
+          confidence: 0.75,
+          requires_validation: false,
+        },
+      ],
+      reply_text: 'Oke, mau pesan beras ya! Ada beras lokal atau beras import yang tersedia.',
+      needs_clarification: false,
+    });
+    const { result: r2, llmCalls: t2Calls } = await processMsg(convId, 'cust-p3b-inv', 'iya');
+    assert.ok(r2, 'turn 2 must return a response');
+    assert.equal(t2Calls, 1, 'turn 2 = 1 canned LLM call (active mode)');
+    assert.equal(r2!.metadata.engine, 'v2-active', 'turn 2 must run V2 active engine');
+
+    // ── Guard assertions ─────────────────────────────────────────────────
+    // (1) The ambiguous-iya response MUST NOT be classified as add_to_cart.
+    assert.notEqual(r2!.metadata.intent, 'add_to_cart', 'ambiguous "iya" (no variant) must NOT resolve to add_to_cart');
+
+    // (2) The reply MUST NOT falsely claim an add succeeded (no add-claim phrasing).
+    assert.ok(
+      !r2!.message.content.includes('ditambahkan ke keranjang'),
+      'reply must NOT falsely claim an item was added to the cart for an ambiguous confirmation',
+    );
+
+    // (3) THE decisive guard: NO cart mutation — zero OrderItem + zero Order.
+    const items = await draftOrderItems(convId);
+    assert.equal(items.length, 0, 'P3b-INVARIANT: ambiguous "iya" must leave the cart empty (0 OrderItem)');
+    const order = await prisma.order.findFirst({ where: { conversationId: convId } });
+    assert.equal(order, null, 'P3b-INVARIANT: ambiguous "iya" must NOT create an Order');
+  } finally {
+    await setStoreEngine(STORE_ID, 'v2');
+    // Child rows first (FK RESTRICT: conversation_history/conversation_context
+    // reference conversations) so the conversation delete itself succeeds —
+    // no transient leak, clean even on a filtered single-test run.
+    await prisma.conversationHistory.deleteMany({ where: { conversationId: convId } }).catch(() => {});
+    await prisma.conversationContext.deleteMany({ where: { conversationId: convId } }).catch(() => {});
     await prisma.orderItem.deleteMany({ where: { order: { conversationId: convId } } }).catch(() => {});
     await prisma.order.deleteMany({ where: { conversationId: convId } }).catch(() => {});
     await prisma.conversation.delete({ where: { id: convId } }).catch(() => {});

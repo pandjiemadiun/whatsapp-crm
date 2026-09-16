@@ -1709,3 +1709,62 @@ Siapa yang setuju: owner (Panji) — berdasarkan output canonical npm run
 + `git status`/`git diff`/`grep`/`wc -l` yang dijalankan dari nol pada
 working directory yang sama (pwd=/home/ubuntu/garuda, HEAD 4ac8a9e),
 tanpa perubahan kode apa pun selama re-verify.
+
+### 16 Sep 2026 — P3b real-LLM safety: ambiguous "iya" never mutates cart (G2-D.8 vs live LLM)
+Konteks: G2-D.8 (golden-dataset.test.ts) mengasumsikan bahwa pada skenario T1
+bot bertanya "Mau pesan beras atau woltel Kak?" dan customer membalas "iya", LLM
+akan mengeluarkan ADD_TO_CART beras + ADD_TO_CART woltel → keranjang terisi
+beras(12000) + woltel(10000). Asumsi ini dipakai di Case G2-D.8 (canned stub) dan
+v1-resolver-cartauthority.test.ts Case P9 EXECUTE. Namun asumsi itu TIDAK pernah
+diverifikasi terhadap model asli.
+Temuan (P3b real-LLM one-off, 16 Sep 2026, 5 iterasi terverifikasi, UNMOKED
+processCustomerMessage; seed T1 "Mau pesan beras atau woltel Kak?" + T2 "iya"):
+model asli TIDAK pernah mengeluarkan ADD_TO_CART untuk "iya" ambigu. Perilaku
+nyata:
+  - GroqNew (chat_primary, openai/gpt-oss-20b @ api.groq.com; dynamic provider
+    dari ai_provider_configs, llm.useDynamicProviders=true — bukan singleton
+    groqAdapter): HTTP 200 {intent:clarification, proposed_actions:[{action_type:NONE}],
+    reply:"Baik, apakah Kakak ingin pesan beras atau woltel Kak?"} (content sha256
+    eb5c8b2a43c7c0f61458675858f1edf5f6f642476967cb3d406785aa1d44342) ATAU
+    HTTP 400 json_validate_failed (sha256 ab3f4794fa5141904338eedce1aaf1f2a8a29c8719308084059dc9c518f94374;
+    deterministic sebagai *error response*, non-deterministic apakah 400 vs 200,
+    karena sampling temperature model).
+  - Pada 400, fallback dinamis chat_primary berikutnya — LLM7.io (codestral-latest
+    @ api.llm7.io, config model "default") — menjawab HTTP 200 {intent:product_inquiry,
+    proposed_actions:[{action_type:SHOW_RELATED_PRODUCTS, payload:{product:"beras"}}],
+    entities:[{type:"other",value:"iya",confidence:0.8}],
+    reply_text:"Oke, mau pesan beras ya! Ada beras lokal atau beras import
+    yang tersedia."} (content sha256 df8fe943377e7d6368c69e169d5569968fdac9ecc2c1af5c8daba83057c72bc6,
+    envelope sha256 4ffb03e385392329c6b0e7c030a23b4673155f0411c7aadff37a9b1eddda7f25).
+  - DB OrderItem KOSONG di SELURUH iterasi (tidak ada cart mutation).
+  - Reasoning model (GroqNew-200 path, verbatim dari response body): "The last user
+    message: 'iya'. ... So the customer said 'iya' meaning 'yes' but not specifying
+    which. We can't assume a variant. ... We should ask clarification: 'Baik, apakah
+    Kakak ingin pesan beras atau woltel?'" — model mempertimbangkan variant-confirmation
+    rule, lalu MENOLAK (tidak ada variant yang dinamai).
+Bukan bug produksi: perilaku produksi AMAN (clarify / re-list ke produk, TIDAK
+pernah menebak ke keranjang). Gap = golden test berisi asumsi berlebih, bukan bug
+production.
+Keputusan (owner Pandjie, 16 Sep 2026):
+- (1) Pertahankan G2-D.8 canned ADD_TO_CART sebagai fixture mekanisme CartAuthority
+  (price snapshot dari DB Product.price, confirmedItems sync) — perkuat comment di
+  golden-dataset.test.ts di atas (Part 1, commit ini) agar menyatakan eksplisit
+  bahwa ini hipotetis, bukan perilaku yang diamati.
+- (2) Tambahkan guard permanen Case P3b-INVARIANT (Part 2, commit ini) — akan
+  FAILURE bila mapper/prompt pernah loat auto-add pada "iya" ambigu (canned = pola
+  product_inquiry/SHOW_RELATED_PRODUCTS yang diamati; assert 0 OrderItem, 0 Order,
+  reply tanpa klaim "ditambahkan ke keranjang").
+- (3) TIDAK build single-variant auto-resolve — kehati-hartian model untuk clarify
+  adalah perilaku yang disengaja, bukan TODO. Conservative refusal to guess tetap
+  aturan.
+Bukti mentah (run-5, 16 Sep 2026 10:53:01Z–10:53:12Z; date -u bounds terukur;
+env-file=.env, tsx): /tmp/p3b_capture2.ts (full-body logging + class-prototype
+wrapper, `this` instance-bound); envelopes persisted /tmp/p3b_fetch_0.json (groq
+400) + /tmp/p3b_fetch_1.json (llm7 200); DB recount post-cleanup = 0 untuk semua
+tabel (order_items, orders, conversations, stores, products, conversation_history,
+v2_shadow_logs, conversation_context) via psql mandiri. Repo bersih (hanya 2
+untracked pre-existing reset-store-password.*). Regression gate sebelum commit:
+golden 39/39 + chat 422/422 + structured 118/118.
+Siapa yang setuju: owner (Pandjie) — keputusan (a) keep G2-D.8 canned ADD_TO_CART
+sebagai fixture mekanisme + (b) tidak build single-variant auto-resolve, pada task
+"push P0-P2, then ONE precise P3b" 16 Sep 2026.
