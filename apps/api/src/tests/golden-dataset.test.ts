@@ -1370,6 +1370,73 @@ test('Case P3b-INVARIANT: ambiguous "iya" (no variant named) → real-LLM patter
   }
 });
 
+// ── P3b-INVARIANT (b): the OTHER real-observed ambiguous-iya pattern — the
+// GroqNew (openai/gpt-oss-20b) HTTP-200 "clarification" path (content sha256
+// eb5c8b2a…, envelope sha256 1dbbad1e…). intent=clarification,
+// proposed_actions=[{action_type:"NONE"}], reply re-asks rather than adding.
+// Same invariant as (a): an ambiguous "iya" with no variant named must NEVER
+// silently mutate the cart. Full evidence: RAILS §6 P3b (16 Sep 2026).
+// ─────────────────────────────────────────────────────────────────────────────
+test('Case P3b-INVARIANT: (b) ambiguous "iya" (no variant named) → real-LLM clarification/{NONE} pattern leaves cart empty (no silent mutation)', async () => {
+  const convId = 'conv-p3b-inv-b';
+  await createConv(convId, 'cust-p3b-inv-b');
+  await setStoreEngine(STORE_ID, 'v2');
+  try {
+    // Turn 1 — identical to (a): seeds persisted history offering beras + woltel.
+    cannedContent = cannedV2Output({
+      intent: 'clarification',
+      confidence: 0.85,
+      needs_clarification: true,
+      reply_text: 'Mau pesan beras atau woltel Kak?',
+      uncertainty_signals: [{ type: 'ambiguous_entity', description: 'pelanggan belum spesifik' }],
+    });
+    const { llmCalls: t1Calls } = await processMsg(convId, 'cust-p3b-inv-b', 'rekomendasi apa yo?');
+    assert.equal(t1Calls, 1, 'T1 = 1 canned LLM call (clarification setup, active mode)');
+
+    // Turn 2 — "iya". Canned stub = the REAL-observed GroqNew-200 output
+    // (content sha256 eb5c8b2a…): clarification / {NONE}. The model's own
+    // reasoning (verbatim): "...Customer replied 'iya'… We can't assume a
+    // variant… ambiguous… We should ask clarification: 'Baik, apakah Kakak
+    // ingin pesan beras atau woltel?'". It re-asks; it never adds.
+    cannedContent = cannedV2Output({
+      intent: 'clarification',
+      confidence: 0.5,
+      needs_clarification: true,
+      reply_text: 'Baik, apakah Kakak ingin pesan beras atau woltel Kak?',
+      proposed_actions: [
+        { action_type: 'NONE', payload: {}, confidence: 0.0, requires_validation: false },
+      ],
+    });
+    const { result: r2, llmCalls: t2Calls } = await processMsg(convId, 'cust-p3b-inv-b', 'iya');
+    assert.ok(r2, 'turn 2 must return a response');
+    assert.equal(t2Calls, 1, 'turn 2 = 1 canned LLM call (active mode)');
+    assert.equal(r2!.metadata.engine, 'v2-active', 'turn 2 must run V2 active engine');
+
+    // ── Same invariant as (a) ────────────────────────────────────────────
+    // (1) MUST NOT resolve to add_to_cart.
+    assert.notEqual(r2!.metadata.intent, 'add_to_cart', 'ambiguous "iya" (no variant) must NOT resolve to add_to_cart');
+
+    // (2) MUST NOT falsely claim an add succeeded.
+    assert.ok(
+      !r2!.message.content.includes('ditambahkan ke keranjang'),
+      'reply must NOT falsely claim an item was added to the cart for an ambiguous confirmation',
+    );
+
+    // (3) NO cart mutation — zero OrderItem + zero Order.
+    const items = await draftOrderItems(convId);
+    assert.equal(items.length, 0, 'P3b-INVARIANT (b): ambiguous "iya" must leave the cart empty (0 OrderItem)');
+    const order = await prisma.order.findFirst({ where: { conversationId: convId } });
+    assert.equal(order, null, 'P3b-INVARIANT (b): ambiguous "iya" must NOT create an Order');
+  } finally {
+    await setStoreEngine(STORE_ID, 'v2');
+    await prisma.conversationHistory.deleteMany({ where: { conversationId: convId } }).catch(() => {});
+    await prisma.conversationContext.deleteMany({ where: { conversationId: convId } }).catch(() => {});
+    await prisma.orderItem.deleteMany({ where: { order: { conversationId: convId } } }).catch(() => {});
+    await prisma.order.deleteMany({ where: { conversationId: convId } }).catch(() => {});
+    await prisma.conversation.delete({ where: { id: convId } }).catch(() => {});
+  }
+});
+
 // ── TASK P6-5 — Golden coverage tambahan untuk fix P3/P4/P5.
 //
 // Case P6.4a/b/c di atas sudah ada, tapi mutation test (revert 1 baris fix di
