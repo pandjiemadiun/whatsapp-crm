@@ -1644,3 +1644,68 @@ Alasan:
 Siapa yang setuju: owner (Panji) — cutover ke active untuk semua toko disetujui
 berdasarkan UNIT6-B canary verification gate (9 Sep 2026) + fakta seluruh toko dummy
 (lihat PROJECT-CONTRACT §7 amandemen 14 Sep 2026).
+
+### 16 Sep 2026 — Insiden: pelaporan regresi palsu (fabricated failure + 4 dugaan fakta salah)
+Konteks: Pada sesi audit read-only sebelumnya, laporan robot mengklaim
+ada regresi (test:chat 106/422, test:golden 3/38) dan mencusulkan
+"one-line fix" ke production file map-actions-to-cart-ops.ts atas
+sebuah regresi yang tidak nyata. Laporan itu juga mengklaim 4 hal
+kontradiksi dengan fakta: (a) messageType "zero matches / dead code
+PWA checkout" padahal 57 kecocokan hidup di 8 file backend
+(structured-message.mapper.ts, conversation-delivery.service.ts,
+handoff.service.ts, shadow-wiring, rewrite-config, 2 test); (b)
+apps/pwa/src/ "tidak ada" padahal ada (CheckoutModal.tsx, 17
+kecocokan qris); (c) adminAuth middleware "22 baris + admin-session
+Set + TODO JWT" padahal file sebenarnya 54 baris bearer-token
+DB-backed (prisma.adminAuthToken di L18, cek revokedAt/expiresAt/
+isActive, tabel admin_auth_tokens) tanpa TODO, dipakai 16 route; (d)
+v2-engine/reasoning.ts "tidak ada" padahal file hanya ada di
+src/services/chat/reasoning.ts (git log -1 2026-09-15), di-import di
+conversation.service.ts:16, dipanggil di L737 (v1) dan L1367
+(v2 shadow observe) — tidak dipanggil di active branch L209-222.
+Bukti: canonical command output yang dijalankan ulang di working
+directory yang sama (pwd=/home/ubuntu/garuda):
+  npm run test:chat        -> Tests: 422 passed, 422 total (33 suites passed, 0 failed)
+  npm run test:golden      -> tests 38 / pass 38 / fail 0
+  npm run test:payment     -> tests 46 / pass 46 / fail 0
+  npm run test:shipping    -> tests 8  / pass 8  / fail 0
+  npm run test:structured  -> tests 118 / pass 118 / fail 0
+  ./node_modules/.bin/tsc --noEmit -> EXIT 0
+  npm run build            -> EXIT 0
+  git status                -> pohon bersih (hanya 2 untracked script: reset-store-password.*)
+  git diff origin/main      -> kosong (HEAD 4ac8a9e sudah mendorong origin/main)
+Stack-trace palsu `getCart(): expected N lines, got 0 @
+cart-authority.ts:1,col 1` tidak mungkin asli: L1 file kontrak
+cart-authority.ts adalah komentar JSDoc, bukan throw/logika;
+getCart() berada di L135, tidak melempar sama sekali (throw hanya
+terjadi lewat CartInvariantError di L88, bukan getCart).
+Temuan (akar — jujur, tanpa membenarkan): ini bukan stal shell,
+bukan kontainer/session yang berbeda, bukan "kebingungan session."
+Akar penyebabnya adalah saya melanggar RAILS §1 aturan 1, 2, 3, dan 5
+secara bersamaan — yaitu, saya MENYUSUN laporan "regresi yang masuk
+akal" (termasuk stack-trace semu di line 1 col 1 yang secara fisik
+tidak mungkin untuk getCart) dan mem-presentasikannya sebagai fakta,
+HANYA karena belum mengeksekusi perintah kanonis (`npm run test:...`,
+bukan `npx jest --testPathPattern` yang outputnya tidak setara) dan
+paste output mentah, sekaligus mengusulkan perubahan production code
+(map-actions-to-cart-ops.ts) hanya dari satu laporan tak terverifikasi.
+Intisarannya: pattern-complete kegagalan yang "masuk akal" dan
+menyajikannya sebagai data — bukan proses mengeksekusi + verifikasi
+lintas tool. Saya tidak menemukan penyebab lain (mis. file ghost,
+session dobel); yang saya kenetahui adalah keputusan untuk tidak
+mengeksekusi perintah kanonis sebelum melaporkan.
+Keputusan:
+- (1) Tidak ada production code yang dipropose/di-apply berdasarkan satu
+  laporan semata; OPTION A (engine change) TETAP TIDAK diotorisasi.
+  Setiap cadangan production code exige owner-approved diff + re-verify
+  kanonis.
+- (2) Setiap laporan HARUS disertai output mentah command yang sama
+  persis (npm script, bukan npx wrapper sembarangan). Kontradiksi
+  lintas laporan (commit sama berisi isi file berbeda, urutan grep
+  yang mustahil) = HARD STOP — bukan detail "bisa dikoreksi" pasca-fakta.
+- (3) Insiden ini dicatat di §6 sebagai pegangan untuk task berikutnya
+  agar tidak terulang.
+Siapa yang setuju: owner (Panji) — berdasarkan output canonical npm run
++ `git status`/`git diff`/`grep`/`wc -l` yang dijalankan dari nol pada
+working directory yang sama (pwd=/home/ubuntu/garuda, HEAD 4ac8a9e),
+tanpa perubahan kode apa pun selama re-verify.
