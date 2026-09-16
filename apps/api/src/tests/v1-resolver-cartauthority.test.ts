@@ -1,20 +1,31 @@
 /**
- * P9 — v1 Resolver EXECUTE/ROLLBACK via CartAuthority (end-to-end)
+ * P9 — v2 Resolver EXECUTE/ROLLBACK via CartAuthority (end-to-end) — ACTIVE MODE
  *
  * Runner: tsx --env-file=../../.env --test --test-force-exit src/tests/v1-resolver-cartauthority.test.ts
+ * (also part of `npm run test:golden`)
  *
- * Verifies that the v1 pending-clarification resolver (BAGIAN 2) now mutates
- * the cart through CartAuthority (OrderItem rows), NOT legacy
- * modifyCart -> extractedEntities.confirmedItems.
+ * Migrated from the obsolete v1-lama "resolver_no_llm / rollback" assertions to
+ * the V2 active path (metadata.engine === 'v2-active' + outcome/derivedReason).
+ * The LLM (llmGateway.generate) is stubbed with a schema-valid V2EngineOutput
+ * (NOT empty content) — same pattern as wa-cancel-qty-shipping-v2-active-e2e.test.ts.
  *
- *   - EXECUTE ("iya" / pilih opsi) harus menghasilkan OrderItem via CartAuthority
- *     dengan harga dari DB (bukan harga LLM).
- *   - ROLLBACK ("ga jadi") tetap no-op pada cart (snapshot v1 selalu null) —
- *     cart sebelumnya tidak berubah, perilaku identik dengan sebelum P9.
+ * IMPORTANT SCOPE NOTE (Part A): this suite stubs the LLM's RESOLVED output and
+ * verifies CartAuthority DB sync (OrderItem rows + confirmedItems + price = DB).
+ * It does NOT assert that a REAL LLM maps the pending "iya" reply to a product —
+ * that is the Part B STOP finding: buildLLMContext for the seedPending "iya"
+ * scenario emits only "Clarification aktif: Mau yang mana Kak?" (question, NO
+ * option->product mapping, NO prices) + empty history, so a real LLM cannot
+ * resolve "iya"->beras from this prompt. Part B is intentionally NOT shipped.
  *
- * Pending disemai secara manual (mirror ke canonical _compat) agar resolver
- * ter-trigger langsung — pengujian unit untuk BAGIAN 2 (generate clarification
- * adalah concern interpreter/Stage-4 terpisah).
+ *   - EXECUTE ("iya" / pilih opsi): stub emits ADD_TO_CART beras(1) + woltel(2)
+ *     -> OrderItem via CartAuthority, harga dari DB (12000 / 10000), tidak dari
+ *     LLM (payload sengaja tak bawa price -> I13 invariant terpenuhi).
+ *   - ROLLBACK ("ga jadi"): stub emits NO proposed_actions (no-op) -> keranjang
+ *     lama (brambang) tidak berubah, beras/woltel TIDAK ditambah.
+ *
+ * Pending disemai secara manual (mirror ke canonical _compat) agar
+ * buildLLMContext menset "Clarification aktif" — pengujian unit untuk BAGIAN 2
+ * (generate clarification adalah concern interpreter/Stage-4 terpisah).
  */
 
 import { test, before, after, beforeEach } from 'node:test';
@@ -27,6 +38,7 @@ import { orderService } from '../business/order.service.js';
 import { llmGateway } from '../adapters/ai/llm-gateway.js';
 import type { AIResponse, AIGenerateOptions } from '../adapters/ai/types.js';
 import type { ResponseResult } from '../domain/types.js';
+import type { V2EngineOutput } from '../services/chat/v2-engine/schema.js';
 
 const STORE_ID = 'store-v1-resolver-p9';
 
@@ -40,13 +52,53 @@ const originalGenerate = llmGateway.generate.bind(llmGateway);
 const OrderProto = Object.getPrototypeOf(orderService);
 const originalDetectDone = OrderProto.detectDoneOrdering;
 
-const mockGenerate = async (_prompt: string, _options?: AIGenerateOptions): Promise<AIResponse> => ({
-  content: '',
-  provider: 'groq',
-  model: 'test-model',
-  tokens: { input: 10, output: 10 },
-  cost: 0,
-});
+/**
+ * v2out() — minimal duplicate of the helper in
+ * wa-cancel-qty-shipping-v2-active-e2e.test.ts:48. It is NOT exported there, so
+ * it is duplicated locally here (intentionally minimal, kept in sync by eye).
+ * Schema-valid V2EngineOutput per v2-engine/schema.ts.
+ */
+function v2out(intent: string, actions: any[], reply: string): V2EngineOutput {
+  return {
+    schema_version: 'v1',
+    intent: intent as any,
+    confidence: 0.9,
+    entities: [],
+    proposed_actions: actions,
+    reply_text: reply,
+    needs_clarification: false,
+    uncertainty_signals: [],
+  };
+}
+
+/** Swap llmGateway.generate to return a canned V2EngineOutput (JSON-stringified). */
+function mockLLM(output: V2EngineOutput): void {
+  (llmGateway as any).generate = async (_prompt: string, _opts?: AIGenerateOptions): Promise<AIResponse> => ({
+    content: JSON.stringify(output),
+    provider: 'groq',
+    model: 'test-model-v2',
+    tokens: { input: 1, output: 1 },
+    cost: 0,
+  });
+}
+
+// EXECUTE ("iya"): stub resolves confirmation -> ADD_TO_CART beras(1) + woltel(2).
+// NOTE: payload omits `price` — CartAuthority resolves prices from DB (I13 invariant).
+const EXEC_OUTPUT = v2out(
+  'add_to_cart',
+  [
+    { action_type: 'ADD_TO_CART', payload: { product: 'beras', qty: 1 }, confidence: 0.95, requires_validation: true },
+    { action_type: 'ADD_TO_CART', payload: { product: 'woltel', qty: 2 }, confidence: 0.95, requires_validation: true },
+  ],
+  'iya, Kak — beras (1) dan woltel (2) ditambahkan ke keranjang.',
+);
+
+// ROLLBACK ("ga jadi"): stub emits NO proposed_actions -> active branch no-op.
+const ROLLBACK_OUTPUT = v2out(
+  'modify_cart',
+  [],
+  'Baik, tidak jadi beli ya. Apa ada yang lain Kak?',
+);
 
 async function setupStore(): Promise<void> {
   await prisma.store.upsert({
@@ -122,7 +174,7 @@ async function getOrderItems(convId: string): Promise<{ productName: string; qua
 }
 
 before(async () => {
-  (llmGateway as any).generate = mockGenerate;
+  // llmGateway.generate is stubbed per-test via mockLLM() (replaces old global mockGenerate).
   OrderProto.detectDoneOrdering = () => false;
   await cleanup();
   await setupStore();
@@ -148,9 +200,14 @@ const CONV = 'conv-p9';
 test('P9 EXECUTE: klarifikasi → "iya" → OrderItem via CartAuthority (harga DB)', async () => {
   await createConv(CONV, 'cust-p9');
   await seedPending(CONV);
+  mockLLM(EXEC_OUTPUT);
 
   const r2 = await processMsg(CONV, 'cust-p9', 'iya');
-  assert.equal(r2?.metadata?.reason, 'resolver_no_llm', 'resolver EXECUTE (0 LLM)');
+  // Migrated assertions (replace v1-lama reason==='resolver_no_llm').
+  assert.equal(r2?.metadata?.engine, 'v2-active', 'harus lewat v2 active engine');
+  assert.equal(r2?.metadata?.reason, 'modify_cart', 'derivedReason untuk ADD_TO_CART');
+  assert.equal(r2?.metadata?.outcome, 'structured', 'outcome untuk ADD_TO_CART');
+  assert.equal(r2?.metadata?.intent, 'add_to_cart');
 
   const items = await getOrderItems(CONV);
   const beras = items.find((i) => i.productName === 'beras');
@@ -167,8 +224,10 @@ test('P9 EXECUTE: klarifikasi → "iya" → OrderItem via CartAuthority (harga D
 test('P9 EXECUTE: cart readback juga sinkron ke extractedEntities.confirmedItems', async () => {
   await createConv(CONV, 'cust-p9');
   await seedPending(CONV);
+  mockLLM(EXEC_OUTPUT);
 
-  await processMsg(CONV, 'cust-p9', 'iya');
+  const r2 = await processMsg(CONV, 'cust-p9', 'iya');
+  assert.equal(r2?.metadata?.engine, 'v2-active', 'harus lewat v2 active engine');
 
   const ctx = await prisma.conversationContext.findUnique({ where: { conversationId: CONV } });
   const confirmed = (ctx as any)?.extractedEntities?.confirmedItems ?? [];
@@ -189,9 +248,14 @@ test('P9 ROLLBACK: "ga jadi" → cart tidak berubah (no-op identik, snapshot v1 
   );
 
   await seedPending(CONV);
+  mockLLM(ROLLBACK_OUTPUT);
 
   const r2 = await processMsg(CONV, 'cust-p9', 'ga jadi');
-  assert.equal(r2?.metadata?.reason, 'rollback', 'resolver ROLLBACK');
+  // Migrated assertion (replace v1-lama reason==='rollback' — a legacy-branch-only
+  // string; active mode reports outcome=structured for the no-op).
+  assert.equal(r2?.metadata?.engine, 'v2-active', 'harus lewat v2 active engine');
+  assert.equal(r2?.metadata?.outcome, 'structured', 'ga jadi no-op -> outcome structured');
+  assert.equal(r2?.metadata?.intent, 'modify_cart');
 
   const items = await getOrderItems(CONV);
   const brambang = items.find((i) => i.productName === 'brambang');
