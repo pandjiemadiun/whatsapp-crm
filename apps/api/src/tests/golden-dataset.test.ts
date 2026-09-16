@@ -79,6 +79,8 @@ import type { InterpreterResultV2 } from '../services/chat/types-v2.js';
 import { mapV2ActionsToCartOps, type SkipReason } from '../services/chat/v2-engine/map-actions-to-cart-ops.js';
 import type { V2EngineOutput } from '../services/chat/v2-engine/schema.js';
 import { fallbackService } from '../business/fallback.service.js';
+import { buildLLMContext } from '../services/chat/v2-engine/context-builder.js';
+import { loadFullHistory } from '../services/chat/v2-engine/shadow-wiring.js';
 
 // ──────────────────────────────────────────────────────────
 // Constants
@@ -1147,6 +1149,20 @@ test('Case G2-D.8: clarification delivered via reply_text + history; turn-2 EXEC
     const cart = await cartAuthority.getCart(convId);
     assert.ok(cart.some((i: any) => i.productName === 'beras'), 'beras must be in cart after EXECUTE');
     assert.ok(cart.some((i: any) => i.productName === 'woltel'), 'woltel must be in cart after EXECUTE');
+
+    // P1 (16 Sep 2026): pin CartAuthority DB-wiring — CartLine.unitPrice is the
+    // snapshot written from Product.price at ADD time (cart-authority.ts:52),
+    // NOT from the LLM payload (ADD_TO_CART here omits price). Beras/woltel
+    // prices confirmed straight from BASE_PRODUCTS (golden-dataset.test.ts:92-96):
+    // beras=12000, woltel=10000.
+    // NOTE: this pins DB-wiring only — it does NOT prove a real LLM maps "iya"
+    // -> ADD_TO_CART (mockGenerate is a fixed stub). See G2-D.8-INVARIANT
+    // (Part 2) for the real buildLLMContext prompt-invariant guard, and the
+    // Part 3 real-LLM one-off for end-to-end (no mock) verification.
+    const berasLine = cart.find((i: any) => i.productName === 'beras');
+    const woltelLine = cart.find((i: any) => i.productName === 'woltel');
+    assert.equal(berasLine?.unitPrice, 12000, 'beras unitPrice must equal DB fixture price');
+    assert.equal(woltelLine?.unitPrice, 10000, 'woltel unitPrice must equal DB fixture price');
   } finally {
     await setStoreEngine(STORE_ID, 'v2');
     await prisma.orderItem.deleteMany({ where: { order: { conversationId: convId } } }).catch(() => {});
@@ -1156,7 +1172,90 @@ test('Case G2-D.8: clarification delivered via reply_text + history; turn-2 EXEC
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TASK P6-5 — Golden coverage tambahan untuk fix P3/P4/P5.
+// G2-D.8-INVARIANT — prompt-invariant guard for the REAL buildLLMContext
+// (Part 2, 16 Sep 2026)
+//
+// Regression guard against the EXACT defect from the seedPending investigation:
+// the active path must persist the T1 clarification (offering beras + woltel)
+// to conversation_history, and buildLLMContext must surface those offered
+// options — verbatim, in PERCAKAPAN TERBARU — so the T2 follow-up ("iya")
+// reaches the LLM with option context intact.
+//
+// NO real LLM: Turn 1 uses the suite canned clarification (mockGenerate fixed
+// stub) ONLY to seed persisted history; the assertion is on the REAL
+// buildLLMContext output (pure sync — no generate() call for T2). This pins
+// the contract: history(options) -> prompt(PERCAKAPAN TERBARU retains options).
+// ─────────────────────────────────────────────────────────────────────────────
+test('Case G2-D.8-INVARIANT: real buildLLMContext T2 prompt retains T1 clarification options (beras/woltel) + question after active T1 (no LLM for T2)', async () => {
+  const convId = 'conv-g2d8-invariant';
+  await createConv(convId, 'cust-g2d8-inv');
+  await setStoreEngine(STORE_ID, 'v2');
+  try {
+    // Turn 1: canned clarification (identical stub as G2-D.8) — persisted by the
+    // active path to conversation_history via reply_text. Setup-only; no real LLM.
+    cannedContent = cannedV2Output({
+      intent: 'clarification',
+      confidence: 0.85,
+      needs_clarification: true,
+      reply_text: 'Mau pesan beras atau woltel Kak?',
+      uncertainty_signals: [{ type: 'ambiguous_entity', description: 'pelanggan belum spesifik' }],
+    });
+    const { llmCalls: t1Calls } = await processMsg(convId, 'cust-g2d8-inv', 'rekomendasi apa ya?');
+    assert.equal(t1Calls, 1, 'T1 = 1 canned LLM call (clarification setup, active mode)');
+
+    // Turn 2 prompt: built by the REAL buildLLMContext using REAL persisted
+    // history + REAL workspace + fixture-backed catalog — NO generate() call.
+    // This is the contract under guard.
+    const recentHistory = await loadFullHistory(convId);
+    const workspace = await canonicalConversationStateService.getV2Workspace(convId);
+    const storeRow = await prisma.store.findUnique({ where: { id: STORE_ID }, select: { businessCategory: true } });
+    const catalogItems = BASE_PRODUCTS.map((p) => ({ id: p.id, name: p.name, price: p.price, category: null }));
+
+    // Snapshot the module counter before the pure-sync prompt build: T2 must not
+    // invoke a real LLM (only T1's canned setup call above should have advanced it).
+    const llmCallsBefore = llmCalls;
+    const prompt = buildLLMContext({
+      recentHistory,
+      workspace,
+      customerMessage: 'iya',
+      storeId: STORE_ID,
+      businessCategory: storeRow?.businessCategory ?? null,
+      catalogItems,
+      catalogMode: 'full',
+    });
+
+    // ── Invariant assertions on the REAL prompt string ─────────────────────
+    // Core guard: the T1 clarification options (beras + woltel) must survive
+    // into PERCAKAPAN TERBARU (this is the defect context-builder silently
+    // stripped before; it must never regress).
+    const pcrIdx = prompt.indexOf('=== PERCAKAPAN TERBARU');
+    assert.ok(pcrIdx !== -1, 'prompt must contain PERCAKAPAN TERBARU section');
+    const pcrSection = prompt.slice(pcrIdx);
+    assert.ok(
+      pcrSection.includes('beras') && pcrSection.includes('woltel'),
+      'PERCAKAPAN TERBARU must retain the T1 clarification options beras + woltel',
+    );
+    // The clarification question text must be surfaced verbatim in history.
+    assert.ok(
+      pcrSection.includes('Mau pesan beras atau woltel Kak?'),
+      'PERCAKAPAN TERBARU must retain the T1 clarification question verbatim',
+    );
+    // The T2 customer follow-up ("iya") must be the PESAN SEKARANG layer.
+    assert.ok(
+      prompt.includes('=== PESAN SEKARANG ===') && prompt.includes('Customer: iya'),
+      'PESAN SEKARANG must carry the T2 customer follow-up (iya)',
+    );
+    // T2 prompt construction must make NO LLM call (buildLLMContext is pure sync).
+    assert.equal(llmCalls - llmCallsBefore, 0, 'T2 buildLLMContext must make NO LLM call (pure sync)');
+  } finally {
+    await setStoreEngine(STORE_ID, 'v2');
+    await prisma.orderItem.deleteMany({ where: { order: { conversationId: convId } } }).catch(() => {});
+    await prisma.order.deleteMany({ where: { conversationId: convId } }).catch(() => {});
+    await prisma.conversation.delete({ where: { id: convId } }).catch(() => {});
+  }
+});
+
+// ── TASK P6-5 — Golden coverage tambahan untuk fix P3/P4/P5.
 //
 // Case P6.4a/b/c di atas sudah ada, tapi mutation test (revert 1 baris fix di
 // source, lihat laporan P6-5) membuktikan ada celah yang TIDAK terdeteksi:
