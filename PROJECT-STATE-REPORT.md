@@ -2,7 +2,7 @@
 
 > **Dokumen ini dibuat untuk onboarding ke project baru (Claude/AI coding agent).**
 > Semua klaim status di bawah diverifikasi terhadap **source code, test, dan git log aktual**
-> di working tree `/home/ubuntu/garuda` pada **3 Sep 2026** (HEAD `570e65c`). Tidak ada klaim
+> di working tree `/home/ubuntu/garuda` pada **17 Sep 2026** (HEAD `a612fc5`). Tidak ada klaim
 > yang diambil mentah dari roadmap/STATUS lama tanpa cross-check ke kode.
 >
 > **ATURAN RAILS.md BERLAKU:** tidak ada kode yang diubah dalam pembuatan dokumen ini
@@ -239,7 +239,7 @@ pelajaran (jangan biarkan pekerjaan besar menggantung uncommitted) tidak hilang.
 | **Unit 3a** | `AIProviderConfig.apiKey` AES-256-GCM encryption/decryption (`encryption.ts`). Provider resolver service (`ai-provider-resolver.service.ts`) mengembalikan priority-ordered array per role | `03137dd` | **SELESAI** |
 | **Unit 3b** | `llmGateway` flag-gated primary/fallback cutover (`llm.useDynamicProviders`, default OFF). Gatekeeper/ExtractIntent deferred ke Unit 5 | `5f1feb7` | **SELESAI** |
 | **Unit 4** | Admin CRUD UI + test-connection untuk `AIProviderConfig` (`routes/admin/ai-providers.ts`, `dashboard/src/pages/admin/AIProviders.tsx`). super_admin gate, apiKey masked, live-refresh `lastTestedAt`/`lastTestResult` | `bc53d0e` + `23d61b8` | **SELESAI** |
-| **Unit 5** | Cut over ALL remaining hardcoded Groq/Gemini LLM call sites ke resolver dinamis. `llm.useDynamicProviders` flag sekarang **ON di production** (Mistral primary + SambaNova fallback) | `cced1ce` | **SELESAI** |
+| **Unit 5** | Cut over ALL remaining hardcoded Groq/Gemini LLM call sites ke resolver dinamis. `llm.useDynamicProviders` flag sekarang **ON di production** (active `chat_primary`: NVIDIA → LLM7.io → GroqNew; active `chat_fallback`: SambaNova → B.ai → Gemini → Kilo; per psql `ai_provider_configs` 17 Sep 2026) | `cced1ce` | **SELESAI** |
 | **N-1** | N-provider rotation: `resolveEffectiveProviders` kembalikan full list per role (bukan `primaryList[0]`); `generate()` di `llm-gateway.ts` + `manager.ts` iterasi penuh, skip cooldown provider, rotate ke provider berikutnya pada 429/RATE_LIMIT sebelum fallthrough ke role lain. Circuit-breaker tidak disentuh. OFF-path (flag OFF/singleton) 100% tidak berubah | `4cd0371` | **SELESAI** |
 
 **Cooldown mechanism:** `provider-cooldown.ts` — in-memory `Map`, keyed by provider name.
@@ -250,11 +250,10 @@ single-instance cukup.
 **Test results (35/35 AI-gateway suite):** `ai-gateway.test.ts` (7), `llm-gateway-dynamic.test.ts`
 B1-B7 (7), `ai-provider-resolver.service.test.ts` R1-R6 (6), `gateway-conversation-fallback.test.ts`
 (4), `manager-dynamic.test.ts` M1-M7 (7), `ai-gateway-gatekeeper.test.ts` (2),
-`gateway-integration.test.ts` (2). Plus standard regression: Chat 271/271, Golden 37/37,
+`gateway-integration.test.ts` (2). Plus standard regression: Chat 422/422, Golden 41/41,
 Structured 118/118, Payment 46/46, Shipping 8/8.
 
-**Production smoke test:** Mistral melayani chat message nyata (token counts 619 in / 85 out
-cocok interpreter logs). Token usage persisted ke `TokenUsageLog` + dashboard UI.
+**Production smoke test (historical, 2 Sep 2026):** Mistral melayani chat message nyata (token counts 619 in / 85 out cocok interpreter logs). Mistral kini inactive (`isActive=f`, priority 0, `updatedAt` 2026-09-13) — lihat psql `ai_provider_configs` untuk current active set. Token usage persisted ke `TokenUsageLog` + dashboard UI.
 
 ### 4.10 🟢 PV-P3 Magic-Paste Variant Extraction
 
@@ -595,7 +594,7 @@ Lihat §6.9 — DITUTUP, tidak diperlukan (22 Agu 2026).
 
 ## 9. CARA VERIFIKASI (untuk siapapun yang lanjutkan)
 
-> Working tree BERSIH per 3 Sep 2026 (HEAD `570e65c`). Semua cluster baru (LLM Provider
+> Working tree BERSIH per 17 Sep 2026 (HEAD `a612fc5`). Semua cluster baru (LLM Provider
 > Abstraction, PV-P3, Product CRUD consolidation, Token Usage, cleanup batch, secret rotation)
 > ter-commit & ter-push. `dist/` ter-sync (post-merge hook + manual build + revert).
 > Satu-satunya untracked: `.env` (gitignored, bukan bagian git).
@@ -603,7 +602,7 @@ Lihat §6.9 — DITUTUP, tidak diperlukan (22 Agu 2026).
 ### 9.1 Build & typecheck (dari `apps/api`)
 ```bash
 cd /home/ubuntu/garuda/apps/api
-npx tsc --noEmit          # 0 error (terverifikasi 3 Sep 2026)
+npx tsc --noEmit          # 0 error (terverifikasi 17 Sep 2026)
 npm run build             # WAJIB — generate dist/
 ```
 
@@ -649,8 +648,8 @@ npx prisma studio
 
 ### 9.5 Git state
 ```bash
-git status --short          # EXPECT: clean working tree (HEAD 570e65c)
-git log --oneline -3        # HEAD: 570e65c (docs: tracker resolve N-provider rotation #16)
+git status --short          # EXPECT: clean working tree (HEAD a612fc5)
+git log --oneline -3        # HEAD: a612fc5 (docs(DEFERRED-WORK-TRACKER): log stale finally/RESTRICT cleanup finding (G2-D.8))
 ```
 
 ### 9.6 Verifikasi klaim
@@ -760,8 +759,9 @@ wajib `npm run build` + commit `dist/`.
 ---
 
 *Laporan dibuat read-only (tidak ada kode diubah). Semua klaim diverifikasi ke source/test/git
-log working tree `/home/ubuntu/garuda` per 3 Sep 2026 (HEAD `570e65c`). Klaim yang tidak bisa
+log working tree `/home/ubuntu/garuda` per 17 Sep 2026 (HEAD `a612fc5`). Klaim yang tidak bisa
 diverifikasi mandiri ditandai [DUGAAN] atau "belum diverifikasi". INSIDEN unreported-work gap
-ada di §10 (19 Agu) dan §10.2 (21 Agu). UPDATE 3 Sep 2026: cluster LLM Provider Abstraction +
-PV-P3 + Product CRUD + Token Usage + cleanup + secret rotation seluruhnya tercatat di §4.9-§4.12,
-§6.7-§6.8, §7.1, Appendix A.*
+ada di §10 (19 Agu) dan §10.2 (21 Agu). UPDATE 17 Sep 2026: golden tests naik 39→41 (P3b-INVARIANT
+guard, commits `ae15813`/`95a3c78`); HEAD `a612fc5` (G2-D.8 decision record). Cluster LLM Provider
+Abstraction + PV-P3 + Product CRUD + Token Usage + cleanup + secret rotation seluruhnya tercatat di
+§4.9-§4.12, §6.7-§6.8, §7.1, Appendix A.*

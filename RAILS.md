@@ -100,7 +100,7 @@ riwayat chat 9 Agu untuk detail file:line):
 
 ## 3. STATUS TERKINI — RINGKAS (baca ini dulu tiap sesi baru)
 
-**Commit terakhir diketahui:** `2e64c0a` (shipping UNIT6 — PWA checkout UI ongkir + receipt)
+**Commit terakhir diketahui:** `a612fc5` (docs(DEFERRED-WORK-TRACKER): log stale finally/RESTRICT cleanup finding (G2-D.8))
 **Cek selalu:** `git log --oneline -5` dan `git status` di awal sesi —
 JANGAN percaya angka commit di file ini kalau belum di-cross-check live,
 bisa saja sudah ada sesi lain sesudah file ini terakhir ditulis.
@@ -1764,7 +1764,7 @@ wrapper, `this` instance-bound); envelopes persisted /tmp/p3b_fetch_0.json (groq
 tabel (order_items, orders, conversations, stores, products, conversation_history,
 v2_shadow_logs, conversation_context) via psql mandiri. Repo bersih (hanya 2
 untracked pre-existing reset-store-password.*). Regression gate sebelum commit:
-golden 39/39 + chat 422/422 + structured 118/118.
+golden 41/41 + chat 422/422 + structured 118/118.
 Siapa yang setuju: owner (Pandjie) — keputusan (a) keep G2-D.8 canned ADD_TO_CART
 sebagai fixture mekanisme + (b) tidak build single-variant auto-resolve, pada task
 "push P0-P2, then ONE precise P3b" 16 Sep 2026.
