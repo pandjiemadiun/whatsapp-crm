@@ -556,6 +556,7 @@ model TokenUsageLog {
   inputTokens  Int
   outputTokens Int
   costUsd      Float?
+  source       String?
   createdAt    DateTime @default(now())
 
   @@index([provider, createdAt])

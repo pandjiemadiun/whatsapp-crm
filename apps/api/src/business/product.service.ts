@@ -1086,7 +1086,7 @@ private async extractWithLLM(text: string, storeId?: string): Promise<MagicPaste
     // 2. LLM extraction (hanya untuk kasus ambigu yang gagal lewat pattern)
     const prompt = `${MAGIC_PASTE_SYSTEM_PROMPT}\n\nNOW EXTRACT THIS TEXT:\n${text}`;
     try {
-      const result = await adapters.ai.generate(prompt, { temperature: 0.1, maxTokens: 200 });
+      const result = await adapters.ai.generate(prompt, { temperature: 0.1, maxTokens: 200, source: 'magic_paste' });
       const cleaned = result.content
         .replace(/```json\s*/gi, '')
         .replace(/```\s*$/g, '')

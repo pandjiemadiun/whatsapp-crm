@@ -307,6 +307,7 @@ export class LLMGateway {
               outputTokens: response.tokens.output,
               totalTokens: response.tokens.input + response.tokens.output,
               costUsd: response.cost,
+              source: options?.source,
             } as TokenLogEntry);
 
             return response;

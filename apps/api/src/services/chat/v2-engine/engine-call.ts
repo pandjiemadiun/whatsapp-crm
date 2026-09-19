@@ -191,6 +191,7 @@ export async function callV2Engine(
         jsonMode: true,
         intent,
         conversationId: intent,
+        source: 'customer_message',
       } as AIGenerateOptions,
       intent,
     );

@@ -100,6 +100,7 @@ Schema:\n${INTERPRETER_SCHEMA}\n]` +
         jsonMode: true,
         intent: 'conversation-interpreter',
         conversationId: ctx.conversationId,
+        source: 'customer_message',
       });
 
       const parsed: Partial<InterpreterResult> = JSON.parse(extractJson(result.content));

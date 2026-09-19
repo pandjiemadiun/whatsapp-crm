@@ -11,6 +11,7 @@ export interface AIGenerateOptions {
   intent?: string;           // LLM call purpose for tracking
   conversationId?: string;   // For token usage correlation
   retryAfter?: number;       // Parsed from 429 Retry-After header
+  source?: string;           // Token usage attribution: customer_message, test_connection, magic_paste, e2e_test, admin_manual, other
 }
 
 export type IntentType =

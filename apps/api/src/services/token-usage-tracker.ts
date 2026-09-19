@@ -19,6 +19,7 @@ export interface TokenLogEntry {
   outputTokens: number;
   totalTokens: number;
   costUsd: number;
+  source?: string;
 }
 
 export interface UsageSummary {
@@ -94,6 +95,7 @@ async function persistTokenUsage(entry: TokenLogEntry): Promise<void> {
         inputTokens: entry.inputTokens,
         outputTokens: entry.outputTokens,
         costUsd: entry.costUsd,
+        source: entry.source || null,
         createdAt: new Date(entry.timestamp),
       },
     });
@@ -190,15 +192,13 @@ export function validateTimeRange(query: TimeRangeQuery): string | null {
 }
 
 /**
- * Flexible time-range aggregation from DB. Returns the same per-provider shape
- * as getUsageLastHour() for consistency, but for any range (day/week/month/historical).
+ * Flexible time-range aggregation from DB. Returns per-provider and per-source
+ * breakdowns for the requested range.
  */
-export async function queryUsage(range: TimeRangeQuery): Promise<Record<string, {
-  requests: number;
-  inputTokens: number;
-  outputTokens: number;
-  costUsd: number;
-}>> {
+export async function queryUsage(range: TimeRangeQuery): Promise<{
+  perProvider: Record<string, { requests: number; inputTokens: number; outputTokens: number; costUsd: number }>;
+  perSource: Record<string, { requests: number; inputTokens: number; outputTokens: number; costUsd: number }>;
+}> {
   const rows = await prisma.tokenUsageLog.findMany({
     where: {
       createdAt: {
@@ -208,29 +208,34 @@ export async function queryUsage(range: TimeRangeQuery): Promise<Record<string, 
     },
     select: {
       provider: true,
+      source: true,
       inputTokens: true,
       outputTokens: true,
       costUsd: true,
     },
   });
 
-  const result: Record<string, {
-    requests: number;
-    inputTokens: number;
-    outputTokens: number;
-    costUsd: number;
-  }> = {};
+  const perProvider: Record<string, { requests: number; inputTokens: number; outputTokens: number; costUsd: number }> = {};
+  const perSource: Record<string, { requests: number; inputTokens: number; outputTokens: number; costUsd: number }> = {};
 
   for (const row of rows) {
-    if (!result[row.provider]) {
-      result[row.provider] = { requests: 0, inputTokens: 0, outputTokens: 0, costUsd: 0 };
+    if (!perProvider[row.provider]) {
+      perProvider[row.provider] = { requests: 0, inputTokens: 0, outputTokens: 0, costUsd: 0 };
     }
-    const agg = result[row.provider];
-    agg.requests++;
-    agg.inputTokens += row.inputTokens;
-    agg.outputTokens += row.outputTokens;
-    agg.costUsd += row.costUsd ?? 0;
+    perProvider[row.provider].requests++;
+    perProvider[row.provider].inputTokens += row.inputTokens;
+    perProvider[row.provider].outputTokens += row.outputTokens;
+    perProvider[row.provider].costUsd += row.costUsd ?? 0;
+
+    const sourceKey = row.source || 'other';
+    if (!perSource[sourceKey]) {
+      perSource[sourceKey] = { requests: 0, inputTokens: 0, outputTokens: 0, costUsd: 0 };
+    }
+    perSource[sourceKey].requests++;
+    perSource[sourceKey].inputTokens += row.inputTokens;
+    perSource[sourceKey].outputTokens += row.outputTokens;
+    perSource[sourceKey].costUsd += row.costUsd ?? 0;
   }
 
-  return result;
+  return { perProvider, perSource };
 }

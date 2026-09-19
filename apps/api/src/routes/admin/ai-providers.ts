@@ -63,6 +63,7 @@ import { requireAdminRole } from '../../middleware/adminAuthGuard.js';
 import { AuthenticatedAdminRequest } from '../../middleware/adminAuth.js';
 import { asyncHandler } from '../../utils/asyncHandler.js';
 import { validateRequest, getValidated } from '../../middleware/validate-request.js';
+import { logTokenUsage } from '../../services/token-usage-tracker.js';
 
 const router = Router();
 // Destructive-tier: controls the platform-wide LLM. super_admin only.
@@ -210,6 +211,18 @@ async function probeProvider(config: {
       ? { temperature: 0.7, maxTokens: 512, topP: 0.95, jsonMode: true, intent: 'v2-engine:chat_primary', conversationId: 'admin-test' }
       : undefined;
     const sample: AIResponse = await adapter.generate(prompt, options);
+    logTokenUsage({
+      timestamp: Date.now(),
+      provider: config.name || 'unknown',
+      model: sample.model,
+      intent: options?.intent || 'test-connection',
+      conversationId: 'admin-test',
+      inputTokens: sample.tokens.input,
+      outputTokens: sample.tokens.output,
+      totalTokens: sample.tokens.input + sample.tokens.output,
+      costUsd: sample.cost,
+      source: 'test_connection',
+    });
     // Response contains NO credential: only model + content + timing.
     return {
       success: true,

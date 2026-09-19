@@ -10,6 +10,13 @@ interface ProviderUsage {
   costUsd: number;
 }
 
+interface SourceUsage {
+  requests: number;
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: number;
+}
+
 interface QueryResponse {
   success: boolean;
   data: {
@@ -20,6 +27,7 @@ interface QueryResponse {
     totalOutputTokens: number;
     totalCostUsd: number;
     perProvider: Record<string, ProviderUsage>;
+    perSource: Record<string, SourceUsage>;
   };
 }
 
@@ -247,6 +255,35 @@ export default function TokenUsage() {
               </tfoot>
             </table>
           </div>
+
+          {/* Per-source breakdown table */}
+          {data.perSource && Object.keys(data.perSource).length > 0 && (
+            <div className="bg-dcard rounded-lg border border-dline overflow-hidden">
+              <h2 className="text-sm font-medium text-slate-400 mb-4 px-4 pt-4">Breakdown by Source</h2>
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-dline">
+                    <th className="text-left px-4 py-3 text-xs font-medium text-slate-400">Source</th>
+                    <th className="text-right px-4 py-3 text-xs font-medium text-slate-400">Requests</th>
+                    <th className="text-right px-4 py-3 text-xs font-medium text-slate-400">Input Tokens</th>
+                    <th className="text-right px-4 py-3 text-xs font-medium text-slate-400">Output Tokens</th>
+                    <th className="text-right px-4 py-3 text-xs font-medium text-slate-400">Cost (approx)</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-dline">
+                  {Object.entries(data.perSource).map(([source, usage]) => (
+                    <tr key={source}>
+                      <td className="px-4 py-3 text-surface font-mono">{source}</td>
+                      <td className="px-4 py-3 text-right text-surface">{formatNumber(usage.requests)}</td>
+                      <td className="px-4 py-3 text-right text-surface">{formatNumber(usage.inputTokens)}</td>
+                      <td className="px-4 py-3 text-right text-surface">{formatNumber(usage.outputTokens)}</td>
+                      <td className="px-4 py-3 text-right text-slate-500 text-xs">{formatCost(usage.costUsd)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
     </div>

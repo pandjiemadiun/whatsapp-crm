@@ -287,6 +287,7 @@ Aturan:
       temperature: 0.7,
       maxTokens: 100,
       intent: 'followup',
+      source: 'admin_manual',
     });
     const text = result.content.trim();
     return text.replace(/[\u{1F300}-\u{1F9FF}]/gu, '').trim();

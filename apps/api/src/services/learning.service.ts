@@ -150,6 +150,7 @@ Aturan:
       temperature: 0.2,
       maxTokens: 500,
       jsonMode: true,
+      source: 'admin_manual',
     });
 
     const parsed = JSON.parse(result.content) as FaqDraft[] | { faq?: FaqDraft[] };

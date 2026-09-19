@@ -57,7 +57,7 @@ router.get('/token-usage/query', asyncHandler(async (req: AuthenticatedAdminRequ
     return res.status(400).json({ error: validationError });
   }
 
-  const perProvider = await queryUsage({ from, to });
+  const { perProvider, perSource } = await queryUsage({ from, to });
   const totalRequests = Object.values(perProvider).reduce((s, p) => s + p.requests, 0);
   const totalInputTokens = Object.values(perProvider).reduce((s, p) => s + p.inputTokens, 0);
   const totalOutputTokens = Object.values(perProvider).reduce((s, p) => s + p.outputTokens, 0);
@@ -73,6 +73,7 @@ router.get('/token-usage/query', asyncHandler(async (req: AuthenticatedAdminRequ
       totalOutputTokens,
       totalCostUsd,
       perProvider,
+      perSource,
     },
   });
 }));
