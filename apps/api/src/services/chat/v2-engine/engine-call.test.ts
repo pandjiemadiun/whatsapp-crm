@@ -19,7 +19,6 @@ import {
   ErrorCategory,
   type AIResponse,
   type AIGenerateOptions,
-  type ExtractedIntent,
 } from '../../../adapters/ai/types.js';
 import { V2_INTENTS } from './schema.js';
 import { callV2Engine } from './engine-call.js';
@@ -139,8 +138,7 @@ function makeMockProvider(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Mock gatekeeper (required by LLMGateway constructor, never called by
-// callV2Engine since it only invokes gateway.generate())
+// Mock provider (used as fallback in LLMGateway constructor)
 // ─────────────────────────────────────────────────────────────────────────────
 
 const mockGatekeeper = {
@@ -150,15 +148,7 @@ const mockGatekeeper = {
     content: '{}', provider: 'mock-gatekeeper', model: 'm',
     tokens: { input: 1, output: 1 }, cost: 0,
   }),
-  extractIntent: async (): Promise<ExtractedIntent> => ({
-    intent: 'COMPLEX_CONVERSATION',
-    confidence: 0.3,
-    entities: {},
-    reasoning: 'mock gatekeeper',
-  }),
-} as unknown as AIProvider & {
-  extractIntent(message: string, contextSummary?: string): Promise<ExtractedIntent>;
-};
+} as unknown as AIProvider;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Test resolver (enables dynamic provider resolution with mock providers)
@@ -191,7 +181,6 @@ describe('callV2Engine', () => {
     const gateway = new LLMGateway(
       provider,
       mockGatekeeper,
-      mockGatekeeper,
       5000,  // turnDeadlineMs
       1,     // maxAttempts
       undefined,
@@ -220,7 +209,6 @@ describe('callV2Engine', () => {
     const gateway = new LLMGateway(
       provider,
       mockGatekeeper,
-      mockGatekeeper,
       5000,
       1,
       undefined,
@@ -241,7 +229,6 @@ describe('callV2Engine', () => {
     const provider = makeMockProvider('test-missing-3', 'missing-field');
     const gateway = new LLMGateway(
       provider,
-      mockGatekeeper,
       mockGatekeeper,
       5000,
       1,
@@ -282,7 +269,6 @@ describe('callV2Engine', () => {
     const gateway = new LLMGateway(
       mockGatekeeper,    // primary singleton (not used — dynamic ON)
       mockGatekeeper,    // fallback singleton (not used — dynamic ON, primaryList succeeds)
-      mockGatekeeper,
       5000,
       1,     // maxAttempts=1 so the failing provider is tried once before rotating
       resolver,
@@ -314,7 +300,6 @@ describe('callV2Engine', () => {
     const gateway = new LLMGateway(
       mockGatekeeper,
       failingFallback,    // fallback singleton (used when primaryList exhausted + fallbackList empty)
-      mockGatekeeper,
       5000,
       1,     // maxAttempts=1, fast failure
       resolver,
@@ -340,7 +325,6 @@ describe('callV2Engine', () => {
     const provider = makeMockProvider('test-jsonmode-6', 'success');
     const gateway = new LLMGateway(
       provider,
-      mockGatekeeper,
       mockGatekeeper,
       5000,
       1,
@@ -390,7 +374,6 @@ describe('callV2Engine', () => {
     const gateway = new LLMGateway(
       provider,
       mockGatekeeper,
-      mockGatekeeper,
       5000,
       1,
       undefined,
@@ -433,7 +416,6 @@ describe('callV2Engine', () => {
     const gateway = new LLMGateway(
       provider,
       mockGatekeeper,
-      mockGatekeeper,
       5000,
       1,
       undefined,
@@ -466,7 +448,6 @@ describe('callV2Engine', () => {
     const provider = makeMockProvider('test-null-9', 'success', rawWithNull);
     const gateway = new LLMGateway(
       provider,
-      mockGatekeeper,
       mockGatekeeper,
       5000,
       1,

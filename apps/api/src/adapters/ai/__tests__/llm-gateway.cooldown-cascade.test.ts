@@ -94,12 +94,11 @@ describe('LLMGateway — cooldown cascade (3-tier fallthrough)', () => {
     const gateway = new LLMGateway(
       primary,
       fallback,
-      fallback as any,          // gatekeeper (unused in this path)
       5_000,                    // turnDeadlineMs
       1,                        // maxAttempts
       undefined,                // resolver (unused when dynamicFlagProvider = false)
       () => Promise.resolve(false), // dynamicFlagProvider = OFF → singleton mode
-      fallback2,                // fallback2 (Internal LLM) — 8th param
+      fallback2,                // fallback2 (Internal LLM) — 7th param
     );
 
     const result = await gateway.generate('ban dalam motor berapa harganya?');
@@ -145,7 +144,6 @@ describe('LLMGateway — cooldown cascade (3-tier fallthrough)', () => {
     const gateway = new LLMGateway(
       primary,
       fallback,
-      fallback as any,
       5_000,
       1,
       undefined,
@@ -186,7 +184,6 @@ describe('LLMGateway — cooldown cascade (3-tier fallthrough)', () => {
     const gateway = new LLMGateway(
       primary,
       fallback,
-      fallback as any,
       5_000,
       1,
       undefined,

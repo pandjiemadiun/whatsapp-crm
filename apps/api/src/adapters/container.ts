@@ -29,8 +29,6 @@ const logger = {
 const ai = {
   generate: (prompt: string, options?: any) =>
     aiProviderManager.generate(prompt, options),
-  extractIntent: (message: string, contextSummary?: string) =>
-    aiProviderManager.extractIntent(message, contextSummary),
   getStats: () => aiProviderManager.getStats(),
   getProviders: () => aiProviderManager.getProviders(),
 };

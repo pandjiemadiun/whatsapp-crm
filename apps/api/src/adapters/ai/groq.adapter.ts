@@ -4,7 +4,6 @@ import {
   AIResponse,
   ErrorCategory,
   AIProviderError,
-  ExtractedIntent,
 } from './types.js';
 import { getAiDefaults, invalidateAiDefaultsCache } from './ai-config.js';
 import { aiKeyRouter } from '../../services/ai-key-router.service.js';
@@ -320,69 +319,6 @@ export class GroqAdapter implements AIProvider {
       return response.ok;
     } catch {
       return false;
-    }
-  }
-
-  /**
-   * Fast Intent & Entity Extraction (Groq Gatekeeper)
-   */
-  async extractIntent(
-    message: string,
-    contextSummary?: string
-  ): Promise<ExtractedIntent> {
-    const prompt = `You are a high-speed intent extraction gatekeeper for a WhatsApp e-commerce CRM bot in Indonesia.
-Analyze the user message and existing context summary, then output ONLY a valid JSON object.
-
-Intents:
-- PRODUCT_INQUIRY: Asking about product details, availability, price, stock, catalog.
-- ADD_TO_CART: Wanting to buy or add item(s) to order (e.g., "mau beli kangkung", "ambil 2", "pesan ini").
-- DONE_ORDERING: Done adding items to cart, ready for total/address/checkout (e.g., "udah itu aja", "gak ada lagi", "checkout", "selesai").
-- MODIFY_CART: Changing mind mid-transaction, swapping, replacing, removing items (e.g., "gak jadi kangkung, ganti bayam", "batalin wortel", "kurangin 1").
-- PAYMENT_INQUIRY: Asking about bank accounts, QRIS, payment methods, COD.
-- SHIPPING_INQUIRY: Asking about postage fees, shipping options, delivery time, pickup.
-- FAQ_INQUIRY: Asking store operational hours, location, warranty, return policy.
-- COMPLEX_CONVERSATION: Negotiating, complaining, off-topic, or multi-topic questions requiring human-like conversational response.
-
-Context Summary: ${contextSummary || 'None'}
-User Message: "${message}"
-
-JSON Response Format:
-{
-  "intent": "PRODUCT_INQUIRY",
-  "confidence": 0.9,
-  "entities": {
-    "productNames": ["product_name"],
-    "quantities": [1],
-    "action": "inquire",
-    "cancelledProduct": null,
-    "addedProduct": null,
-    "shippingAddress": null,
-    "customerNotes": null
-  },
-  "reasoning": "brief explanation"
-}`;
-
-    try {
-      const defaults = await getAiDefaults();
-      const response = await this.generate(prompt, {
-        temperature: defaults.buySignalTemperature,
-        maxTokens: 300,
-        jsonMode: true,
-      });
-
-      const parsed = JSON.parse(response.content) as ExtractedIntent;
-      if (!parsed.intent) {
-        throw new Error('Invalid JSON structure from Groq intent extraction');
-      }
-      return parsed;
-    } catch (err) {
-      console.warn('[Groq] Intent extraction failed, returning default fallback intent:', (err as Error).message);
-      return {
-        intent: 'COMPLEX_CONVERSATION',
-        confidence: 0.3,
-        entities: {},
-        reasoning: 'Fallback due to extraction error',
-      };
     }
   }
 

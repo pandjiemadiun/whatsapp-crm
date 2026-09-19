@@ -60,7 +60,6 @@ describe('FIX-GATEWAY-CIRCUIT-BREAKER-PER-MESSAGE', () => {
     gateway = new LLMGateway(
       makeTimeoutProvider('Internal LLM') as any,
       makeTimeoutProvider('B.ai') as any,
-      undefined,
       12_000,
       3,
       undefined,
@@ -171,7 +170,6 @@ describe('FIX-GATEWAY-CIRCUIT-BREAKER-PER-MESSAGE', () => {
     const invalidGateway = new LLMGateway(
       makeInvalidProvider('provider1') as any,
       makeInvalidProvider('provider2') as any,
-      makeInvalidProvider('provider3') as any,
       12_000,
       3,
       undefined,

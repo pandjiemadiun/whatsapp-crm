@@ -13,7 +13,7 @@ import { ErrorCodes } from '../constants/errorCodes.js';
 import { normalize } from '../services/chat/normalizer.js';
 import { runOneCall, validateCartOpsAgainstDb, truncateTo2Sentences } from '../services/chat/interpreter.js';
 import { getStoreEngine } from '../services/chat/engine-config.js';
-import { understand } from '../services/chat/reasoning.js';
+
 import { buildCatalogContextForPrompt } from '../services/catalog-context.service.js';
 import { planActs } from '../services/chat/planner.js';
 import { validate } from '../services/chat/validator-v2.js';
@@ -141,7 +141,8 @@ export class ConversationService {
     // ── V2 REWRITE ACTIVE MODE ──
     // When v2RewriteMode == 'active' (global), the V2 engine
     // (callV2Engine) becomes the SOLE source of the customer-facing reply
-    // for ALL stores. reasoning.ts is NOT called at all — saves 1 LLM call
+    // for ALL stores. The legacy reasoning engine is bypassed entirely —
+    // saves 1 LLM call per message (single call vs the V2-lama dual-call path).
     // per message (single call vs the V2-lama dual-call path). All replies
     // (success or static fallback) go through the same saveMessage() path
     // as everything else, ensuring consistency in chat history + outbound
@@ -734,15 +735,14 @@ export class ConversationService {
             createdAt: m.createdAt,
         }));
         
-        const reasoningOutcome = await understand(
-          customerMessage,
-          workspace,
-          catalog,
-          history as any,
-          fallbackService,
-          storeId,
-          conversationId
-        );
+        // REASONING REMOVED (2026-09-19): reasoning.ts deleted.
+        // This legacy v2-lama block is unreachable under current
+        // v2RewriteMode='active'. Stubbed to preserve block structure.
+        const reasoningOutcome: any = {
+          outcome: 'fallback_reasoning_failed',
+          llmCalls: 0,
+          error: 'reasoning.ts removed',
+        };
         
         // ── FAST PATH HIT: pakai payload langsung ──
         if (reasoningOutcome.outcome === 'tier') {
@@ -1354,27 +1354,19 @@ export class ConversationService {
     }
 
     // ── SHADOW HOOK (log-only, background, fail-open) ──
+    // REASONING REMOVED (2026-09-19): reasoning.ts deleted.
+    // This block is unreachable under current v2RewriteMode='active'
+    // and depended on reasoning.ts. Structure preserved for future eval.
     if (shouldRunShadow(storeId)) {
       // Background execution — tidak menambah latensi jalur kritis
       setImmediate(async () => {
         try {
-          // Jalankan reasoning engine v3.2
-          const shadowCatalogResult = await buildCatalogContextForPrompt(
-            storeId,
-            customerMessage,
-            { draft_cart: [], resolved_facts: {} },
-          );
-          const reasoningOutcome = await understand(
-            customerMessage,
-            context as any,
-            shadowCatalogResult.items,
-            context.messages.map((m) => ({
-              role: m.sender === 'customer' ? 'user' : 'assistant',
-              content: m.content,
-            })) as any,
-            fallbackService,
-            storeId
-          );
+          // reasoning.ts removed — shadow hook is inert
+          const reasoningOutcome: any = {
+            outcome: 'fallback_reasoning_failed',
+            llmCalls: 0,
+            error: 'reasoning.ts removed',
+          };
 
           // Build shadow entry
           const reasoned = reasoningOutcome.outcome === 'reasoned' ? reasoningOutcome : null;

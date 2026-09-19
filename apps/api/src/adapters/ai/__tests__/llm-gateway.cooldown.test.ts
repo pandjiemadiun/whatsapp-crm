@@ -122,7 +122,6 @@ describe('LLMGateway — cooldown crash fix (BUGFIX A.1 / A.2)', () => {
     const gateway = new LLMGateway(
       primary,
       fallback,
-      fallback as any,              // gatekeeper (unused in this path)
       5_000,                        // turnDeadlineMs
       3,                            // maxAttempts
       undefined,                    // resolver (unused when dynamicFlagProvider = false)
@@ -176,7 +175,6 @@ describe('LLMGateway — cooldown crash fix (BUGFIX A.1 / A.2)', () => {
     const gateway = new LLMGateway(
       primary,
       fallback,
-      fallback as any,
       5_000, // turnDeadlineMs
       3,     // maxAttempts
       undefined,
@@ -235,7 +233,6 @@ describe('LLMGateway — cooldown crash fix (BUGFIX A.1 / A.2)', () => {
     const gateway = new LLMGateway(
       primary,
       fallback,
-      fallback as any,
       5_000,
       3,
       undefined,

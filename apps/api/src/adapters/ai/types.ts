@@ -23,21 +23,6 @@ export type IntentType =
   | 'FAQ_INQUIRY'
   | 'COMPLEX_CONVERSATION';
 
-export interface ExtractedIntent {
-  intent: IntentType;
-  confidence: number;
-  entities: {
-    productNames?: string[];
-    quantities?: number[];
-    action?: 'add' | 'remove' | 'swap' | 'inquire' | 'finalize';
-    cancelledProduct?: string;
-    addedProduct?: string;
-    shippingAddress?: string;
-    customerNotes?: string;
-  };
-  reasoning?: string;
-}
-
 export interface AIResponse {
   content: string;
   provider: string;

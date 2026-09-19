@@ -2,7 +2,7 @@
  * LLMGateway — sole decision point for AI provider selection, retry,
  * circuit-breaker, timeout, fallback, and token accounting.
  *
- * Hot path: conversation.service → interpreter.ts / reasoning.ts → llmGateway.generate()
+ * Hot path: conversation.service → interpreter.ts / llmGateway.generate()
  *
  * Design (G2-B.1):
  *   - ONE owner for: provider selection, retry, timeout, circuit-breaker, fallback
@@ -26,7 +26,6 @@ import {
   AIResponse,
   AIProviderError,
   ErrorCategory,
-  ExtractedIntent,
 } from './types.js';
 import { geminiAdapter } from './gemini.adapter.js';
 import { groqAdapter } from './groq.adapter.js';
@@ -69,9 +68,6 @@ export class LLMGateway {
   private primary: AIProvider;
   private fallback: AIProvider;
   private fallback2: AIProvider | undefined;
-  private gatekeeper: AIProvider & {
-    extractIntent(message: string, contextSummary?: string): Promise<ExtractedIntent>;
-  };
   private turnDeadlineMs: number;
   private maxAttempts: number;
   // Unit 3b: feature-flag-gated dynamic provider resolution (default OFF)
@@ -97,9 +93,6 @@ export class LLMGateway {
   constructor(
     primary: AIProvider = geminiAdapter,
     fallback: AIProvider = groqAdapter,
-    gatekeeper: AIProvider & {
-      extractIntent(message: string, contextSummary?: string): Promise<ExtractedIntent>;
-    } = groqAdapter,
     turnDeadlineMs: number = TURN_DEADLINE_MS,
     maxAttempts: number = MAX_ATTEMPTS,
     resolver: AIProviderResolverService = aiProviderResolver,
@@ -109,7 +102,6 @@ export class LLMGateway {
     this.primary = primary;
     this.fallback = fallback;
     this.fallback2 = fallback2;
-    this.gatekeeper = gatekeeper;
     this.turnDeadlineMs = turnDeadlineMs;
     this.maxAttempts = maxAttempts;
     this.resolver = resolver;
@@ -140,18 +132,11 @@ export class LLMGateway {
 
   /**
    * Resolve the primary/fallback provider lists for this request.
-   * OFF (default): returns singleton lists -> OFF path runs UNCHANGED.
-   * ON: reads active AIProviderConfig rows via the resolver (3a), highest-priority
-   * first. Empty DB list for a role -> warn + fall back to the default singleton
-   * list (customer chat is NOT disrupted; the cutover is safe by default).
-   *
-   * NOTE: the gatekeeper is intentionally NOT resolved here. extractIntent is a
-   * GroqAdapter-specific method (groq.adapter.ts:329) — not on AIProvider and
-   * not implemented by the Unit-2 generic adapters — so swapping the gatekeeper
-   * would silently degrade intent extraction (every message -> COMPLEX_CONVERSATION).
-   * Unit 5 chose Option B: gatekeeper stays pinned to the groqAdapter singleton
-   * and `chat_gatekeeper` AIProviderConfig rows are cosmetic for now.
-   */
+    * OFF (default): returns singleton lists -> OFF path runs UNCHANGED.
+    * ON: reads active AIProviderConfig rows via the resolver (3a), highest-priority
+    * first. Empty DB list for a role -> warn + fall back to the default singleton
+    * list (customer chat is NOT disrupted; the cutover is safe by default).
+    */
   private async resolveEffectiveProviders(): Promise<{ primaryList: AIProvider[]; fallbackList: AIProvider[]; fallback2List: AIProvider[] }> {
     if (!(await this.isDynamicProvidersEnabled())) {
       return { primaryList: [this.primary], fallbackList: [this.fallback], fallback2List: this.fallback2 ? [this.fallback2] : [] };
@@ -265,9 +250,6 @@ export class LLMGateway {
     // OFF (default): resolveEffectiveProviders() returns the original singletons,
     // and the circuit-breaker/retry/fallback loop below runs UNCHANGED.
     // ON: primary/fallback come from AIProviderConfig rows via the resolver (3a).
-    //   The gatekeeper is NOT swapped: extractIntent is GroqAdapter-specific
-    //   (groq.adapter.ts:329), not on AIProvider; swapping it would silently
-    //   degrade intent extraction. Gatekeeper cutover is deferred to Unit 5.
     const { primaryList, fallbackList, fallback2List } = await this.resolveEffectiveProviders();
 
     // Circuit breaker gate
@@ -457,36 +439,6 @@ export class LLMGateway {
     );
   }
 
-  /**
-   * Fast Intent & Entity Gatekeeper via Groq (gatekeeper provider).
-   * Returns fallback intent on failure — never throws.
-   *
-   * Unit 5 decision — Option B: this is the resolved `this.gatekeeper`
-   * singleton and is NOT swapped by resolveEffectiveProviders(). extractIntent
-   * is GroqAdapter-specific (groq.adapter.ts:329) and not on the AIProvider
-   * interface, so resolving it from a `chat_gatekeeper` AIProviderConfig row
-   * would either require adding extractIntent to the shared interface
-   * (Option A) or implementing Groq-style intent extraction on every adapter.
-   * Option B was chosen to avoid a silent COMPLEX_CONVERSATION-for-everything
-   * regression (the Unit 3b bug) and to keep the shared interface clean.
-   * `chat_gatekeeper` rows are therefore cosmetic for now.
-   */
-  async extractIntent(
-    message: string,
-    contextSummary?: string,
-  ): Promise<ExtractedIntent> {
-    try {
-      return await this.gatekeeper.extractIntent(message, contextSummary);
-    } catch {
-      return {
-        intent: 'COMPLEX_CONVERSATION',
-        confidence: 0.3,
-        entities: {},
-        reasoning: 'Gatekeeper error fallback',
-      };
-    }
-  }
-
   // ─── Health & introspection (admin) ─────────────────────────────────────
 
   isGatewayCircuitOpen(): boolean {
@@ -508,7 +460,6 @@ export class LLMGateway {
       primary: this.primary.getName(),
       fallback: this.fallback.getName(),
       fallback_2: this.fallback2 ? this.fallback2.getName() : undefined,
-      gatekeeper: this.gatekeeper.getName(),
     };
   }
 

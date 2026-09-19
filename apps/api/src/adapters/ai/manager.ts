@@ -4,13 +4,12 @@ import {
   AIResponse,
   AIProviderError,
   ErrorCategory,
-  ExtractedIntent,
 } from './types.js';
 import { geminiAdapter } from './gemini.adapter.js';
 import { shouldSkipProvider, triggerCooldown } from '../../services/provider-cooldown.js';
 import { logTokenUsage } from '../../services/token-usage-tracker.js';
 import type { TokenLogEntry } from '../../services/token-usage-tracker.js';
-import { GroqAdapter, groqAdapter } from './groq.adapter.js';
+import { groqAdapter } from './groq.adapter.js';
 import { configService } from '../../business/config.service.js';
 import { aiProviderResolver } from '../../services/ai-provider-resolver.service.js';
 import type { AIProviderResolverService } from '../../services/ai-provider-resolver.service.js';
@@ -18,14 +17,11 @@ import type { AIProviderResolverService } from '../../services/ai-provider-resol
 export class AIProviderManager {
   private primaryProvider: AIProvider;
   private fallbackProvider: AIProvider;
-  private gatekeeperProvider: GroqAdapter;
 
   // ── Unit 5: feature-flag-gated dynamic provider resolution (default OFF) ─
   // Same pattern as LLMGateway (Unit 3b). ON => primary/fallback come from
   // AIProviderConfig rows (chat_primary/chat_fallback) via the resolver;
   // OFF (default) => original singletons, generate() runs UNCHANGED.
-  // The gatekeeper (extractIntent) is NOT resolved — it stays GroqAdapter
-  // (see Option B report in the Unit 5 audit).
   private readonly resolver: AIProviderResolverService;
   private readonly dynamicFlagProvider: (() => Promise<boolean>) | undefined;
   private dynamicFlagCache: { value: boolean; ts: number } | null = null;
@@ -47,13 +43,11 @@ export class AIProviderManager {
   constructor(
     primary: AIProvider = geminiAdapter,   // GEMINI SEKARANG PRIMARY SPEAKER (Natural Conversation)
     fallback: AIProvider = groqAdapter,   // GROQ SEKARANG FALLBACK SPEAKER
-    gatekeeper: GroqAdapter = groqAdapter, // GROQ SEKARANG FAST GATEKEEPER (Intent Extraction)
     resolver: AIProviderResolverService = aiProviderResolver,
     dynamicFlagProvider: (() => Promise<boolean>) | undefined = undefined,
   ) {
     this.primaryProvider = primary;
     this.fallbackProvider = fallback;
-    this.gatekeeperProvider = gatekeeper;
     this.resolver = resolver;
     this.dynamicFlagProvider = dynamicFlagProvider;
   }
@@ -75,15 +69,12 @@ export class AIProviderManager {
   }
 
   /**
-   * Resolve primary/fallback for this request.
-   * OFF (default): returns the original singletons -> OFF path runs UNCHANGED.
-   * ON: reads active AIProviderConfig rows via the resolver, highest-priority first.
-   * Empty DB list for a role -> warn + fall back to the default singleton
-   * (customer chat is NOT disrupted; the cutover is safe by default).
-   *
-   * NOTE: the gatekeeper is intentionally NOT resolved here (Option B — see
-   * Unit 5 report). extractIntent is GroqAdapter-specific, not on AIProvider.
-   */
+    * Resolve primary/fallback for this request.
+    * OFF (default): returns the original singletons -> OFF path runs UNCHANGED.
+    * ON: reads active AIProviderConfig rows via the resolver, highest-priority first.
+    * Empty DB list for a role -> warn + fall back to the default singleton
+    * (customer chat is NOT disrupted; the cutover is safe by default).
+    */
   private async resolveEffectiveProviders(): Promise<{ primaryList: AIProvider[]; fallbackList: AIProvider[] }> {
     if (!(await this.isDynamicProvidersEnabled())) {
       return { primaryList: [this.primaryProvider], fallbackList: [this.fallbackProvider] };
@@ -96,39 +87,6 @@ export class AIProviderManager {
       primaryList: primaryList.length > 0 ? primaryList : [this.primaryProvider],
       fallbackList: fallbackList.length > 0 ? fallbackList : [this.fallbackProvider],
     };
-  }
-
-  /**
-   * Fast Intent & Entity Gatekeeper via Groq (gatekeeper provider).
-   * Returns fallback intent on failure — never throws.
-   *
-   * Unit 5 decision — Option B: the gatekeeper is pinned to the GroqAdapter
-   * singleton (this.gatekeeperProvider) regardless of llm.useDynamicProviders.
-   * extractIntent is GroqAdapter-specific (groq.adapter.ts:329) and is NOT on
-   * the AIProvider interface, nor implemented by the Unit-2 generic adapters
-   * (OpenAICompatibleAdapter / GeminiShimAdapter). Resolving it from
-   * AIProviderConfig (chat_gatekeeper role) would require either adding
-   * extractIntent to the shared interface (Option A) or implementing Groq-style
-   * intent extraction on every adapter. Option B was chosen explicitly to
-   * avoid a silent COMPLEX_CONVERSATION-for-everything regression (the Unit 3b
-   * bug) and to keep the shared interface clean. `chat_gatekeeper` rows are
-   * therefore cosmetic for now and are reported as an intentional limitation.
-   */
-  async extractIntent(
-    message: string,
-    contextSummary?: string
-  ): Promise<ExtractedIntent> {
-    try {
-      return await this.gatekeeperProvider.extractIntent(message, contextSummary);
-    } catch (err) {
-      console.warn('[AIManager] Groq Gatekeeper failed, returning fallback intent:', (err as Error).message);
-      return {
-        intent: 'COMPLEX_CONVERSATION',
-        confidence: 0.3,
-        entities: {},
-        reasoning: 'Gatekeeper error fallback',
-      };
-    }
   }
 
   async generate(
@@ -250,7 +208,6 @@ export class AIProviderManager {
     return {
       primary: this.primaryProvider.getName(),
       fallback: this.fallbackProvider.getName(),
-      gatekeeper: this.gatekeeperProvider.getName(),
     };
   }
 }
