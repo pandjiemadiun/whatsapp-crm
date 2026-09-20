@@ -18,7 +18,6 @@ if [ -f "${REPO_DIR}/.env" ]; then
   set +a
 fi
 
-DUMP_FILE="${1:-}"
 SKIP_PREREQ="${SKIP_PREREQ:-0}"
 DRY_RUN="${DRY_RUN:-0}"
 
@@ -26,7 +25,6 @@ echo "============================================"
 echo "  DEPLOY-FRESH-VPS — idempotent bootstrap"
 echo "============================================"
 echo "Repo dir : ${REPO_DIR}"
-echo "Dump file: ${DUMP_FILE:-<none>}"
 echo "Dry run  : ${DRY_RUN}"
 echo ""
 
@@ -172,57 +170,7 @@ echo "✅ Build done"
 echo ""
 
 # ──────────────────────────────────────────────
-# 7. Optional DB restore
-# ──────────────────────────────────────────────
-if [ -n "${DUMP_FILE}" ]; then
-  echo "🗄️  Restoring DB from dump: ${DUMP_FILE}"
-  if [ ! -f "${DUMP_FILE}" ]; then
-    echo "❌ Dump file not found: ${DUMP_FILE}"
-    exit 1
-  fi
-
-  DB_URL="${DATABASE_URL:?DATABASE_URL harus di-set di .env}"
-  DB_USER=$(echo "${DB_URL}" | sed -n 's|.*://\([^:]*\):.*|\1|p')
-  DB_PASS=$(echo "${DB_URL}" | sed -n 's|.*://[^:]*:\([^@]*\)@.*|\1|p')
-  DB_HOST=$(echo "${DB_URL}" | sed -n 's|.*@\([^:/]*\).*|\1|p')
-  DB_PORT=$(echo "${DB_URL}" | sed -n 's|.*:\([0-9]*\)/.*|\1|p')
-  DB_NAME=$(echo "${DB_URL}" | sed -n 's|.*/\([^?]*\).*|\1|p')
-
-  if [ -z "${DB_NAME}" ]; then
-    echo "❌ Cannot parse DB name from DATABASE_URL"
-    exit 1
-  fi
-
-  TMP_GZ="/tmp/restore-$$.gz"
-  cp "${DUMP_FILE}" "${TMP_GZ}"
-
-  echo "  Terminating existing connections on ${DB_NAME} ..."
-  PGPASSWORD="${DB_PASS}" psql -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" -d "${DB_NAME}" \
-    -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='${DB_NAME}' AND pid <> pg_backend_pid();" 2>/dev/null || true
-
-  echo "  Running pg_restore --clean --if-exists ..."
-  gunzip -c "${TMP_GZ}" | PGPASSWORD="${DB_PASS}" pg_restore \
-    -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" -d "${DB_NAME}" \
-    --clean --if-exists 2>&1
-
-  RESTORE_EXIT=$?
-  rm -f "${TMP_GZ}"
-
-  if [ ${RESTORE_EXIT} -ne 0 ]; then
-    echo "⚠️  pg_restore exited with code ${RESTORE_EXIT} — check output above."
-    echo "   Database may be partially restored. Inspect before continuing."
-  else
-    echo "✅ Database restore complete"
-  fi
-  echo ""
-else
-  echo "⏭️  No dump file provided, skipping DB restore."
-  echo "   Usage: $0 /path/to/backup.dump.gz"
-  echo ""
-fi
-
-# ──────────────────────────────────────────────
-# 8. Install git hook post-merge
+# 7. Install git hook post-merge
 # ──────────────────────────────────────────────
 echo "🪝 Installing post-merge git hook ..."
 HOOK_DIR="${REPO_DIR}/.git/hooks"
@@ -246,7 +194,7 @@ fi
 echo ""
 
 # ──────────────────────────────────────────────
-# 9. Setup pm2
+# 8. Setup pm2
 # ──────────────────────────────────────────────
 echo "🚀 Setting up pm2 ..."
 if ! command -v pm2 >/dev/null 2>&1; then
@@ -275,7 +223,7 @@ pm2 list
 echo ""
 
 # ──────────────────────────────────────────────
-# 10. Manual checklist (tidak bisa diotomasi)
+# 9. Manual checklist (tidak bisa diotomasi)
 # ──────────────────────────────────────────────
 echo "============================================"
 echo "  CHECKLIST MANUAL — WAJIB DILAKUKAN"
@@ -308,6 +256,12 @@ echo "5. Verifikasi akhir"
 echo "   - curl -s http://localhost:3000/api/health"
 echo "   - pm2 status"
 echo "   - Test 1 chat manual via WA/PWA"
+echo ""
+echo "6. Restore database (jika diperlukan)"
+echo "   - Idealnya jalankan SEBELUM deploy-fresh-vps.sh agar migrate deploy"
+echo "     diterapkan di atas data yang sudah di-restore:"
+echo "     bash scripts/restore-database.sh /path/to/backup.dump"
+echo "     bash scripts/restore-database.sh /path/to/backup.sql.gz.enc"
 echo ""
 echo "============================================"
 echo "  SCRIPT SELESAI"

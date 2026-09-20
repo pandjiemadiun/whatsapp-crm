@@ -112,18 +112,57 @@ Script akan:
 
 ## 5. Restore Database dari Dump
 
-### 5.1 Persiapan Dump
+Restore adalah aksi DESTRUKTIF (`--clean` drop semua tabel). Jalankan
+SEBELUM `deploy-fresh-vps.sh` agar `migrate deploy` diterapkan di atas
+data yang sudah di-restore.
 
-Dump harus dalam format **custom gzip** yang di-generate oleh backup service
-(`pg_dump --format=custom` + gzip). Nama file biasanya seperti:
-`garuda-backup-YYYYMMDD-HHMMSS.dump.gz`
+### 5.1 Format Dump yang Didukung
 
-Upload dump ke VPS baru:
+Script `restore-database.sh` mendukung dua format:
+
+| Ekstensi | Sumber | Isi | Tool restore |
+|----------|--------|-----|--------------|
+| `.dump` | `pg_dump -F c` manual | Custom-format binary | `pg_restore` |
+| `.sql.gz.enc` | `npm run backup:create` | Custom-format + gzip + AES-256-CBC encrypt | decrypt → `pg_restore` |
+
+> **Catatan:** Backup `.sql.gz.enc` dari `backup.service.ts` sebenarnya
+> berisi custom-format dump (bukan plain SQL), sehingga setelah dekripsi
+> dan decompress tetap menggunakan `pg_restore`. File ini dienkripsi dengan
+> AES-256-CBC, key derivation `scryptSync(BACKUP_ENCRYPTION_KEY, 'garuda-backup-salt', 32)`.
+> Beberapa backup lama dibuat dengan encryption key kosong (belum di-set di
+> `.env`); script otomatis fallback ke empty key untuk kompatibilitas.
+
+### 5.2 Upload Dump ke VPS Baru
+
 ```bash
-scp /path/backup/garuda-backup-*.dump.gz ubuntu@<IP-VPS-BARU>:/tmp/
+# Custom format dump (manual pg_dump)
+scp /path/to/db-dump-20260920.dump ubuntu@<IP-VPS-BARU>:/tmp/
+
+# Encrypted backup (dari npm run backup:create)
+scp /path/to/backup_2026-09-20T17-03-03-637Z_bdc8654b.sql.gz.enc ubuntu@<IP-VPS-BARU>:/tmp/
 ```
 
-### 5.2 Restore Manual (jika script gagal atau tanpa argumen)
+### 5.3 Restore via Script (disarankan)
+
+```bash
+# Pastikan .env sudah di-restore dengan FIELD_ENCRYPTION_KEY yang benar
+cd /home/ubuntu/garuda
+
+# Custom format dump
+bash scripts/restore-database.sh /tmp/db-dump-20260920.dump
+
+# Encrypted backup
+bash scripts/restore-database.sh /tmp/backup_2026-09-20T17-03-03-637Z_bdc8654b.sql.gz.enc
+```
+
+Script akan:
+1. Cek `.env` dan parse `DATABASE_URL`
+2. Tanya konfirmasi "YA HAPUS" sebelum aksi destruktif
+3. Terminate existing connections
+4. Decrypt (untuk `.sql.gz.enc`) → gunzip → `pg_restore --clean --if-exists`
+5. Hapus file intermediate setelah selesai
+
+### 5.4 Restore Manual (jika script gagal)
 
 ```bash
 # Parse DATABASE_URL
@@ -136,14 +175,14 @@ DB_NAME=$(echo "$DB_URL" | sed -n 's|.*/\([^?]*\).*|\1|p')
 
 echo "DB: ${DB_NAME} @ ${DB_HOST}:${DB_PORT} as ${DB_USER}"
 
-# Kill existing connections (idempotent)
+# Kill existing connections
 PGPASSWORD="${DB_PASS}" psql -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" -d "${DB_NAME}" \
   -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='${DB_NAME}' AND pid <> pg_backend_pid();" 2>/dev/null || true
 
-# Restore — perintah PERSIS sama dengan backup.service.ts (22 Agu fix)
-gunzip -c /tmp/garuda-backup-*.dump.gz | PGPASSWORD="${DB_PASS}" pg_restore \
+# Custom format: pg_restore langsung ke file
+PGPASSWORD="${DB_PASS}" pg_restore \
   -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" -d "${DB_NAME}" \
-  --clean --if-exists 2>&1
+  --clean --if-exists /path/to/backup.dump 2>&1
 
 echo "Exit code: $?"
 ```
@@ -151,12 +190,6 @@ echo "Exit code: $?"
 > **WASPADA:** `--clean --if-exists` akan DROP schema yang ada sebelum restore.
 > Pastikan dump berasal dari backup yang valid. Jangan restore dump dari
 > production ke staging atau sebaliknya tanpa persetujuan owner.
-
-### 5.3 Via Script (jika dump di-pass sebagai argumen)
-
-```bash
-bash /home/ubuntu/garuda/scripts/deploy-fresh-vps.sh /tmp/garuda-backup-*.dump.gz
-```
 
 ---
 
