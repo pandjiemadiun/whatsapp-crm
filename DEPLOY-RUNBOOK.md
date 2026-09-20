@@ -408,6 +408,7 @@ git pull --no-ff  # dry-run pull untuk test hook (atau merge dummy branch)
 | `prisma migrate deploy` gagal | Cek `DATABASE_URL` benar. Cek PostgreSQL running. Jangan pakai `migrate dev` di production. |
 | `pm2 startOrReload` gagal | Cek `ecosystem.config.js` path `cwd` benar. Cek `dist/index.js` ada di `apps/api/dist/`. |
 | App online tapi API 500 | Cek `pm2 logs api`. Mungkin `dist/` stale — build ulang + `pm2 restart api`. |
+| PM2 app stuck `errored` setelah reload | Coba `pm2 delete <app> && pm2 start ecosystem.config.js --only <app>` sebelum debug lebih dalam. |
 | SSL cert gagal | Pastikan port 80/443 terbuka. Pastikan DNS sudah propagate (`dig <DOMAIN>`). |
 | Chat tidak balas | Cek `GOWA_API_URL` benar. Cek `GOWA_BASIC_AUTH_USER/PASS`. Cek Redis connected (`redis-cli ping`). |
 | Data terenkripsi tidak bisa dibaca | `FIELD_ENCRYPTION_KEY` di `.env` berbeda dengan yang di VPS lama. SAMAKAN sebelum restore. |
