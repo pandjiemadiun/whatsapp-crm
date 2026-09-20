@@ -1,3 +1,8 @@
+> **Catatan (19 Sep 2026):** File laporan/audit/decision lama (GO-LIVE-BUSINESS-READINESS.md,
+> laporan-*, dll) yang sebelumnya berceceran di root repo kini ada di `DOCS/ARCHIVE`,
+> `DOCS/AUDIT`, `DOCS/DECISIONS`, `DOCS/`. Lihat commit "docs: reorganize scattered
+> .md files into DOCS/ structure (VPS evacuation cleanup)".
+
 # DEFERRED WORK TRACKER
 
 > **Tujuan file ini:** satu sumber kebenaran untuk SEMUA keputusan defer/

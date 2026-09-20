@@ -1,3 +1,8 @@
+> **Catatan (19 Sep 2026):** File laporan/audit/decision lama (AUDIT-BASELINE-G2-G.md,
+> DECISION-*, dll) yang sebelumnya di root repo kini ada di `DOCS/ARCHIVE`,
+> `DOCS/AUDIT`, `DOCS/DECISIONS`, `DOCS/`. Lihat commit "docs: reorganize scattered
+> .md files into DOCS/ structure (VPS evacuation cleanup)".
+
 # BUG TERBUKA — indeks temuan belum dibereskan (update 31 Agu 2026)
 
 > Daftar **temuan / bug / risiko yang belum dibereskan** sepanjang sesi

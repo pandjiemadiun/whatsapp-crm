@@ -1,3 +1,9 @@
+# Catatan (19 Sep 2026): File laporan/audit/decision lama (AUDIT-BASELINE-*,
+# DECISION-*, laporan-*, GO-LIVE-BUSINESS-READINESS.md, dll) yang sebelumnya
+# berceceran di root repo kini ada di DOCS/ARCHIVE, DOCS/AUDIT,
+# DOCS/DECISIONS, DOCS/. Ref lihat commit "docs: reorganize scattered .md
+# files into DOCS/ structure (VPS evacuation cleanup)". RAILS.md tidak
+# diedit isi luka (§1.10).
 ---
 RAILS.md — KONTRAK KERJA AI UNTUK PROYEK GARUDA CRM
 Dibaca WAJIB oleh setiap AI (Claude, AI CLI/robot coding, siapa pun)
