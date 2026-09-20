@@ -143,8 +143,7 @@ export class ConversationService {
     // (callV2Engine) becomes the SOLE source of the customer-facing reply
     // for ALL stores. The legacy reasoning engine is bypassed entirely —
     // saves 1 LLM call per message (single call vs the V2-lama dual-call path).
-    // per message (single call vs the V2-lama dual-call path). All replies
-    // (success or static fallback) go through the same saveMessage() path
+    // All replies (success or static fallback) go through the same saveMessage() path
     // as everything else, ensuring consistency in chat history + outbound
     // channel delivery.
     const rewriteMode: V2RewriteMode = await getV2RewriteMode();
